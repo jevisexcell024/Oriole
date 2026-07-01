@@ -183,13 +183,23 @@ if (servingSpa) {
 }
 
 // ---------------------------------------------------------------- AUTH
+// Constant-time filler for a bcrypt.compare when no matching account exists — its
+// hash is fixed and unrelated to any real user, so it's never actually satisfied,
+// only used to burn the same CPU time a real comparison would.
+const DUMMY_BCRYPT_HASH = bcrypt.hashSync("orcalis-timing-guard", 10);
+
 app.post("/api/auth/login", validate(loginSchema), async (req, res) => {
   const { email, password } = req.body as { email: string; password: string };
   const user = db.data!.users.find((u) => u.email.toLowerCase() === String(email).toLowerCase());
   // Async bcrypt (not the sync variant): hashing is CPU-heavy, and the sync call
   // blocks the single event loop — during a login stampede that freezes every
   // other in-flight request (snapshots, answer saves). The async API yields.
-  if (!user || !(await bcrypt.compare(String(password), user.passwordHash))) {
+  // Always run a bcrypt comparison, even when the email doesn't exist — otherwise
+  // a nonexistent-email request short-circuits before ever calling bcrypt while a
+  // wrong-password request takes ~100ms, letting an attacker measure response
+  // time to enumerate which emails have accounts (CWE-208 timing side-channel).
+  const passwordOk = await bcrypt.compare(String(password), user?.passwordHash ?? DUMMY_BCRYPT_HASH);
+  if (!user || !passwordOk) {
     return res.status(401).json({ error: "Invalid email or password." });
   }
   // If 2FA is on, don't issue the session yet — set a short-lived challenge cookie
