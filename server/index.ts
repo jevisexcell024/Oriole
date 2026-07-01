@@ -1635,6 +1635,7 @@ app.patch("/api/admin/exams/:id", requireRole("admin"), async (req, res) => {
     // Only accept a reasonably-sized image data URL; anything else clears it.
     exam.coverImage = typeof ci === "string" && ci.startsWith("data:image/") && ci.length < 1_500_000 ? ci : null;
   }
+  const touchedAttempts: Attempt[] = [];
   if (typeof b.durationMinutes === "number") {
     const newDur = Math.max(1, Math.floor(b.durationMinutes));
     if (newDur !== exam.durationMinutes) {
@@ -1654,6 +1655,7 @@ app.patch("/api/admin/exams/:id", requireRole("admin"), async (req, res) => {
           if (intendedDelta > actualDelta) {
             a.extraMs = (a.extraMs ?? 0) + (intendedDelta - actualDelta);
           }
+          touchedAttempts.push(a);
         }
       }
     }
@@ -1708,7 +1710,13 @@ app.patch("/api/admin/exams/:id", requireRole("admin"), async (req, res) => {
     ld.sebBrowserExamKeys = cleanKeys(ld.sebBrowserExamKeys);
     ld.sebLaunchUrl = typeof ld.sebLaunchUrl === "string" ? ld.sebLaunchUrl.trim() : "";
   }
-  await db.write();
+  // Targeted upserts instead of a full-mirror db.write(): this handler fires on
+  // every debounced settings edit (and duration changes touch every in-progress
+  // attempt), so flushing all 15 mirrored tables here would mean a single field
+  // tweak stalls the shared database behind a full historical-data rewrite —
+  // exactly the kind of latency spike active students polling /control would feel.
+  await db.upsert("exams", exam);
+  for (const a of touchedAttempts) await db.upsert("attempts", a);
   res.json({ exam });
 });
 
@@ -2738,9 +2746,14 @@ app.post("/api/admin/exams/:id/extend", requireRole("admin"), async (req, res) =
   const active = db.data!.attempts.filter(
     (a) => a.examId === exam.id && a.status === "in_progress",
   );
-  for (const a of active) a.extraMs = (a.extraMs ?? 0) + minutes * 60_000;
-
-  await db.write();
+  // Targeted per-attempt upserts, not a full-mirror db.write(): this is meant to
+  // be used WHILE students are actively mid-exam, so a blanket flush of every
+  // historical row across every table would stall the shared database exactly
+  // when hundreds of concurrent /control polls are depending on it.
+  for (const a of active) {
+    a.extraMs = (a.extraMs ?? 0) + minutes * 60_000;
+    await db.upsert("attempts", a);
+  }
   await recordAudit(req, "exam.extend_time", `+${minutes} min to ${active.length} session(s) — ${exam.title}`);
   res.json({ extended: active.length, minutes });
 });
@@ -2773,10 +2786,17 @@ app.post("/api/admin/exams/:id/reopen-all", requireRole("admin"), async (req, re
     a.terminated        = false;
     a.terminationReason = null;
 
-    if (reg && reg.status === "submitted") reg.status = "in_progress";
+    // Targeted upserts (attempt + its registration only), not a full-mirror
+    // db.write() — this can be used while other students are still mid-exam, so
+    // rewriting every historical row across all 15 tables here would stall the
+    // shared database at the exact moment concurrent /control polls need it.
+    await db.upsert("attempts", a);
+    if (reg && reg.status === "submitted") {
+      reg.status = "in_progress";
+      await db.upsert("registrations", reg);
+    }
   }
 
-  await db.write();
   await recordAudit(req, "exam.reopen_all", `Reopened ${submitted.length} attempt(s) for ${exam.title}`);
   res.json({ reopened: submitted.length });
 });
