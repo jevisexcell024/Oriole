@@ -249,6 +249,28 @@ export const db: {
   backendKind() { return be().kind; },
 };
 
+// Off-mirror tables (see the comment on Schema above) — not part of TABLES
+// because they're never held in the in-memory mirror, but a full backup needs
+// every row from every table, mirrored or not.
+const OFF_MIRROR_TABLES = ["snapshots", "answers", "proctor_events", "audit_logs", "emails"];
+
+/** Full logical snapshot of every row in every table (mirrored + off-mirror),
+ *  keyed by collection/table name. Used for backups — a plain SELECT per table,
+ *  not wrapped in one giant transaction, since a backup running alongside normal
+ *  traffic accepts "consistent as of roughly now" rather than blocking writes. */
+export async function dumpAll(): Promise<Record<string, unknown[]>> {
+  const out: Record<string, unknown[]> = {};
+  for (const { key, table } of TABLES) {
+    const { rows } = await be().query<{ doc: unknown }>(`select doc from ${table}`);
+    out[key] = rows.map((r) => r.doc);
+  }
+  for (const table of OFF_MIRROR_TABLES) {
+    const { rows } = await be().query<{ doc: unknown }>(`select doc from ${table}`);
+    out[table] = rows.map((r) => r.doc);
+  }
+  return out;
+}
+
 // Proctoring webcam frames — stored in their own table with indexed attempt_id /
 // at columns and queried directly (never held in the in-memory mirror). This
 // keeps per-node memory bounded regardless of how many frames accumulate, and

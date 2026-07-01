@@ -22,6 +22,7 @@ import { securityHeaders, authLimiter, apiLimiter, twoFaLimiter, assertSafeWebho
 import { logger, httpLogger } from "./logger.ts";
 import { encryptString, decryptString, encryptionEnabled } from "./crypto.ts";
 import { scheduleRetention, stopRetention } from "./retention.ts";
+import { scheduleBackup, stopBackup, runBackup, backupStatus } from "./backup.ts";
 import { validate } from "./validate.ts";
 import { loginSchema, teamCreateSchema, passwordChangeSchema, passwordResetSchema, twoFaCodeSchema, twoFaDisableSchema } from "./schemas.ts";
 import { verifySeb } from "./seb.ts";
@@ -3814,6 +3815,24 @@ app.post("/api/admin/digest/send-now", requireRole("admin"), async (req, res) =>
   res.json({ sent });
 });
 
+// ---- admin: database backup ----
+// A full gzip-compressed logical snapshot of every table, written to a folder
+// outside the app's redeployable code and outside the live data directory (see
+// server/backup.ts) so it survives redeploys and is picked up by whatever
+// off-host/whole-account backup mechanism the host runs.
+app.get("/api/admin/backup/status", requireRole("admin"), (_req, res) => {
+  res.json(backupStatus());
+});
+app.post("/api/admin/backup/run-now", requireRole("admin"), async (req, res) => {
+  try {
+    const { file, bytes } = await runBackup();
+    await recordAudit(req, "backup.run", `${path.basename(file)} (${bytes} bytes)`);
+    res.json({ ok: true, file: path.basename(file), bytes });
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : "Backup failed." });
+  }
+});
+
 // ---- admin: reusable rubric library (stored on org settings) ----
 app.get("/api/admin/rubric-library", requireRoles(...GRADERS), (_req, res) => {
   res.json({ rubrics: getSettings().rubricLibrary ?? [] });
@@ -3939,6 +3958,7 @@ app.get("/api/admin/system-health", requireRole("admin"), async (_req, res) => {
     },
     mailer: mailerStatus(),
     sms: smsStatus(),
+    backup: backupStatus(),
     env: { nodeEnv: process.env.NODE_ENV ?? "development", apiPort: PORT, webPort: 5180 },
     uptimeSeconds: Math.round(process.uptime()),
     serverTime: now(),
@@ -4458,6 +4478,7 @@ if (env.jwtIsDefault) {
 }
 await initDb();
 scheduleRetention();
+scheduleBackup();
 // Verify SMTP at startup so misconfiguration shows up immediately in the log.
 verifySmtp().then(({ ok, error }) => {
   if (!ok) logger.warn({ error }, "⚠️  SMTP verification failed — check SMTP_HOST/PORT/USER/PASS");
@@ -4535,6 +4556,7 @@ const server = app.listen(PORT, () => {
 async function shutdown(signal: string) {
   logger.info({ signal }, "shutting down");
   stopRetention();
+  stopBackup();
   clearInterval(autoSubmitTimer);
   clearInterval(reminderTimer);
   clearInterval(digestTimer);

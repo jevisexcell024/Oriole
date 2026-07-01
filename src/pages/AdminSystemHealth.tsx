@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { HeartPulse, Loader2, Database, Mail, Server, Clock, CheckCircle2, Zap, FlaskConical, AlertTriangle } from "lucide-react";
+import { HeartPulse, Loader2, Database, Mail, Server, Clock, CheckCircle2, Zap, FlaskConical, AlertTriangle, HardDriveDownload } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
 import { api } from "@/lib/api";
 import { PageHeader } from "@/components/PageHeader";
@@ -10,9 +10,18 @@ interface Health {
   api: string;
   db: { engine: string; durable: boolean; collections: Record<string, number> };
   mailer: { mode: string; live: boolean; from: string; host: string | null; lastError: string | null };
+  backup: { dir: string; lastBackupAt: string | null; lastBackupBytes: number | null; lastBackupError: string | null; retentionCount: number; intervalHours: number };
   env: { nodeEnv: string; apiPort: number; webPort: number };
   uptimeSeconds: number;
   serverTime: string;
+}
+
+function fmtBytes(n: number) {
+  if (n < 1024) return `${n} B`;
+  const units = ["KB", "MB", "GB"];
+  let v = n / 1024, i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(1)} ${units[i]}`;
 }
 
 function fmtUptime(s: number) {
@@ -24,12 +33,22 @@ export function AdminSystemHealth() {
   const t = useT();
   const [h, setH] = useState<Health | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [runningBackup, setRunningBackup] = useState(false);
+  const load = () => api.get<Health>("/admin/system-health").then(setH).catch((e) => setError(e.message));
   useEffect(() => {
-    const load = () => api.get<Health>("/admin/system-health").then(setH).catch((e) => setError(e.message));
     load();
     const id = setInterval(load, 10000);
     return () => clearInterval(id);
   }, []);
+
+  const runBackupNow = async () => {
+    setRunningBackup(true);
+    try {
+      await api.post("/admin/backup/run-now");
+      await load();
+    } catch (e) { alert((e as Error).message); }
+    finally { setRunningBackup(false); }
+  };
 
   return (
     <AdminShell wide>
@@ -43,10 +62,12 @@ export function AdminSystemHealth() {
 
         {h && (
           <>
-            <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <Status icon={Server} label={t("ahlt.api")} ok={h.api === "ok"} detail={`${h.env.nodeEnv} · :${h.env.apiPort}`} />
               <Status icon={Database} label={t("ahlt.database")} ok={h.db.durable} detail={h.db.engine} />
               <Status icon={h.mailer.live ? Zap : FlaskConical} label={t("ahlt.mailer")} ok={!h.mailer.lastError} detail={h.mailer.lastError ? t("ahlt.deliveryError") : h.mailer.live ? t("ahlt.liveHost", { host: h.mailer.host ?? "" }) : t("ahlt.mockMode")} warn={!h.mailer.live && !h.mailer.lastError} />
+              <Status icon={HardDriveDownload} label={t("ahlt.backup")} ok={!h.backup.lastBackupError && !!h.backup.lastBackupAt} warn={!h.backup.lastBackupError && !h.backup.lastBackupAt}
+                detail={h.backup.lastBackupError ? t("ahlt.backupError") : h.backup.lastBackupAt ? t("ahlt.backupOk", { when: new Date(h.backup.lastBackupAt).toLocaleString() }) : t("ahlt.backupNone")} />
             </div>
 
             <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-[1.4fr_1fr]">
@@ -81,6 +102,25 @@ export function AdminSystemHealth() {
                   );
                 })()}
               </div>
+            </div>
+
+            <div className="mt-5 card p-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h2 className="flex items-center gap-2 text-sm font-semibold"><HardDriveDownload className="h-4 w-4 text-brand-400" /> {t("ahlt.backup")}</h2>
+                <button onClick={runBackupNow} disabled={runningBackup} className="btn btn-outline h-8 text-xs disabled:opacity-50">
+                  {runningBackup ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <HardDriveDownload className="h-3.5 w-3.5" />}
+                  {runningBackup ? t("ahlt.backupRunning") : t("ahlt.runBackupNow")}
+                </button>
+              </div>
+              <div className="mt-3 grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+                <Row label={t("ahlt.lastBackup")} value={h.backup.lastBackupAt ? new Date(h.backup.lastBackupAt).toLocaleString() : t("ahlt.backupNone")} />
+                <Row label={t("ahlt.backupSize")} value={h.backup.lastBackupBytes != null ? fmtBytes(h.backup.lastBackupBytes) : "—"} />
+                <Row label={t("ahlt.backupFrequency")} value={t("ahlt.backupSchedule", { hours: String(h.backup.intervalHours), count: String(h.backup.retentionCount) })} />
+                <Row label={t("ahlt.backupDir")} value={h.backup.dir} />
+              </div>
+              {h.backup.lastBackupError && (
+                <p className="mt-3 text-xs text-rose-400">{t("ahlt.backupError")}: {h.backup.lastBackupError}</p>
+              )}
             </div>
           </>
         )}

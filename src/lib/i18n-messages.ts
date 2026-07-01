@@ -749,6 +749,17 @@ export const messages: Record<string, Record<Lang, string>> = {
   "ahlt.mailFrom": { en: "Mail from", fr: "Expéditeur", es: "Correo de origen", pt: "E-mail de origem", ar: "البريد من" },
   "ahlt.mailerError": { en: "Mailer error", fr: "Erreur de messagerie", es: "Error de correo", pt: "Erro de e-mail", ar: "خطأ في البريد" },
   "ahlt.needAttention": { en: "Some services need attention — see above", fr: "Certains services nécessitent une attention — voir ci-dessus", es: "Algunos servicios requieren atención — ver arriba", pt: "Alguns serviços precisam de atenção — veja acima", ar: "بعض الخدمات تحتاج انتباهًا — انظر أعلاه" },
+  "ahlt.backup": { en: "Backup", fr: "Sauvegarde", es: "Copia de seguridad", pt: "Backup", ar: "النسخ الاحتياطي" },
+  "ahlt.backupOk": { en: "Last: {when}", fr: "Dernière : {when}", es: "Última: {when}", pt: "Última: {when}", ar: "آخر نسخة: {when}" },
+  "ahlt.backupNone": { en: "No backup yet", fr: "Aucune sauvegarde pour l'instant", es: "Aún no hay copias", pt: "Ainda sem backup", ar: "لا توجد نسخة احتياطية بعد" },
+  "ahlt.backupError": { en: "Backup error", fr: "Erreur de sauvegarde", es: "Error de copia de seguridad", pt: "Erro de backup", ar: "خطأ في النسخ الاحتياطي" },
+  "ahlt.lastBackup": { en: "Last backup", fr: "Dernière sauvegarde", es: "Última copia", pt: "Último backup", ar: "آخر نسخة احتياطية" },
+  "ahlt.backupSize": { en: "Backup size", fr: "Taille de la sauvegarde", es: "Tamaño de la copia", pt: "Tamanho do backup", ar: "حجم النسخة الاحتياطية" },
+  "ahlt.backupSchedule": { en: "Every {hours}h · keeps last {count}", fr: "Toutes les {hours} h · conserve les {count} dernières", es: "Cada {hours} h · conserva las últimas {count}", pt: "A cada {hours}h · mantém as últimas {count}", ar: "كل {hours} ساعة · يحتفظ بآخر {count}" },
+  "ahlt.runBackupNow": { en: "Run backup now", fr: "Lancer la sauvegarde", es: "Ejecutar copia ahora", pt: "Executar backup agora", ar: "تشغيل النسخ الآن" },
+  "ahlt.backupRunning": { en: "Backing up…", fr: "Sauvegarde en cours…", es: "Realizando copia…", pt: "Fazendo backup…", ar: "جارٍ النسخ الاحتياطي…" },
+  "ahlt.backupDir": { en: "Directory", fr: "Dossier", es: "Directorio", pt: "Diretório", ar: "المجلد" },
+  "ahlt.backupFrequency": { en: "Schedule", fr: "Fréquence", es: "Frecuencia", pt: "Frequência", ar: "الجدول" },
 
   // ── Admin: Integrity ──
   "aint.title": { en: "Integrity", fr: "Intégrité", es: "Integridad", pt: "Integridade", ar: "النزاهة" },
