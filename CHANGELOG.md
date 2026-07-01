@@ -4,7 +4,54 @@ A running record of what shipped in each version. Newest first.
 
 ---
 
-## v1.4.0 — New features (in progress)
+## v1.5.1 — Reliability, operations & fixes
+
+- **Scheduled database backups** — the embedded database previously had no backup strategy at all (single folder, single host, no recovery path if the disk failed). Now takes a full compressed snapshot of every table on a schedule (default: daily, keeps the last 14) plus a manual "Run backup now" action, written to a folder that survives redeploys (a sibling of the live data directory, not inside the app's own redeployable code). Surfaced as a new status card + detail panel on the System Health page. New `server/backup.ts`, `GET/POST /api/admin/backup/*`.
+- **Exam duration changes now propagate live** — increasing an exam's duration while students are mid-exam now updates their live countdown within seconds (previously only affected attempts started after the change).
+- **Live countdown to next scheduled exam** — a large, prominent countdown on the student dashboard for an upcoming scheduled exam, turning urgent (and pulsing) inside the final hour.
+- **Exam delete** — admins can now delete an exam from the Exam Library (previously add/edit-only, no way to remove one).
+- **Word (.docx) question-bank import fixed** — column headers like "Question" / "Correct Answer" weren't being recognized (the importer only matched exact internal field names); it now falls back across common header variants.
+- **Mailer completion** — result-released, registration-confirmed, exam-reminder, and admin-digest emails now all send full branded HTML (previously plain text only, or only partially built out). SMTP connectivity is verified at server startup so a misconfiguration surfaces immediately in the logs instead of silently failing on the first real send.
+- **Fix: unnecessary full-database rewrites on live-exam admin actions** — the exam-settings save endpoint was rewriting every row of every table on each save (a pattern meant for rare bulk operations, not routine edits). Now only writes the specific rows that actually changed, avoiding a potential stall on concurrent student traffic once an org has accumulated significant historical data.
+
+---
+
+## v1.5.0 — Security hardening
+
+A dedicated security pass across two work sessions: an initial audit, then a follow-up adversarial review that dug further into auth, data-at-rest, dependencies, and infrastructure. Overall verdict going in: the codebase was already fairly security-conscious (parameterized SQL throughout, field-whitelisted PATCH handlers with no mass-assignment risk, `timingSafeEqual` SEB verification, bcrypt, candidate-scoped queries) — this release closes the specific gaps found and adds automated checks so regressions get caught going forward.
+
+**Authentication & session security**
+- Hardcoded admin password removed — set via `ADMIN_PASSWORD`, else a random one-time password is generated and printed once at first boot.
+- Hardcoded JWT dev-default removed — an unset `JWT_SECRET` now gets a random per-process key (sessions reset on restart, never forgeable with a known default); `assertProductionEnv()` still requires a real one in production.
+- Session revocation via a per-user `tokenVersion` — logout, password change, and admin-initiated resets all bump it, immediately invalidating any existing session token.
+- Password policy strengthened to a 12-character minimum with a variety check (was 6).
+- 2FA (TOTP) secrets are now encrypted at rest with the same AES-256-GCM field encryption already used for avatars/snapshots — previously stored in plaintext, meaning a database leak would have handed over every account's second factor.
+- 2FA replay protection — a captured or observed authenticator code can no longer be reused a second time within its ~30s validity window.
+- 2FA brute-force limiter added to the verify endpoint.
+- Login timing side-channel fixed — a login attempt for a nonexistent email previously returned near-instantly while a wrong password on a real account took ~100ms (bcrypt), letting an attacker enumerate registered emails by measuring response time. Both cases now take the same time.
+- SSO (Microsoft) `id_token` now validates audience, issuer, and expiry, not just that it arrived over the token exchange.
+
+**Data protection**
+- Check-in selfie, photo-ID, and room-scan photos encrypted at rest, with a boot-time migration for any existing plaintext rows.
+- Webhook SSRF guard — outbound webhook URLs must be `https://` and are rejected if they resolve to a private/loopback/link-local/cloud-metadata address; re-validated at every delivery (not just at creation), closing a DNS-rebinding window.
+- Audit log made tamper-evident — every entry hash-chains to the one before it, so any later edit or deletion breaks verification (surfaced on the Audit Logs page).
+- File-upload MIME allowlist plus content sniffing — rejects markup/script payloads even when the declared content type is spoofed.
+- CSV export formula-injection fix — a candidate's self-editable display name could otherwise execute as a live formula (e.g. `=HYPERLINK(...)`) the moment an admin opened a results/students/certificates export in Excel or Sheets.
+- Outbound email HTML injection fix — user- and admin-controlled values (name, exam title, organization name) are now escaped before being interpolated into email HTML.
+- Proctor-event submissions validated against a known event-type allowlist, severity clamped to a fixed set, and message length capped (previously candidate-controlled and unbounded).
+- Embedded database (`.pgdata`) file permissions locked down on the live host — found world-readable during the audit, restricted to owner-only.
+
+**Dependencies & CI**
+- `npm audit`: 7 vulnerabilities → 0. Upgraded nodemailer 6→9 (high — SMTP/header injection), swapped `xlsx` to SheetJS's official CDN build, and forced the transitive `dompurify` pulled in by `monaco-editor` to a patched version via a `package.json` override (monaco-editor pins an exact vulnerable version, so normal dependency resolution couldn't fix it on its own).
+- CI security gates added to `.github/workflows/ci.yml`: `npm audit --audit-level=critical`, CodeQL (security-extended), and gitleaks secret-scanning.
+
+**Reviewed and confirmed solid (no change needed):** IDOR — every attempt/registration/certificate endpoint scoped by candidate ID across all ~150 routes; no state-mutating GET endpoints (no SameSite=Lax CSRF bypass surface); no CORS misconfiguration; request logs never capture request bodies (login/signup passwords are never logged); IP addresses used only as in-memory rate-limit keys, never persisted or exposed in any response.
+
+**Known, accepted tradeoffs:** CSP allows `unsafe-eval`/`unsafe-inline` in `scriptSrc` (required by the Monaco code editor); not multi-tenant (single shared namespace — safe run as one instance per institution, not as shared SaaS); web-based proctoring is inherently bypassable by a sufficiently motivated candidate on their own hardware — Safe Exam Browser is the only hard, OS-level lock; this is a fundamental limit of browser-based invigilation, not a bug in this codebase.
+
+---
+
+## v1.4.0 — New features
 
 Net-new capabilities (built on the existing Express + embedded-PGlite backend — no data migration required).
 
@@ -55,11 +102,7 @@ Net-new capabilities (built on the existing Express + embedded-PGlite backend �
 - **Per-section time limits** — each exam section can carry a suggested time (minutes), set in the Exam Builder and shown to candidates in the section header during the exam (advisory).
 - **Answer similarity / plagiarism flagging** — per exam, a similarity scan compares written answers (essay/short/code) across submissions and flags candidate pairs above a character-similarity threshold, with click-through to each attempt. Reached from the Results page ("Similarity").
 
-**Planned**
-- Report builder / scheduled exports
-- Accommodations (extra exam time)
-- Audit-log retention
-- (Backlog ideas: AI question generation, AI-assisted essay grading, SSO + 2FA, certificate QR, full independent blind double-marking.)
+**Backlog ideas (not yet built):** AI question generation, AI-assisted essay grading, full independent blind double-marking.
 
 ---
 
