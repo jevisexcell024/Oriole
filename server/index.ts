@@ -14,7 +14,7 @@ import {
   clearSession, currentUser, issueSession, requireAuth, requireRole, requireRoles, toSafeUser,
   issuePending2fa, pending2faUserId, clearPending2fa,
 } from "./auth.ts";
-import { generateSecret, verifyTotp, otpauthUrl, generateBackupCodes } from "./totp.ts";
+import { generateSecret, verifyTotp, verifyTotpStep, otpauthUrl, generateBackupCodes } from "./totp.ts";
 import { microsoftEnabled, authorizeUrl, exchangeCode } from "./sso.ts";
 import { tryEvalExpr } from "../shared/expr.ts";
 import { env, assertProductionEnv } from "./env.ts";
@@ -212,7 +212,17 @@ app.post("/api/auth/2fa/verify", validate(twoFaCodeSchema), async (req, res) => 
     return res.status(400).json({ error: "Two-factor authentication is not set up." });
   }
   const code = String(req.body?.code ?? "").trim();
-  let ok = verifyTotp(user.twoFactorSecret, code);
+  // Replay guard: a TOTP code is valid for its whole ±30s window, so without
+  // tracking which step was last accepted, a code observed/captured once (over
+  // someone's shoulder, in a screen share, on an insecure network) could be
+  // reused a second time before it naturally expires. Reject a step at or
+  // before the last one this account already consumed.
+  const step = verifyTotpStep(decryptString(user.twoFactorSecret) ?? "", code);
+  let ok = step !== null && step > (user.twoFactorLastStep ?? -1);
+  if (ok) {
+    user.twoFactorLastStep = step;
+    await db.upsert("users", user);
+  }
   // Fall back to a one-time backup code (consumed on use).
   if (!ok && user.twoFactorBackupCodes?.length) {
     const normalized = code.toLowerCase().replace(/\s/g, "");
@@ -244,7 +254,10 @@ app.post("/api/auth/logout", async (req, res) => {
 app.post("/api/auth/2fa/setup", requireAuth, async (req, res) => {
   const user = currentUser(req)!;
   const secret = generateSecret();
-  user.twoFactorPending = secret;
+  // Encrypted at rest (same AES-256-GCM field encryption used for avatars/
+  // snapshots) — a TOTP secret is a long-lived credential, so a DB leak
+  // shouldn't hand over every account's second factor in plaintext.
+  user.twoFactorPending = encryptString(secret);
   await db.upsert("users", user);
   res.json({ secret, otpauthUrl: otpauthUrl(secret, user.email) });
 });
@@ -253,11 +266,13 @@ app.post("/api/auth/2fa/enable", requireAuth, validate(twoFaCodeSchema), async (
   const user = currentUser(req)!;
   if (!user.twoFactorPending) return res.status(400).json({ error: "Start setup first." });
   const code = String(req.body?.code ?? "").trim();
-  if (!verifyTotp(user.twoFactorPending, code)) return res.status(400).json({ error: "That code didn't match. Check your authenticator app and try again." });
+  const pendingSecret = decryptString(user.twoFactorPending) ?? "";
+  if (!verifyTotp(pendingSecret, code)) return res.status(400).json({ error: "That code didn't match. Check your authenticator app and try again." });
   const backupCodes = generateBackupCodes(10);
-  user.twoFactorSecret = user.twoFactorPending;
+  user.twoFactorSecret = user.twoFactorPending; // already encrypted — carry the ciphertext over as-is
   user.twoFactorPending = null;
   user.twoFactorEnabled = true;
+  user.twoFactorLastStep = null;
   user.twoFactorBackupCodes = await Promise.all(backupCodes.map((c) => bcrypt.hash(c.toLowerCase(), 10)));
   await db.upsert("users", user);
   await recordAudit(req, "2fa.enabled", `${user.name} <${user.email}>`);
@@ -271,11 +286,12 @@ app.post("/api/auth/2fa/disable", requireAuth, validate(twoFaDisableSchema), asy
   const password = String(req.body?.password ?? "");
   const code = String(req.body?.code ?? "").trim();
   const okPw = password && (await bcrypt.compare(password, user.passwordHash));
-  const okCode = code && user.twoFactorSecret && verifyTotp(user.twoFactorSecret, code);
+  const okCode = code && user.twoFactorSecret && verifyTotp(decryptString(user.twoFactorSecret) ?? "", code);
   if (!okPw && !okCode) return res.status(401).json({ error: "Enter your password or a current authenticator code to disable 2FA." });
   user.twoFactorEnabled = false;
   user.twoFactorSecret = null;
   user.twoFactorPending = null;
+  user.twoFactorLastStep = null;
   user.twoFactorBackupCodes = [];
   await db.upsert("users", user);
   await recordAudit(req, "2fa.disabled", `${user.name} <${user.email}>`);

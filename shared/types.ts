@@ -26,9 +26,17 @@ export interface User {
   notificationPrefs?: NotificationPrefs;
   // ── Two-factor authentication (TOTP authenticator app) ──
   twoFactorEnabled?: boolean;
-  twoFactorSecret?: string | null;   // active base32 secret (server-only, never sent to the client)
-  twoFactorPending?: string | null;  // secret awaiting first-code confirmation during setup
+  /** Active base32 secret (server-only, never sent to the client). Encrypted at
+   *  rest with DATA_ENCRYPTION_KEY when configured — this is a long-lived
+   *  credential equivalent to a password, so a DB leak must not hand over every
+   *  user's second factor in plaintext. */
+  twoFactorSecret?: string | null;
+  /** Secret awaiting first-code confirmation during setup. Same at-rest encryption as twoFactorSecret. */
+  twoFactorPending?: string | null;
   twoFactorBackupCodes?: string[];   // bcrypt-hashed one-time recovery codes
+  /** The 30s TOTP step index of the last code accepted at login, so a captured
+   *  code can't be replayed a second time within its validity window. */
+  twoFactorLastStep?: number | null;
   /** Session epoch: bumped to invalidate all existing tokens for this user
    *  (logout, password change, admin reset). Tokens carry the value they were
    *  issued with; a mismatch means the session has been revoked. */

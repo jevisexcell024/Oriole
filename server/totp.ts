@@ -50,15 +50,25 @@ export function totp(secret: string, t = Date.now()): string {
   return hotp(secret, Math.floor(t / 30_000));
 }
 
-/** Verify a 6-digit code, allowing ±`window` 30s steps to tolerate clock drift. */
-export function verifyTotp(secret: string, token: string, window = 1): boolean {
+/** Verify a 6-digit code within ±`window` 30s steps (clock drift tolerance) and
+ *  return the matched step index, or null if it didn't match any step. Exposing
+ *  the step lets the caller enforce replay protection (reject a code whose step
+ *  was already consumed) — a captured/observed code is otherwise valid for
+ *  anyone to reuse until it naturally expires. */
+export function verifyTotpStep(secret: string, token: string, window = 1): number | null {
   const clean = (token || "").replace(/\s/g, "");
-  if (!/^\d{6}$/.test(clean)) return false;
+  if (!/^\d{6}$/.test(clean)) return null;
   const counter = Math.floor(Date.now() / 30_000);
   for (let w = -window; w <= window; w++) {
-    if (hotp(secret, counter + w) === clean) return true;
+    const step = counter + w;
+    if (hotp(secret, step) === clean) return step;
   }
-  return false;
+  return null;
+}
+
+/** Verify a 6-digit code, allowing ±`window` 30s steps to tolerate clock drift. */
+export function verifyTotp(secret: string, token: string, window = 1): boolean {
+  return verifyTotpStep(secret, token, window) !== null;
 }
 
 /** The otpauth:// URI an authenticator app scans (rendered as a QR by the client). */
