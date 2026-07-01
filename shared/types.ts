@@ -299,9 +299,6 @@ export interface Attempt {
   pausedAt?: string | null;
   /** Accumulated paused time (ms), added to the deadline so paused time isn't lost. */
   pausedMs?: number;
-  /** Admin-granted extra milliseconds applied AFTER the availableUntil cap, so extensions
-   *  always reflect on the student's timer regardless of the exam's closing window. */
-  extraMs?: number;
   /** Set when a proctor force-submitted the attempt. */
   terminated?: boolean;
   terminationReason?: string | null;

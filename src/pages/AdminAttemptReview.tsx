@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
-  ArrowLeft, Loader2, CheckCircle2, XCircle, Award, ShieldAlert, User, Mail, Send, Gauge, Film, Clock, Download, EyeOff, Scale, RotateCcw,
+  ArrowLeft, Loader2, CheckCircle2, XCircle, Award, ShieldAlert, User, Mail, Send, Gauge, Film, Clock, Download, EyeOff, Scale,
 } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
 import { api } from "@/lib/api";
@@ -50,7 +50,6 @@ export function AdminAttemptReview() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
   const [releasing, setReleasing] = useState(false);
-  const [reopening, setReopening] = useState(false);
 
   const load = useCallback(() => {
     api.get<Resp>(`/admin/attempts/${attemptId}`).then(setData).catch((e) => setError(e.message));
@@ -90,20 +89,6 @@ export function AdminAttemptReview() {
       load();
     } catch (e) { setError((e as Error).message); }
     finally { setReleasing(false); }
-  }
-
-  async function reopen() {
-    if (!confirm(
-      `Reopen this attempt for ${data?.candidate.name}?\n\n` +
-      `The student will be able to continue from where they stopped and will have their remaining time restored based on the current exam duration (${data?.exam.durationMinutes} min).\n\n` +
-      `Their previous score will be cleared.`
-    )) return;
-    setReopening(true);
-    try {
-      await api.post(`/admin/attempts/${attemptId}/reopen`);
-      load();
-    } catch (e) { alert((e as Error).message); }
-    finally { setReopening(false); }
   }
 
   async function verifyId(regId: string, verified: boolean) {
@@ -169,25 +154,6 @@ export function AdminAttemptReview() {
               </button>
             </div>
           )}
-
-          {/* Reopen — visible for any submitted attempt so an admin can undo an
-              accidental early close (e.g. a duration mistake). */}
-          <div className="flex items-center justify-between gap-3 border-t border-[var(--border)] bg-amber-500/5 px-6 py-3">
-            <div>
-              <p className="text-xs font-semibold text-amber-400">Reopen attempt</p>
-              <p className="text-xs text-[var(--muted)]">
-                Allow the student to continue from where they stopped. Their remaining time will be restored based on the current exam duration ({exam.durationMinutes} min).
-              </p>
-            </div>
-            <button
-              onClick={reopen}
-              disabled={reopening}
-              className="btn btn-outline shrink-0 border-amber-500/40 text-amber-400 hover:bg-amber-500/15 disabled:opacity-50"
-            >
-              {reopening ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
-              Reopen
-            </button>
-          </div>
 
           {certificate && (
             <div className="flex items-center gap-2 border-t border-[var(--border)] px-6 py-3 text-sm">

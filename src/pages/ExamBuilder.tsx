@@ -6,7 +6,7 @@ import {
   Users, Globe, Lock, UserCheck, ShieldAlert, Shuffle, CheckSquare, Square, Hash, FileText,
   Code as CodeIcon, Target, Layers, GripVertical, Bold, Italic, Underline, List, Image as ImageIcon,
   Save, Loader2, Settings as SettingsIcon, ListTree, ArrowLeftRight, ListOrdered, MousePointerClick,
-  Upload, TextCursorInput, Tag, Library, Search, BookmarkPlus, Sparkles, Clock, Calculator, RotateCcw,
+  Upload, TextCursorInput, Tag, Library, Search, BookmarkPlus, Sparkles, Clock, Calculator,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useT } from "@/lib/i18n";
@@ -867,37 +867,6 @@ function SettingsPanel({
   assignClass: () => void; audienceMsg: string | null;
 }) {
   const open = exam.enrollment === "open";
-  const [reopening, setReopening] = useState(false);
-  const [reopenResult, setReopenResult] = useState<{ reopened: number } | null>(null);
-  const [extraMins, setExtraMins] = useState(10);
-  const [extending, setExtending] = useState(false);
-  const [extendResult, setExtendResult] = useState<{ extended: number; minutes: number } | null>(null);
-
-  const extendTime = async () => {
-    if (extraMins < 1) return;
-    setExtending(true);
-    setExtendResult(null);
-    try {
-      const r = await api.post<{ extended: number; minutes: number }>(`/admin/exams/${exam.id}/extend`, { minutes: extraMins });
-      setExtendResult(r);
-    } catch (e) { alert((e as Error).message); }
-    finally { setExtending(false); }
-  };
-
-  const reopenAll = async () => {
-    if (!confirm(
-      `Reopen all submitted sessions for "${exam.title}"?\n\n` +
-      `Every student whose attempt was submitted will be able to continue. ` +
-      `Their remaining time will be restored based on the current duration (${exam.durationMinutes} min).`
-    )) return;
-    setReopening(true);
-    setReopenResult(null);
-    try {
-      const r = await api.post<{ reopened: number }>(`/admin/exams/${exam.id}/reopen-all`);
-      setReopenResult(r);
-    } catch (e) { alert((e as Error).message); }
-    finally { setReopening(false); }
-  };
   return (
     <div className="space-y-4">
       {/* Details */}
@@ -1047,74 +1016,6 @@ function SettingsPanel({
         </div>
       </div>
 
-      {/* Session recovery */}
-      <div className="card rounded-2xl border-amber-500/30 p-6 space-y-5">
-        <div className="flex items-center gap-2 text-sm font-bold">
-          <RotateCcw className="h-4 w-4 text-amber-400" />
-          <span>Session recovery</span>
-        </div>
-
-        {/* Extend active sessions */}
-        <div>
-          <p className="text-xs font-semibold text-amber-300">Add time to all active sessions</p>
-          <p className="mt-0.5 text-xs text-[var(--muted)]">
-            Instantly adds minutes to every in-progress session. Reflects on the student timer within seconds. Does not change the exam default duration.
-          </p>
-          <div className="mt-3 flex flex-wrap items-center gap-3">
-            <input
-              type="number"
-              min={1}
-              max={999}
-              value={extraMins}
-              onChange={(e) => setExtraMins(Math.max(1, Math.floor(Number(e.target.value) || 1)))}
-              className="w-24 rounded-lg border border-amber-500/40 bg-transparent px-3 py-1.5 text-sm focus:outline-none focus:border-amber-400"
-            />
-            <span className="text-xs text-[var(--muted)]">minutes</span>
-            <button
-              onClick={extendTime}
-              disabled={extending || extraMins < 1}
-              className="btn btn-outline border-amber-500/40 text-amber-400 hover:bg-amber-500/15 disabled:opacity-50"
-            >
-              {extending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-              Extend active sessions
-            </button>
-            {extendResult && (
-              <span className="text-sm font-semibold text-emerald-400">
-                {extendResult.extended === 0
-                  ? "No active sessions right now."
-                  : `✓ +${extendResult.minutes} min added to ${extendResult.extended} session${extendResult.extended === 1 ? "" : "s"}.`}
-              </span>
-            )}
-          </div>
-        </div>
-
-        <hr className="border-amber-500/20" />
-
-        {/* Reopen submitted sessions */}
-        <div>
-          <p className="text-xs font-semibold text-amber-300">Reopen all submitted sessions</p>
-          <p className="mt-0.5 text-xs text-[var(--muted)]">
-            If you accidentally ended all exams early, use this to reopen every submitted session. Students will continue from where they stopped with their remaining time restored.
-          </p>
-          <div className="mt-3 flex flex-wrap items-center gap-3">
-            <button
-              onClick={reopenAll}
-              disabled={reopening}
-              className="btn btn-outline border-amber-500/40 text-amber-400 hover:bg-amber-500/15 disabled:opacity-50"
-            >
-              {reopening ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
-              Reopen all submitted sessions
-            </button>
-            {reopenResult && (
-              <span className="text-sm font-semibold text-emerald-400">
-                {reopenResult.reopened === 0
-                  ? "No submitted sessions found."
-                  : `✓ ${reopenResult.reopened} session${reopenResult.reopened === 1 ? "" : "s"} reopened — students can now continue.`}
-              </span>
-            )}
-          </div>
-        </div>
-      </div>
     </div>
   );
 }

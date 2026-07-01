@@ -537,8 +537,7 @@ function attemptDeadlineMs(attempt: Attempt): number {
   // Accessibility accommodation: this student gets extra time on every exam.
   const cand = db.data!.users.find((u) => u.id === attempt.candidateId);
   const extra = Math.max(0, cand?.accommodationsExtraMinutes ?? 0) * 60_000;
-  // Admin-granted extensions bypass the availableUntil cap so they always reflect live.
-  return base + paused + extra + (attempt.extraMs ?? 0);
+  return base + paused + extra;
 }
 
 // ── Automatic notifications (best-effort; logged in mock mode, sent via SMTP in prod) ──
@@ -1642,19 +1641,9 @@ app.patch("/api/admin/exams/:id", requireRole("admin"), async (req, res) => {
       exam.durationMinutes = newDur;
       // Push the new duration to every in-progress attempt so the student's live
       // countdown updates on their next /control poll (≤ 3.5 s away).
-      // If the exam has availableUntil that would cap the new deadline, the surplus
-      // is stored in extraMs which bypasses the cap so the extension is always visible.
       for (const a of db.data!.attempts) {
         if (a.examId === exam.id && a.status === "in_progress") {
-          const oldDeadline = attemptDeadlineMs(a);
-          const oldDur = a.durationMinutes;
           a.durationMinutes = newDur;
-          const newDeadlineAfter = attemptDeadlineMs(a);
-          const intendedDelta = (newDur - oldDur) * 60_000;
-          const actualDelta = newDeadlineAfter - oldDeadline;
-          if (intendedDelta > actualDelta) {
-            a.extraMs = (a.extraMs ?? 0) + (intendedDelta - actualDelta);
-          }
           touchedAttempts.push(a);
         }
       }
@@ -2731,113 +2720,6 @@ app.post("/api/admin/attempts/:id/terminate", requireRoles(...STAFF), async (req
   const reason = String(req.body?.reason ?? "").trim().slice(0, 300) || "Terminated by proctor";
   await forceSubmitAttempt(a, reason);
   await recordAudit(req, "proctor.terminate", `${db.data!.users.find((u) => u.id === a.candidateId)?.name ?? "candidate"} · ${reason}`);
-  res.json({ ok: true });
-});
-
-// Add extra minutes to every in-progress attempt for an exam (live time extension).
-// Does NOT change exam.durationMinutes — only extends the current active sessions.
-// The student's /control poll picks up the new deadlineAt within 3.5 s.
-app.post("/api/admin/exams/:id/extend", requireRole("admin"), async (req, res) => {
-  const exam = db.data!.exams.find((e) => e.id === req.params.id);
-  if (!exam) return res.status(404).json({ error: "Exam not found." });
-  const minutes = Math.max(1, Math.floor(Number(req.body?.minutes ?? 0)));
-  if (!minutes) return res.status(400).json({ error: "minutes must be a positive integer." });
-
-  const active = db.data!.attempts.filter(
-    (a) => a.examId === exam.id && a.status === "in_progress",
-  );
-  // Targeted per-attempt upserts, not a full-mirror db.write(): this is meant to
-  // be used WHILE students are actively mid-exam, so a blanket flush of every
-  // historical row across every table would stall the shared database exactly
-  // when hundreds of concurrent /control polls are depending on it.
-  for (const a of active) {
-    a.extraMs = (a.extraMs ?? 0) + minutes * 60_000;
-    await db.upsert("attempts", a);
-  }
-  await recordAudit(req, "exam.extend_time", `+${minutes} min to ${active.length} session(s) — ${exam.title}`);
-  res.json({ extended: active.length, minutes });
-});
-
-// Reopen ALL submitted attempts for an exam in one shot (e.g. after an accidental
-// duration change ended everyone's session early).
-app.post("/api/admin/exams/:id/reopen-all", requireRole("admin"), async (req, res) => {
-  const exam = db.data!.exams.find((e) => e.id === req.params.id);
-  if (!exam) return res.status(404).json({ error: "Exam not found." });
-
-  const submitted = db.data!.attempts.filter(
-    (a) => a.examId === exam.id && a.status === "submitted",
-  );
-  if (!submitted.length) return res.json({ reopened: 0 });
-
-  for (const a of submitted) {
-    const reg = db.data!.registrations.find((r) => r.id === a.registrationId);
-
-    a.durationMinutes   = exam.durationMinutes;
-    a.extraMs           = 0;
-    // If the window has already fully expired, reset start anchor to now so
-    // students still get the full duration.
-    if (attemptDeadlineMs(a) <= Date.now()) a.startedAt = now();
-
-    a.status            = "in_progress";
-    a.submittedAt       = null;
-    a.score             = null;
-    a.passed            = null;
-    a.gradingStatus     = undefined;
-    a.terminated        = false;
-    a.terminationReason = null;
-
-    // Targeted upserts (attempt + its registration only), not a full-mirror
-    // db.write() — this can be used while other students are still mid-exam, so
-    // rewriting every historical row across all 15 tables here would stall the
-    // shared database at the exact moment concurrent /control polls need it.
-    await db.upsert("attempts", a);
-    if (reg && reg.status === "submitted") {
-      reg.status = "in_progress";
-      await db.upsert("registrations", reg);
-    }
-  }
-
-  await recordAudit(req, "exam.reopen_all", `Reopened ${submitted.length} attempt(s) for ${exam.title}`);
-  res.json({ reopened: submitted.length });
-});
-
-// Reopen a submitted attempt so the student can continue from where they stopped.
-// Restores the current exam duration and resets the start anchor if the window
-// would otherwise already be expired.
-app.post("/api/admin/attempts/:id/reopen", requireRole("admin"), async (req, res) => {
-  const a = db.data!.attempts.find((x) => x.id === req.params.id);
-  if (!a) return res.status(404).json({ error: "Attempt not found." });
-  if (a.status !== "submitted") return res.status(409).json({ error: "This attempt is not submitted — nothing to reopen." });
-
-  const exam = db.data!.exams.find((e) => e.id === a.examId);
-  const reg  = db.data!.registrations.find((r) => r.id === a.registrationId);
-
-  // Give the student the full current exam duration anchored from their
-  // original start, so they keep whatever time they had remaining.
-  a.durationMinutes = exam?.durationMinutes ?? a.durationMinutes;
-  a.extraMs = 0;
-
-  // If the deadline has already passed (e.g. exam window closed entirely),
-  // reset the start anchor to right now so they get the full duration.
-  if (attemptDeadlineMs(a) <= Date.now()) {
-    a.startedAt = now();
-  }
-
-  // Clear submission state.
-  a.status          = "in_progress";
-  a.submittedAt     = null;
-  a.score           = null;
-  a.passed          = null;
-  a.gradingStatus   = undefined;
-  a.terminated      = false;
-  a.terminationReason = null;
-
-  // Reopen the registration so the student can re-enter the exam portal.
-  if (reg && reg.status === "submitted") reg.status = "in_progress";
-
-  await db.write();
-  const cand = db.data!.users.find((u) => u.id === a.candidateId);
-  await recordAudit(req, "attempt.reopened", `Reopened attempt for ${cand?.name ?? a.candidateId} — ${exam?.title ?? a.examId}`);
   res.json({ ok: true });
 });
 
