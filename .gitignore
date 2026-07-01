@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-server/
+*.tsbuildinfo
+
+# Secrets & local env
+.env
+.env.*
+!.env.example
+
+# Embedded database (local dev) & migrated legacy data
+server/.pgdata/
+server/data.json
+server/data.json.migrated
+
+# Logs & OS cruft
+*.log
+.DS_Store

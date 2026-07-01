@@ -1,0 +1,8 @@
+# Orcalis Assess — served on cPanel/Apache (in front of the Passenger Node app).
+# Own the Content-Security-Policy here so it overrides any stricter default the
+# host injects. 'unsafe-eval' is required by the Monaco code editor + WebAssembly;
+# 'unsafe-inline' covers React inline styles and the Google-Fonts/Tailwind CSS.
+<IfModule mod_headers.c>
+  Header always unset Content-Security-Policy
+  Header always set Content-Security-Policy "default-src 'self' data: blob: https:; script-src 'self' 'unsafe-eval' 'unsafe-inline' https:; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: blob: https:; font-src 'self' data: https:; connect-src 'self' https: wss:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'"
+</IfModule>

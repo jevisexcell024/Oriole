@@ -1,0 +1,189 @@
+﻿@import "tailwindcss";
+/* Type system — Space Grotesk (display/headings) + DM Sans (body), loaded via
+   <link> in index.html. Grotesk gives headings real character; DM Sans is a warm,
+   highly readable workhorse for dense enterprise UI. */
+
+@theme {
+  /* ── Oriole palette ──
+     Lime #c6ff34 · near-black #111110. The lime ramp powers accents, links,
+     active states and hovers; -400 is light, -500/-600 fills. */
+  --color-brand-50: oklch(0.45 0.07 112);
+  --color-brand-100: oklch(0.55 0.10 112);
+  --color-brand-400: oklch(0.89 0.16 112);
+  --color-brand-500: oklch(0.86 0.18 112);
+  --color-brand-600: oklch(0.80 0.19 112);
+  --color-brand-700: oklch(0.89 0.16 112);
+  --color-navy: oklch(0.28 0.02 110);
+
+  /* Heading font + body font. */
+  --font-display: "Space Grotesk", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "DM Sans", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+
+  /* ── Corners (tight, enterprise/engineered feel). ── */
+  --radius-xs: 2px;
+  --radius-sm: 3px;
+  --radius-md: 4px;
+  --radius-lg: 6px;
+  --radius-xl: 7px;
+  --radius-2xl: 8px;
+  --radius-3xl: 10px;
+}
+
+@layer base {
+  :root {
+    /* Dark: the brand near-black canvas with lime accents.
+       Cards sit a clear step above the canvas with a defined hairline border. */
+    --bg: #0E0E0D;
+    --bg-subtle: #141413;
+    --card: #1A1A18;
+    --card-2: #242422;
+    --border: rgba(255, 255, 255, 0.11);
+    --border-strong: rgba(255, 255, 255, 0.20);
+    --fg: #ECEDE6;
+    --muted: #9FA096;
+    --ring: oklch(0.86 0.18 112 / 0.45);
+  }
+  /* Light theme — soft warm canvas, dark-olive text (toggled via `.light` on <html>). */
+  :root.light {
+    --bg: #E9EADF;
+    --bg-subtle: #FFFFFF;
+    --card: #FFFFFF;
+    --card-2: #EFEFE4;
+    --border: rgba(38, 42, 22, 0.18);
+    --border-strong: rgba(38, 42, 22, 0.32);
+    --fg: #1B1D12;
+    --muted: #565B47;
+    --ring: oklch(0.86 0.18 112 / 0.35);
+  }
+  html, body, #root { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "ss01", "cv01"; /* DM Sans alt forms — friendlier a/g */
+  }
+  /* Headings use the display font across the whole project. Space Grotesk reads
+     best a touch tighter; weights stay 600/700 for a crisp, engineered tone. */
+  h1, h2, h3, h4, h5, h6 { font-family: var(--font-display); font-weight: 600; letter-spacing: -0.012em; }
+  h1 { letter-spacing: -0.02em; }
+  /* Numbers in data/metrics line up in columns — essential for an analytics product. */
+  .tnum, table, .stat-num { font-variant-numeric: tabular-nums; }
+  ::selection { background: oklch(0.86 0.18 112 / 0.30); }
+
+  /* Visible keyboard focus everywhere (a11y) without doubling up on inputs that
+     paint their own ring. */
+  :where(a, button, [role="button"], summary, [tabindex]):focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--ring);
+    border-radius: 6px;
+  }
+
+  /* Respect reduced-motion: collapse transitions/animations to near-instant. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: .001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: .001ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer components {
+  /* Surfaces — flat slate with a hairline top highlight + soft lift for depth.
+     16px radius app-wide for a modern enterprise-card feel (controls stay tighter). */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    box-shadow:
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.05),
+      0 1px 2px 0 rgba(0, 0, 0, 0.30),
+      0 6px 16px -10px rgba(0, 0, 0, 0.55);
+  }
+  :root.light .card { box-shadow: 0 1px 2px 0 rgba(24, 42, 53, 0.06), 0 6px 16px -8px rgba(24, 42, 53, 0.14); }
+  :root.light .btn-outline { background: rgba(35, 61, 76, 0.03); }
+  :root.light .btn-ghost:hover { background: rgba(35, 61, 76, 0.06); }
+  /* Opt-in interactive surface (cards that act as buttons/links). */
+  .card-hover { transition: border-color .15s ease, background-color .15s ease, box-shadow .15s ease; }
+  .card-hover:hover {
+    border-color: var(--border-strong);
+    background: var(--card-2);
+    box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.05), 0 4px 16px -6px rgba(0, 0, 0, 0.5);
+  }
+
+  /* Seamless bento: tiles butt together as cells of one framed grid. The grid
+     itself is painted the border colour and uses a 1px gap, so the gaps read as
+     hairline dividers. Direct-child cards drop their own border/radius/shadow. */
+  .bento-seamless { background: var(--border); }
+  .bento-seamless > .card { border: 0; border-radius: 0; box-shadow: none; }
+  .bento-seamless > .card-hover:hover { box-shadow: none; }
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: .5rem;
+    border-radius: 6px; font-weight: 600; font-size: .8125rem; line-height: 1;
+    padding: .5625rem .875rem; transition: background-color .15s ease, border-color .15s ease, opacity .15s ease;
+    cursor: pointer; border: 1px solid transparent; white-space: nowrap;
+  }
+  /* Primary action = Pumpkin with charcoal text (per the palette). */
+  .btn-primary {
+    background: #c6ff34; color: #111110;
+    box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.18), 0 1px 2px 0 rgba(0, 0, 0, 0.20);
+  }
+  .btn-primary:hover { background: #B7C523; }
+  .btn-primary:active { background: #A1AD1F; }
+  .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-outline { background: rgba(255, 255, 255, 0.02); border-color: var(--border-strong); color: var(--fg); }
+  .btn-outline:hover { background: rgba(255, 255, 255, 0.06); border-color: var(--border-strong); }
+  .btn-outline:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-ghost { background: transparent; color: var(--muted); }
+  .btn-ghost:hover { background: rgba(255, 255, 255, 0.05); color: var(--fg); }
+
+  /* Buttons that sit ON the charcoal page header — pumpkin for contrast/accent. */
+  .btn-on-teal { background: #c6ff34; color: #111110; }
+  .btn-on-teal:hover { background: #B7C523; }
+  .btn-ghost-teal { background: rgba(255, 255, 255, 0.10); border-color: rgba(255, 255, 255, 0.25); color: #FFFFFF; }
+  .btn-ghost-teal:hover { background: rgba(255, 255, 255, 0.20); }
+
+  .input {
+    width: 100%; border: 1px solid var(--border); border-radius: 6px;
+    padding: .5625rem .75rem; font-size: .875rem; color: var(--fg);
+    background: var(--bg-subtle); outline: none;
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }
+  .input::placeholder { color: color-mix(in oklch, var(--muted) 75%, transparent); }
+  .input:focus { border-color: var(--color-brand-500); box-shadow: 0 0 0 3px var(--ring); }
+}
+
+/* Subtle, dark-friendly scrollbars across the app. */
+* { scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.16) transparent; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.14); border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.26); }
+
+.fade-in { animation: fade .35s ease both; }
+@keyframes fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+/* Login hero — slowly drifting light source behind the Oriole wordmark. */
+.oriole-spot { animation: oriole-spot 9s ease-in-out infinite; will-change: transform; }
+@keyframes oriole-spot { 0%, 100% { transform: translate(-6%, -5%); } 50% { transform: translate(6%, 5%); } }
+
+/* Exam lockdown: disable text selection + native callouts while a proctored exam runs.
+   Inputs/textareas stay usable so candidates can still type their answers. */
+body.exam-lockdown,
+body.exam-lockdown * {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+body.exam-lockdown input,
+body.exam-lockdown textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
