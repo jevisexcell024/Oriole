@@ -21,11 +21,12 @@ jobs:
         run: npm test
       - name: Build
         run: npm run build
-      # Dependency vulnerability gate. Fails the build only on CRITICAL advisories
-      # so the known no-fix highs (xlsx/SheetJS, monaco→dompurify) don't block CI;
-      # raise to --audit-level=high once those are resolved.
+      # Dependency vulnerability gate. The known no-fix highs (xlsx/SheetJS,
+      # monaco→dompurify) were resolved 2026-07-01 (SheetJS CDN build + a
+      # dompurify override), so this is tightened to moderate — raise back to
+      # critical only if a future no-fix advisory needs to be tolerated again.
       - name: Dependency audit
-        run: npm audit --audit-level=critical
+        run: npm audit --audit-level=moderate
 
   codeql:
     name: CodeQL (SAST)
@@ -40,7 +41,15 @@ jobs:
         with:
           languages: javascript-typescript
           queries: security-extended
+      # GitHub Advanced Security (which the Security-tab upload depends on)
+      # isn't available for private repos on a personal/free account — only for
+      # public repos or paid Enterprise plans. The scan itself still runs and
+      # its findings appear in this step's logs either way; continue-on-error
+      # just stops the unavailable upload from failing the whole workflow.
+      # Remove this once the repo is public or on a plan with GHAS for private
+      # repos, so a real upload failure would go back to failing the build.
       - uses: github/codeql-action/analyze@v3
+        continue-on-error: true
 
   secret-scan:
     name: Secret scan (gitleaks)
