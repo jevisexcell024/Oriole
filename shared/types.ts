@@ -326,20 +326,26 @@ export interface Answer {
   rubricScores?: Record<string, number>;
 }
 
-export type ProctorEventType =
-  | "face_missing"
-  | "multiple_faces"
-  | "tab_blur"
-  | "fullscreen_exit"
-  | "system_check"
-  | "copy_attempt"
-  | "paste_attempt"
-  | "screenshot_attempt"
-  | "screen_capture"
-  | "incognito"
-  | "shortcut_blocked"
-  | "audio_noise"
-  | "multi_monitor";
+/** The complete set of proctoring event types the client may report. Used both as
+ *  the source of the `ProctorEventType` union and as a runtime allowlist when
+ *  validating candidate-submitted events on the server. */
+export const PROCTOR_EVENT_TYPES = [
+  "face_missing",
+  "multiple_faces",
+  "tab_blur",
+  "fullscreen_exit",
+  "system_check",
+  "copy_attempt",
+  "paste_attempt",
+  "screenshot_attempt",
+  "screen_capture",
+  "incognito",
+  "shortcut_blocked",
+  "audio_noise",
+  "multi_monitor",
+] as const;
+
+export type ProctorEventType = (typeof PROCTOR_EVENT_TYPES)[number];
 
 export type Severity = "info" | "warning" | "high";
 

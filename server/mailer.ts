@@ -70,6 +70,23 @@ export async function verifySmtp(): Promise<{ ok: boolean; error: string | null 
 }
 
 // ── HTML email template ───────────────────────────────────────────────────────
+/**
+ * Escape a value for safe interpolation into email HTML. Any dynamic value that
+ * originates from a user (names, exam titles, emails, credentials) MUST be passed
+ * through this before being placed in an HTML template — otherwise a value like
+ * `<a href="…">` injected into a display name renders as live markup in the
+ * recipient's inbox (a phishing / content-spoofing vector, and broken rendering
+ * for perfectly innocent names containing & or <).
+ */
+export function esc(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 // Inline styles only — most email clients strip <head> stylesheets.
 export function buildHtml(bodyHtml: string, to: string): string {
   return `<!DOCTYPE html>
@@ -92,7 +109,7 @@ export function buildHtml(bodyHtml: string, to: string): string {
       </tr>
       <tr>
         <td style="padding:14px 28px;border-top:1px solid #f0f0f0;background:#fafafa">
-          <p style="margin:0;font-size:11px;color:#9ca3af">Sent to ${to}. If you didn't expect this email, you can ignore it.</p>
+          <p style="margin:0;font-size:11px;color:#9ca3af">Sent to ${esc(to)}. If you didn't expect this email, you can ignore it.</p>
         </td>
       </tr>
     </table>
@@ -101,10 +118,11 @@ export function buildHtml(bodyHtml: string, to: string): string {
 </body></html>`;
 }
 
-/** Render a primary CTA button. */
+/** Render a primary CTA button. `href` is always an app-internal, server-built URL;
+ *  `label` is escaped in case a caller ever passes dynamic text. */
 export function ctaButton(label: string, href: string): string {
   return `<p style="margin:20px 0 0">
-    <a href="${href}" style="display:inline-block;background:#c6ff34;color:#000000;font-weight:700;font-size:14px;padding:11px 22px;border-radius:6px;text-decoration:none">${label}</a>
+    <a href="${esc(href)}" style="display:inline-block;background:#c6ff34;color:#000000;font-weight:700;font-size:14px;padding:11px 22px;border-radius:6px;text-decoration:none">${esc(label)}</a>
   </p>`;
 }
 

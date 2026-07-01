@@ -5,6 +5,10 @@ node_modules/
 dist/
 dist-server/
 *.tsbuildinfo
+*.zip
+
+# Word temp files
+~$*
 
 # Secrets & local env
 .env
