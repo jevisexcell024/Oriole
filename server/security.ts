@@ -12,6 +12,15 @@ import net from "node:net";
 // object-src/base-uri are locked down. Owning the CSP here means we override
 // any stricter default the host/proxy injects (which was blocking eval).
 export const securityHeaders = helmet({
+  // helmet's HSTS default omits `preload`, which leaves a visitor's very first
+  // request (before their browser has ever received this header over HTTPS)
+  // vulnerable to SSL-stripping. `preload: true` adds the directive that's a
+  // prerequisite for submitting the domain to hstspreload.org's browser-baked
+  // preload list — but adding the header alone does NOT submit or enroll the
+  // domain. That's a manual, deliberate step (see hstspreload.org) that should
+  // only be done once every subdomain of the deployed domain is confirmed to
+  // serve HTTPS permanently — removal from browsers' baked-in lists takes months.
+  hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
   contentSecurityPolicy: {
     useDefaults: false,
     directives: {
