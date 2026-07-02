@@ -941,7 +941,37 @@ const ALLOWED_UPLOAD_TYPES = new Set([
   "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   "application/vnd.ms-powerpoint", "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 ]);
-function validateUploadAnswer(value: string): { ok: boolean; reason?: string } {
+// Optional cloud malware scan (Cloudmersive Virus Scan API) for file-upload
+// answers. Off by default — only runs when CLOUDMERSIVE_API_KEY is set, same
+// opt-in pattern as the code runner / SMS provider. Fails OPEN: if the service
+// is unreachable, times out, or errors, the upload is allowed through (logged,
+// not surfaced to the candidate) rather than blocking a legitimate exam
+// submission over a transient AV-provider outage — the MIME allowlist and
+// content-sniff above already block the most common attack vectors on their
+// own, so this is a defense-in-depth layer, not the only line of defense.
+async function scanForMalware(buf: Buffer): Promise<{ clean: boolean; reason?: string }> {
+  const apiKey = process.env.CLOUDMERSIVE_API_KEY;
+  if (!apiKey) return { clean: true };
+  try {
+    const form = new FormData();
+    form.append("inputFile", new Blob([new Uint8Array(buf)]), "upload");
+    const res = await fetch("https://api.cloudmersive.com/virus/scan/file", {
+      method: "POST",
+      headers: { Apikey: apiKey },
+      body: form,
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) { logger.warn({ status: res.status }, "AV scan request failed — allowing upload through"); return { clean: true }; }
+    const result = (await res.json()) as { CleanResult?: boolean };
+    if (result.CleanResult === false) return { clean: false, reason: "This file was flagged by malware scanning and can't be accepted." };
+    return { clean: true };
+  } catch (e) {
+    logger.warn({ err: e }, "AV scan errored — allowing upload through");
+    return { clean: true };
+  }
+}
+
+async function validateUploadAnswer(value: string): Promise<{ ok: boolean; reason?: string }> {
   let meta: { type?: string; data?: string };
   try { meta = JSON.parse(value); } catch { return { ok: false, reason: "Invalid file upload." }; }
   const data = typeof meta?.data === "string" ? meta.data : "";
@@ -953,6 +983,11 @@ function validateUploadAnswer(value: string): { ok: boolean; reason?: string } {
   let head = "";
   try { head = Buffer.from(data.slice(data.indexOf(",") + 1, data.indexOf(",") + 200), "base64").toString("utf8").trim().toLowerCase(); } catch { /* binary — fine */ }
   if (/^(<!doctype|<html|<svg|<\?xml|<script)/.test(head)) return { ok: false, reason: "That file looks like markup or a script and isn't allowed." };
+  try {
+    const raw = Buffer.from(data.slice(data.indexOf(",") + 1), "base64");
+    const scan = await scanForMalware(raw);
+    if (!scan.clean) return { ok: false, reason: scan.reason };
+  } catch { /* decode failure shouldn't block — already validated as a data: URL above */ }
   return { ok: true };
 }
 
@@ -970,7 +1005,7 @@ app.post("/api/attempts/:id/answer", requireAuth, async (req, res) => {
   const question = servedQuestions(attempt).find((q) => q.id === questionId);
   if (!question) return res.status(400).json({ error: "Invalid question." });
   if (question.type === "file_upload" && value) {
-    const v = validateUploadAnswer(String(value));
+    const v = await validateUploadAnswer(String(value));
     if (!v.ok) return res.status(400).json({ error: v.reason });
   }
 
