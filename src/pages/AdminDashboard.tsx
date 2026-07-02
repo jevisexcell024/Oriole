@@ -7,6 +7,7 @@ import {
 import { ResponsiveContainer, AreaChart, Area, PieChart, Pie, Cell, CartesianGrid, XAxis, YAxis, Tooltip } from "recharts";
 import { AdminShell } from "@/components/AdminShell";
 import { api } from "@/lib/api";
+import { useT, type TFn } from "@/lib/i18n";
 
 /* ── Oriole palette ────────────────────────────────────────────────────────────
    Three solid brand colors, semantically assigned:
@@ -55,8 +56,14 @@ interface Dash {
 }
 
 const fmtLeft = (ms: number) => { const m = Math.max(0, Math.round(ms / 60000)); if (m < 60) return `${m} min`; const h = Math.round(m / 60); return h < 48 ? `${h} hr` : `${Math.round(h / 24)} d`; };
-const ago = (iso: string | null) => { if (!iso) return ""; const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000); if (s < 60) return "just now"; const m = Math.round(s / 60); if (m < 60) return `${m}m ago`; const h = Math.round(m / 60); return h < 24 ? `${h}h ago` : `${Math.round(h / 24)}d ago`; };
+const ago = (iso: string | null, t: TFn) => { if (!iso) return ""; const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000); if (s < 60) return t("adash.justNow"); const m = Math.round(s / 60); if (m < 60) return t("inbox.mAgo", { n: m }); const h = Math.round(m / 60); return h < 24 ? t("inbox.hAgo", { n: h }) : t("inbox.dAgo", { n: Math.round(h / 24) }); };
 const ini = (n: string) => n.split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase();
+
+// Server-provided health band/breakdown labels are stable English strings —
+// map them through translations when recognized, falling back to the raw
+// string for any label the server introduces later that isn't mapped yet.
+const HEALTH_BAND_KEY: Record<string, string> = { "Healthy": "adash.healthy", "Fair": "adash.fair", "Needs attention": "adash.needsAttention" };
+const HEALTH_BREAKDOWN_KEY: Record<string, string> = { "Pass rate": "adash.bPassRate", "Integrity": "adash.bIntegrity", "Grading throughput": "adash.bGrading", "Completion": "adash.bCompletion" };
 
 /* ── Primitives ─────────────────────────────────────────────────────────────── */
 function Card({ children, className = "", style }: { children: ReactNode; className?: string; style?: CSSProperties }) {
@@ -75,12 +82,13 @@ const tip: CSSProperties = { backgroundColor: V.card, border: "1px solid var(--b
 
 function StatCard({ label, value, sub, subUp, accent, live, warn }:
   { label: string; value: string; sub: string; subUp?: boolean; accent: string; live?: boolean; warn?: boolean }) {
+  const t = useT();
   return (
     <Card className="relative col-span-1">
       <div className="absolute right-4 top-4">
         {live
           ? <span className="inline-flex items-center gap-1.5" style={{ fontFamily: DISPLAY, fontSize: 10, color: C.lime }}>
-              <span className="h-2 w-2 rounded-full" style={{ background: C.lime, animation: "pulse 1.5s infinite" }} />live
+              <span className="h-2 w-2 rounded-full" style={{ background: C.lime, animation: "pulse 1.5s infinite" }} />{t("adash.liveNow")}
             </span>
           : warn
           ? <AlertTriangle className="h-4 w-4" style={{ color: C.pink }} />
@@ -133,6 +141,7 @@ function LegendDot({ color, label }: { color: string; label: string }) {
 /* ── Main ───────────────────────────────────────────────────────────────────── */
 export function AdminDashboard() {
   const navigate = useNavigate();
+  const t = useT();
   const [d, setD] = useState<Dash | null>(null);
   const [stalled, setStalled] = useState(false);
 
@@ -152,8 +161,8 @@ export function AdminDashboard() {
   const header = (
     <div className="flex items-center justify-between pb-5">
       <div>
-        <div style={eye}>Oriole &middot; Dashboard</div>
-        <h1 className="mt-1 text-xl font-semibold" style={{ fontFamily: DISPLAY, color: V.fg }}>Overview</h1>
+        <div style={eye}>{t("adash.dashboardEyebrow")}</div>
+        <h1 className="mt-1 text-xl font-semibold" style={{ fontFamily: DISPLAY, color: V.fg }}>{t("adash.overview")}</h1>
       </div>
       <div className="flex items-center gap-3">
         <span className="hidden items-center gap-2 rounded-xl border px-4 py-2 sm:inline-flex"
@@ -163,7 +172,7 @@ export function AdminDashboard() {
         <button onClick={() => navigate("/admin/exams")}
           className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition hover:brightness-95"
           style={{ background: C.lime, color: "#111110", fontFamily: DISPLAY }}>
-          <Plus className="h-4 w-4" />New Exam
+          <Plus className="h-4 w-4" />{t("adash.createExam")}
         </button>
       </div>
     </div>
@@ -174,36 +183,36 @@ export function AdminDashboard() {
       <AdminShell>
         {header}
         <div className="py-24 text-center" style={{ fontFamily: SANS, fontSize: 13, color: V.mutedFg }}>
-          {stalled ? "Reconnecting to the dashboard…" : "Loading dashboard…"}
+          {stalled ? t("adash.reconnecting") : t("adash.loadingDashboard")}
         </div>
       </AdminShell>
     );
   }
 
   const quick = [
-    { icon: Plus,     label: "Create exam",       color: C.lime,  to: "/admin/exams"         },
-    { icon: Upload,   label: "Import questions",   color: C.pink,  to: "/admin/exams-library" },
-    { icon: UserPlus, label: "Invite candidates",  color: C.white, to: "/admin/candidates"    },
-    { icon: FileText, label: "Generate report",    color: C.lime,  to: "/admin/reports"       },
-    { icon: Layers,   label: "Manage classes",     color: C.pink,  to: "/admin/classes"       },
+    { icon: Plus,     label: t("adash.createExam"),      color: C.lime,  to: "/admin/exams"         },
+    { icon: Upload,   label: t("adash.importQuestions"), color: C.pink,  to: "/admin/exams-library" },
+    { icon: UserPlus, label: t("adash.inviteCandidates"), color: C.white, to: "/admin/candidates"    },
+    { icon: FileText, label: t("adash.generateReport"),   color: C.lime,  to: "/admin/reports"       },
+    { icon: Layers,   label: t("adash.manageClasses"),    color: C.pink,  to: "/admin/classes"       },
   ];
 
   const donut = [
-    { name: "Top",     value: d.resultOverview.bands.top.count,     color: C.lime,  label: "Top performers" },
-    { name: "Average", value: d.resultOverview.bands.average.count, color: C.white, label: "Average"        },
-    { name: "Below",   value: d.resultOverview.bands.fail.count,    color: C.pink,  label: "Below average"  },
+    { name: "Top",     value: d.resultOverview.bands.top.count,     color: C.lime,  label: t("adash.topPerformers") },
+    { name: "Average", value: d.resultOverview.bands.average.count, color: C.white, label: t("adash.average")       },
+    { name: "Below",   value: d.resultOverview.bands.fail.count,    color: C.pink,  label: t("adash.belowAverage")  },
   ];
 
   const liveMetrics = [
-    { icon: Users,    label: "Active sessions", value: d.live.sessions,        color: C.lime  },
-    { icon: Activity, label: "Flagged sessions", value: d.live.flagged,         color: C.pink  },
-    { icon: Clock,    label: "Upcoming",         value: d.upcomingExams.length, color: C.white },
+    { icon: Users,    label: t("adash.activeSessions"),   value: d.live.sessions,        color: C.lime  },
+    { icon: Activity, label: t("adash.flaggedIncidents"), value: d.live.flagged,         color: C.pink  },
+    { icon: Clock,    label: t("adash.upcomingLabel"),    value: d.upcomingExams.length, color: C.white },
   ];
 
   const proctorStats = [
-    { label: "Detected",  value: d.proctoring.cheatingDetected, color: C.pink },
-    { label: "Flagged",   value: d.live.flagged,                 color: C.pink },
-    { label: "In review", value: d.insights.pendingReviews,      color: C.lime },
+    { label: t("adash.detected"), value: d.proctoring.cheatingDetected, color: C.pink },
+    { label: t("adash.flagged"),  value: d.live.flagged,                 color: C.pink },
+    { label: t("adash.inReview"), value: d.insights.pendingReviews,      color: C.lime },
   ];
 
   return (
@@ -212,39 +221,39 @@ export function AdminDashboard() {
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4" style={{ fontFamily: SANS, color: V.fg }}>
 
         {/* ── Row 1 — stat cards ── */}
-        <StatCard label="Total Candidates" value={String(d.cards.activeStudents)}
-          sub={`${d.cards.completionGrowth >= 0 ? "+" : ""}${d.cards.completionGrowth}% completion`}
+        <StatCard label={t("adash.totalCandidates")} value={String(d.cards.activeStudents)}
+          sub={`${d.cards.completionGrowth >= 0 ? "+" : ""}${t("adash.completionPct", { n: d.cards.completionGrowth })}`}
           accent={C.lime} subUp={d.cards.completionGrowth >= 0} />
-        <StatCard label="Live Sessions" value={String(d.live.sessions)}
-          sub={`${d.liveExams.length} exam${d.liveExams.length === 1 ? "" : "s"} in progress`}
+        <StatCard label={t("adash.activeSessions")} value={String(d.live.sessions)}
+          sub={t("adash.examsInProgress", { n: d.liveExams.length })}
           accent={C.white} live />
-        <StatCard label="Pass Rate" value={`${d.insights.passRate}%`}
-          sub={`${d.insights.completed} completed · avg ${d.insights.avgScore}%`}
+        <StatCard label={t("adash.passRate")} value={`${d.insights.passRate}%`}
+          sub={t("adash.completedAvgScore", { n: d.insights.completed, avg: d.insights.avgScore })}
           accent={C.lime} subUp={d.insights.passRate >= 50} />
-        <StatCard label="Pending Reviews" value={String(d.insights.pendingReviews)}
-          sub={`${d.proctoring.cheatingDetected} integrity flag${d.proctoring.cheatingDetected === 1 ? "" : "s"}`}
+        <StatCard label={t("adash.pendingReviewsLabel")} value={String(d.insights.pendingReviews)}
+          sub={t("adash.integrityFlags", { n: d.proctoring.cheatingDetected })}
           accent={C.pink} warn />
 
         {/* ── Row 2 — upcoming + quick actions ── */}
         <Card className="col-span-1 md:col-span-2 xl:col-span-3">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold" style={{ fontFamily: DISPLAY, color: V.fg }}>Upcoming Examinations</h2>
+            <h2 className="text-sm font-semibold" style={{ fontFamily: DISPLAY, color: V.fg }}>{t("adash.upcomingExams")}</h2>
             <button onClick={() => navigate("/admin/scheduler")} className="rounded-lg px-3 py-1.5 text-xs font-medium transition hover:brightness-110"
-              style={{ background: `${C.lime}18`, color: C.lime, fontFamily: SANS }}>+ Add exam</button>
+              style={{ background: `${C.lime}18`, color: C.lime, fontFamily: SANS }}>+ {t("adash.addExam")}</button>
           </div>
           {d.upcomingExams.length === 0 ? (
             <div className="flex flex-col items-center py-12">
               <div className="flex h-10 w-10 items-center justify-center rounded-full" style={{ background: V.muted }}>
                 <Calendar className="h-5 w-5" style={{ color: V.mutedFg }} />
               </div>
-              <p className="mt-3 text-sm" style={{ color: V.mutedFg }}>No upcoming exams scheduled</p>
+              <p className="mt-3 text-sm" style={{ color: V.mutedFg }}>{t("adash.noUpcoming")}</p>
               <button onClick={() => navigate("/admin/scheduler")} className="mt-3 rounded-xl px-4 py-2 text-xs font-semibold"
-                style={{ background: C.lime, color: "#111110", fontFamily: DISPLAY }}>Schedule an exam</button>
+                style={{ background: C.lime, color: "#111110", fontFamily: DISPLAY }}>{t("adash.scheduleExam")}</button>
             </div>
           ) : (
             <div className="mt-4">
               <div className="grid grid-cols-[2fr_1fr_1fr_1fr] gap-2 border-b pb-2" style={{ borderColor: V.border, ...eye }}>
-                <span>Subject</span><span>Class</span><span>Candidates</span><span>Time left</span>
+                <span>{t("adash.colSubject")}</span><span>{t("adash.colClass")}</span><span>{t("adash.colCandidates")}</span><span>{t("adash.colTimeLeft")}</span>
               </div>
               {d.upcomingExams.map((u) => (
                 <button key={u.examId + u.scheduledStart} onClick={() => navigate("/admin/scheduler")}
@@ -261,7 +270,7 @@ export function AdminDashboard() {
         </Card>
 
         <Card className="col-span-1 md:col-span-2 xl:col-span-1">
-          <h2 className="mb-4 text-sm font-semibold" style={{ fontFamily: DISPLAY, color: V.fg }}>Quick actions</h2>
+          <h2 className="mb-4 text-sm font-semibold" style={{ fontFamily: DISPLAY, color: V.fg }}>{t("adash.quickActions")}</h2>
           <div className="flex flex-col gap-1.5">
             {quick.map((q) => (
               <button key={q.label} onClick={() => navigate(q.to)}
@@ -282,10 +291,10 @@ export function AdminDashboard() {
           <div className="flex items-center justify-between">
             <h2 className="inline-flex items-center gap-2 text-sm font-semibold" style={{ fontFamily: DISPLAY, color: V.fg }}>
               <span className="h-2 w-2 rounded-full" style={{ background: C.lime, animation: "pulse 1.5s infinite" }} />
-              Live Monitoring
+              {t("adash.liveMonitoring")}
             </h2>
             <button onClick={() => navigate("/admin/live")} className="text-xs transition hover:text-[var(--fg)]"
-              style={{ fontFamily: SANS, color: V.mutedFg }}>Open →</button>
+              style={{ fontFamily: SANS, color: V.mutedFg }}>{t("adash.openLiveMonitor")} →</button>
           </div>
           <div className="mt-3 space-y-2">
             {liveMetrics.map((m) => (
@@ -299,18 +308,18 @@ export function AdminDashboard() {
           {d.live.sessions === 0 && (
             <div className="mt-3 flex flex-col items-center rounded-xl border border-dashed py-6" style={{ borderColor: V.border }}>
               <Eye className="h-5 w-5" style={{ color: V.mutedFg }} />
-              <p className="mt-2 text-xs" style={{ color: V.mutedFg, fontFamily: SANS }}>No exams in progress right now</p>
+              <p className="mt-2 text-xs" style={{ color: V.mutedFg, fontFamily: SANS }}>{t("adash.noLive")}</p>
             </div>
           )}
         </Card>
 
         <Card className="col-span-1 md:col-span-2 xl:col-span-2">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold" style={{ fontFamily: DISPLAY, color: V.fg }}>Exam Activity</h2>
-            <div className="flex gap-3"><LegendDot color={C.lime} label="Taken" /><LegendDot color={C.pink} label="Passed" /></div>
+            <h2 className="text-sm font-semibold" style={{ fontFamily: DISPLAY, color: V.fg }}>{t("adash.examActivityTitle")}</h2>
+            <div className="flex gap-3"><LegendDot color={C.lime} label={t("adash.taken")} /><LegendDot color={C.pink} label={t("adash.passed")} /></div>
           </div>
           <p className="mb-1 mt-0.5 text-xs" style={{ fontFamily: SANS, color: V.mutedFg }}>
-            Avg passing rate <span style={{ color: V.fg, fontFamily: DISPLAY }}>{d.insights.passRate}%</span>
+            {t("adash.avgPassingRate")} <span style={{ color: V.fg, fontFamily: DISPLAY }}>{d.insights.passRate}%</span>
           </p>
           <Trend data={d.examActivity} series={[
             { key: "taken",  color: C.lime, id: "gLime" },
@@ -319,9 +328,9 @@ export function AdminDashboard() {
         </Card>
 
         <Card className="col-span-1">
-          <h2 className="text-sm font-semibold" style={{ fontFamily: DISPLAY, color: V.fg }}>Performance</h2>
+          <h2 className="text-sm font-semibold" style={{ fontFamily: DISPLAY, color: V.fg }}>{t("adash.performanceTitle")}</h2>
           <p className="mt-0.5 text-xs" style={{ fontFamily: SANS, color: V.mutedFg }}>
-            Avg CGPA <span style={{ color: V.fg, fontFamily: DISPLAY }}>{d.resultOverview.avgCgpa}</span>{" "}
+            {t("adash.avgCgpa")} <span style={{ color: V.fg, fontFamily: DISPLAY }}>{d.resultOverview.avgCgpa}</span>{" "}
             <span style={{ color: d.resultOverview.cgpaTrend >= 0 ? C.lime : C.pink, fontFamily: DISPLAY }}>
               {d.resultOverview.cgpaTrend >= 0 ? "+" : ""}{d.resultOverview.cgpaTrend}%
             </span>
@@ -337,7 +346,7 @@ export function AdminDashboard() {
             </ResponsiveContainer>
             <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
               <span style={{ fontFamily: DISPLAY, fontSize: 18, fontWeight: 700, color: V.fg }}>{d.resultOverview.totalStudents}</span>
-              <span style={{ fontFamily: SANS, fontSize: 10, color: V.mutedFg }}>students</span>
+              <span style={{ fontFamily: SANS, fontSize: 10, color: V.mutedFg }}>{t("adash.studentsUnit")}</span>
             </div>
           </div>
           <div className="mt-3 space-y-2">
@@ -354,10 +363,10 @@ export function AdminDashboard() {
         {/* ── Row 4 — completion trends + question analytics + institution health ── */}
         <Card className="col-span-1 md:col-span-2 xl:col-span-2">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold" style={{ fontFamily: DISPLAY, color: V.fg }}>Exam Completion Trends</h2>
-            <div className="flex gap-3"><LegendDot color={C.lime} label="Taken" /><LegendDot color={C.white} label="Created" /></div>
+            <h2 className="text-sm font-semibold" style={{ fontFamily: DISPLAY, color: V.fg }}>{t("adash.completionTrends")}</h2>
+            <div className="flex gap-3"><LegendDot color={C.lime} label={t("adash.taken")} /><LegendDot color={C.white} label={t("adash.created")} /></div>
           </div>
-          <p className="mb-1 mt-0.5 text-xs" style={{ fontFamily: SANS, color: V.mutedFg }}>Exams taken vs created over time</p>
+          <p className="mb-1 mt-0.5 text-xs" style={{ fontFamily: SANS, color: V.mutedFg }}>{t("adash.takenVsCreated")}</p>
           <Trend data={d.examActivity} series={[
             { key: "taken",   color: C.lime,  id: "gCyanL" },
             { key: "created", color: C.white, id: "gWhite" },
@@ -365,27 +374,27 @@ export function AdminDashboard() {
         </Card>
 
         <Card className="col-span-1">
-          <h2 className="mb-5 text-sm font-semibold" style={{ fontFamily: DISPLAY, color: V.fg }}>Question Analytics</h2>
-          <p className="text-xs" style={{ color: V.mutedFg, fontFamily: SANS }}>Skip rate across recent attempts</p>
+          <h2 className="mb-5 text-sm font-semibold" style={{ fontFamily: DISPLAY, color: V.fg }}>{t("adash.questionAnalytics")}</h2>
+          <p className="text-xs" style={{ color: V.mutedFg, fontFamily: SANS }}>{t("adash.skipRateDesc")}</p>
           <div style={{ fontFamily: DISPLAY, fontSize: "3rem", lineHeight: 1, fontWeight: 700, color: d.questionsPerf.skipRate ? C.pink : V.mutedFg }}>
             {d.questionsPerf.skipRate}%
           </div>
           <div className="my-4 h-px" style={{ background: V.border }} />
           <div className="flex items-center justify-between py-1 text-xs">
-            <span style={{ color: V.mutedFg, fontFamily: SANS }}>Most-skipped subject</span>
+            <span style={{ color: V.mutedFg, fontFamily: SANS }}>{t("adash.mostSkipped")}</span>
             <span className="truncate pl-2" style={{ fontFamily: DISPLAY, color: V.fg }}>{d.questionsPerf.subject}</span>
           </div>
           <div className="flex items-center justify-between py-1 text-xs">
-            <span style={{ color: V.mutedFg, fontFamily: SANS }}>Question bank</span>
+            <span style={{ color: V.mutedFg, fontFamily: SANS }}>{t("adash.questionBank")}</span>
             <span style={{ fontFamily: DISPLAY, color: C.lime }}>{d.cards.questions}</span>
           </div>
         </Card>
 
         <Card className="col-span-1">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold" style={{ fontFamily: DISPLAY, color: V.fg }}>Institution Health</h2>
+            <h2 className="text-sm font-semibold" style={{ fontFamily: DISPLAY, color: V.fg }}>{t("adash.institutionHealth")}</h2>
             <span className="rounded-md px-2 py-0.5" style={{ background: `${C.pink}25`, color: C.pink, fontFamily: SANS, fontSize: 11 }}>
-              {d.health.band}
+              {HEALTH_BAND_KEY[d.health.band] ? t(HEALTH_BAND_KEY[d.health.band]) : d.health.band}
             </span>
           </div>
           <div className="mt-1 flex items-baseline gap-1">
@@ -396,7 +405,7 @@ export function AdminDashboard() {
             {d.health.breakdown.map((b, i) => (
               <div key={b.label}>
                 <div className="flex items-center justify-between text-xs">
-                  <span style={{ color: V.mutedFg, fontFamily: SANS }}>{b.label}</span>
+                  <span style={{ color: V.mutedFg, fontFamily: SANS }}>{HEALTH_BREAKDOWN_KEY[b.label] ? t(HEALTH_BREAKDOWN_KEY[b.label]) : b.label}</span>
                   <span style={{ fontFamily: DISPLAY, color: HEALTH_COLORS[i % HEALTH_COLORS.length] }}>{b.value}%</span>
                 </div>
                 <div className="mt-1 h-1 rounded-full" style={{ background: V.muted }}>
@@ -414,7 +423,7 @@ export function AdminDashboard() {
             <span className="flex h-7 w-7 items-center justify-center rounded-lg" style={{ background: `${C.lime}22` }}>
               <Brain className="h-4 w-4" style={{ color: C.lime }} />
             </span>
-            AI Proctoring
+            {t("adash.aiProctoringTitle")}
           </h2>
           <div className="grid grid-cols-3 gap-2">
             {proctorStats.map((s) => (
@@ -427,32 +436,32 @@ export function AdminDashboard() {
           <button onClick={() => navigate("/admin/violations")}
             className="mt-3 w-full rounded-xl py-2 text-xs transition hover:brightness-125"
             style={{ background: V.muted, color: V.mutedFg, fontFamily: SANS }}>
-            Review all flagged sessions →
+            {t("adash.reviewFlagged")} →
           </button>
         </Card>
 
         <Card className="col-span-1 md:col-span-2 xl:col-span-2">
-          <h2 className="mb-4 text-sm font-semibold" style={{ fontFamily: DISPLAY, color: V.fg }}>Academic Insights</h2>
+          <h2 className="mb-4 text-sm font-semibold" style={{ fontFamily: DISPLAY, color: V.fg }}>{t("adash.academicInsights")}</h2>
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-xl p-4" style={{ background: V.muted }}>
-              <p className="text-xs" style={{ color: V.mutedFg, fontFamily: SANS }}>Assessed students</p>
+              <p className="text-xs" style={{ color: V.mutedFg, fontFamily: SANS }}>{t("adash.assessedStudents")}</p>
               <p style={{ fontFamily: DISPLAY, fontSize: 28, fontWeight: 700, color: V.fg }}>
                 {d.predicted.assessedStudents}
                 <span style={{ fontSize: 16, color: V.mutedFg }}>/{d.cards.activeStudents}</span>
               </p>
             </div>
             <div className="rounded-xl p-4" style={{ background: V.muted }}>
-              <p className="text-xs" style={{ color: V.mutedFg, fontFamily: SANS }}>Cohort progress</p>
+              <p className="text-xs" style={{ color: V.mutedFg, fontFamily: SANS }}>{t("adash.cohortProgress")}</p>
               <div className="mt-2 h-1.5 rounded-full" style={{ background: V.bg }}>
                 <div className="h-1.5 rounded-full" style={{ width: `${d.cards.completionRate}%`, background: C.lime }} />
               </div>
-              <p className="mt-1.5 text-xs" style={{ fontFamily: DISPLAY, color: C.lime }}>{d.cards.completionRate}% complete</p>
+              <p className="mt-1.5 text-xs" style={{ fontFamily: DISPLAY, color: C.lime }}>{t("adash.pctComplete", { n: d.cards.completionRate })}</p>
             </div>
           </div>
-          <p className="mb-2 mt-4" style={eye}>Weakest subjects</p>
+          <p className="mb-2 mt-4" style={eye}>{t("adash.weakestSubjects")}</p>
           <div className="space-y-2">
             {d.academicInsights.weakest.length === 0 && (
-              <p className="text-xs" style={{ color: V.mutedFg, fontFamily: SANS }}>No graded subjects yet.</p>
+              <p className="text-xs" style={{ color: V.mutedFg, fontFamily: SANS }}>{t("adash.noGraded")}</p>
             )}
             {d.academicInsights.weakest.slice(0, 3).map((s) => (
               <div key={s.examId} className="flex items-center gap-3 rounded-xl p-3" style={{ background: V.muted }}>
@@ -469,7 +478,7 @@ export function AdminDashboard() {
 
         <Card className="col-span-1">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold" style={{ fontFamily: DISPLAY, color: V.fg }}>Needs Attention</h2>
+            <h2 className="text-sm font-semibold" style={{ fontFamily: DISPLAY, color: V.fg }}>{t("adash.needsAttentionTitle")}</h2>
             <span className="rounded-full px-2 py-0.5" style={{ background: `${C.pink}25`, color: C.pink, fontFamily: DISPLAY, fontSize: 11 }}>
               {d.insights.pendingReviews}
             </span>
@@ -481,14 +490,14 @@ export function AdminDashboard() {
               <span className="flex h-8 w-8 items-center justify-center rounded-xl" style={{ background: `${C.pink}25` }}>
                 <AlertTriangle className="h-4 w-4" style={{ color: C.pink }} />
               </span>
-              <span className="flex-1 text-sm" style={{ color: V.fg, fontFamily: SANS }}>{d.insights.pendingReviews} awaiting grading</span>
+              <span className="flex-1 text-sm" style={{ color: V.fg, fontFamily: SANS }}>{t("adash.notifGrading", { n: d.insights.pendingReviews })}</span>
               <ChevronRight className="h-4 w-4" style={{ color: C.pink }} />
             </button>
           )}
           <div className="mt-3 flex flex-col items-center rounded-xl border border-dashed py-8" style={{ borderColor: V.border }}>
             <Zap className="h-5 w-5" style={{ color: V.mutedFg }} />
             <p className="mt-2 text-xs" style={{ color: V.mutedFg, fontFamily: SANS }}>
-              {d.insights.pendingReviews > 0 ? "Other tasks clear" : "All tasks clear"}
+              {d.insights.pendingReviews > 0 ? t("adash.otherTasksClear") : t("adash.allTasksClear")}
             </p>
           </div>
         </Card>
@@ -496,12 +505,12 @@ export function AdminDashboard() {
         {/* ── Row 6 — recent activity ── */}
         <Card className="col-span-1 md:col-span-2 xl:col-span-4">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold" style={{ fontFamily: DISPLAY, color: V.fg }}>Recent Activity</h2>
+            <h2 className="text-sm font-semibold" style={{ fontFamily: DISPLAY, color: V.fg }}>{t("adash.recentActivity")}</h2>
             <button onClick={() => navigate("/admin/results")} className="text-xs transition hover:text-[var(--fg)]"
-              style={{ fontFamily: SANS, color: V.mutedFg }}>View all →</button>
+              style={{ fontFamily: SANS, color: V.mutedFg }}>{t("adash.viewAll")} →</button>
           </div>
           {d.recentResults.length === 0 ? (
-            <p className="py-6 text-center text-xs" style={{ color: V.mutedFg, fontFamily: SANS }}>No graded submissions yet.</p>
+            <p className="py-6 text-center text-xs" style={{ color: V.mutedFg, fontFamily: SANS }}>{t("adash.noRecent")}</p>
           ) : (
             <div className="mt-3 grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
               {d.recentResults.slice(0, 6).map((r, i) => (
@@ -515,7 +524,7 @@ export function AdminDashboard() {
                   <span className="min-w-0">
                     <span className="block truncate text-sm font-medium" style={{ color: V.fg, fontFamily: SANS }}>{r.name}</span>
                     <span className="block truncate text-[10px]" style={{ fontFamily: SANS, color: V.mutedFg }}>
-                      {r.status} · {ago(r.submittedAt)}
+                      {r.status} · {ago(r.submittedAt, t)}
                     </span>
                   </span>
                 </button>

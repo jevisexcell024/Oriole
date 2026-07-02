@@ -247,8 +247,8 @@ export function ExamBuilder() {
     if (!file) return;
     let rows: Record<string, string>[];
     try { rows = await parseTableFile(file); }
-    catch { alert("Could not read that file. Use a CSV, Excel (.xlsx) or Word (.docx) file with a header row."); return; }
-    if (!rows.length) { alert("No question rows found. Use columns: type, prompt (or question), options, correctAnswer (or correct answer), points (a header row is required; Word files should contain a table)."); return; }
+    catch { alert(t("eb.importReadError")); return; }
+    if (!rows.length) { alert(t("eb.importNoRows")); return; }
     const mapped = rows.map((r) => ({
       type: r.type,
       prompt: r.prompt ?? r.question ?? r.stem ?? r["question stem"] ?? "",
@@ -260,7 +260,7 @@ export function ExamBuilder() {
       const { created } = await api.post<{ created: number }>(`/admin/exams/${examId}/questions/import`, { questions: mapped });
       const d = await api.get<{ questions: Question[] }>(`/admin/exams/${examId}`);
       setQuestions(d.questions);
-      alert(`Imported ${created} question${created === 1 ? "" : "s"}.`);
+      alert(t("eb.importedCount", { n: created }));
     } catch (err) { alert((err as Error).message); }
   };
 
@@ -286,7 +286,7 @@ export function ExamBuilder() {
     ...sections.map((s) => ({ id: s.id, title: s.title, instructions: s.instructions, drawCount: s.drawCount, timeLimitMinutes: s.timeLimitMinutes, items: questions.filter((q) => q.sectionId === s.id) })),
   ];
   const orphans = questions.filter((q) => !q.sectionId || !sections.some((s) => s.id === q.sectionId));
-  if (orphans.length || sections.length === 0) groups.push({ id: null, title: sections.length ? "General" : "Questions", items: orphans });
+  if (orphans.length || sections.length === 0) groups.push({ id: null, title: sections.length ? t("eb.generalGroup") : t("eb.questionsGroup"), items: orphans });
 
   const active = questions.find((q) => q.id === activeId) ?? null;
   const activeGroup = groups.find((g) => g.items.some((q) => q.id === activeId));
@@ -373,7 +373,7 @@ export function ExamBuilder() {
                 <span className="h-3 w-px bg-[var(--border)]" />
                 <button className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--muted)] hover:text-[var(--fg)] disabled:opacity-40" onClick={exportCsv} disabled={questions.length === 0}><FileText className="h-3.5 w-3.5" /> {t("eb.exportCsv")}</button>
                 <span className="h-3 w-px bg-[var(--border)]" />
-                <a href="/templates/MCQ-Import-Template.docx" download className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--muted)] hover:text-[var(--fg)]" title="Download the MCQ import template (.docx)"><FileText className="h-3.5 w-3.5" /> Template</a>
+                <a href="/templates/MCQ-Import-Template.docx" download className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--muted)] hover:text-[var(--fg)]" title={t("eb.downloadTemplateTooltip")}><FileText className="h-3.5 w-3.5" /> {t("eb.templateLink")}</a>
                 <input ref={csvRef} type="file" accept={IMPORT_ACCEPT} className="hidden" onChange={importCsv} />
               </div>
             </div>
@@ -403,7 +403,7 @@ export function ExamBuilder() {
                   key={active.id}
                   q={active}
                   exam={exam}
-                  sectionTitle={activeGroup?.title ?? "General"}
+                  sectionTitle={activeGroup?.title ?? t("eb.generalGroup")}
                   numberInGroup={activeIndexInGroup + 1}
                   patch={(p) => patchQuestion(active.id, p)}
                   patchExam={patchExam}
@@ -464,6 +464,7 @@ function StructureTree({
   onMove: (groupItems: Question[], id: string, dir: -1 | 1) => void;
   onDelete: (id: string) => void;
 }) {
+  const t = useT();
   return (
     <div className="space-y-3">
       {groups.map((g) => {
@@ -477,33 +478,33 @@ function StructureTree({
                   className="min-w-0 flex-1 border-0 bg-transparent text-[13px] font-bold outline-none focus:ring-0"
                   value={g.title}
                   onChange={(e) => onRenameSection(g.id!, e.target.value)}
-                  placeholder="Section title"
+                  placeholder={t("eb.sectionTitlePlaceholder")}
                 />
               ) : (
                 <span className="flex-1 text-[13px] font-bold">{g.title}</span>
               )}
               {g.id && (
-                <button onClick={() => onDeleteSection(g.id!)} title="Delete section" className="rounded p-1 text-[var(--muted)] hover:text-rose-500"><X className="h-3.5 w-3.5" /></button>
+                <button onClick={() => onDeleteSection(g.id!)} title={t("eb.deleteSectionTooltip")} className="rounded p-1 text-[var(--muted)] hover:text-rose-500"><X className="h-3.5 w-3.5" /></button>
               )}
             </div>
-            <p className="px-2.5 pb-1.5 pl-7 text-[11px] text-[var(--muted)]">{g.items.length} question{g.items.length === 1 ? "" : "s"} · {pts} marks</p>
+            <p className="px-2.5 pb-1.5 pl-7 text-[11px] text-[var(--muted)]">{t("eb.questionsMarks", { n: g.items.length, pts })}</p>
             {g.id && g.items.length > 0 && (
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-2.5 pb-2 pl-7 text-[11px] text-[var(--muted)]">
-                <label className="flex items-center gap-1.5" title="Pool: serve a random subset from this section each attempt">
-                  <Shuffle className="h-3 w-3" /> Draw
-                  <input type="number" min={0} max={g.items.length} value={g.drawCount ?? ""} placeholder="all"
+                <label className="flex items-center gap-1.5" title={t("eb.drawPoolTooltip")}>
+                  <Shuffle className="h-3 w-3" /> {t("eb.draw")}
+                  <input type="number" min={0} max={g.items.length} value={g.drawCount ?? ""} placeholder={t("eb.allPlaceholder")}
                     onClick={(e) => e.stopPropagation()}
                     onChange={(e) => onSectionDraw(g.id!, e.target.value === "" ? undefined : Math.max(0, Math.min(g.items.length, Number(e.target.value))))}
                     className="h-6 w-12 rounded border border-[var(--border)] bg-[var(--card-2)] px-1 text-center text-[11px] outline-none" />
-                  of {g.items.length}
+                  {t("eb.ofCount", { n: g.items.length })}
                 </label>
-                <label className="flex items-center gap-1.5" title="Suggested time for this section (advisory; shown to candidates)">
-                  <Clock className="h-3 w-3" /> Time
+                <label className="flex items-center gap-1.5" title={t("eb.sectionTimeTooltip")}>
+                  <Clock className="h-3 w-3" /> {t("eb.time")}
                   <input type="number" min={0} value={g.timeLimitMinutes ?? ""} placeholder="—"
                     onClick={(e) => e.stopPropagation()}
                     onChange={(e) => onSectionTime(g.id!, e.target.value === "" ? undefined : Math.max(0, Number(e.target.value)))}
                     className="h-6 w-12 rounded border border-[var(--border)] bg-[var(--card-2)] px-1 text-center text-[11px] outline-none" />
-                  min
+                  {t("eb.minUnit")}
                 </label>
               </div>
             )}
@@ -519,7 +520,7 @@ function StructureTree({
                       isActive ? "bg-[var(--card)] shadow-sm ring-1 ring-[#c6ff34]/40" : "hover:bg-[var(--card)]")}>
                     <span className="hidden text-[var(--muted)] group-hover/q:block"><GripVertical className="h-3.5 w-3.5" /></span>
                     <span className={clsx("flex h-5 w-5 shrink-0 items-center justify-center rounded text-[11px] font-bold", isActive ? "bg-[#c6ff34] text-[#111110]" : "bg-[var(--card-2)] text-[var(--muted)] group-hover/q:hidden")}>{i + 1}</span>
-                    <span className="min-w-0 flex-1 truncate">{q.prompt || <span className="text-[var(--muted)]">Untitled question</span>}</span>
+                    <span className="min-w-0 flex-1 truncate">{q.prompt || <span className="text-[var(--muted)]">{t("eb.untitledQuestion")}</span>}</span>
                     <span className="hidden shrink-0 items-center gap-0.5 group-hover/q:flex">
                       <button onClick={(e) => { e.stopPropagation(); onMove(g.items, q.id, -1); }} disabled={i === 0} className="rounded p-0.5 text-[var(--muted)] hover:text-[var(--fg)] disabled:opacity-30"><ChevronUp className="h-3.5 w-3.5" /></button>
                       <button onClick={(e) => { e.stopPropagation(); onMove(g.items, q.id, 1); }} disabled={i === g.items.length - 1} className="rounded p-0.5 text-[var(--muted)] hover:text-[var(--fg)] disabled:opacity-30"><ChevronDown className="h-3.5 w-3.5" /></button>
@@ -530,7 +531,7 @@ function StructureTree({
                 );
               })}
               <button onClick={() => onAddQuestion(g.id)} className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] py-1.5 text-xs font-semibold text-[#c6ff34] hover:bg-[var(--card)]">
-                <Plus className="h-3.5 w-3.5" /> Add Question
+                <Plus className="h-3.5 w-3.5" /> {t("eb.addQuestion")}
               </button>
             </div>
           </div>
@@ -538,7 +539,7 @@ function StructureTree({
       })}
 
       <button onClick={onAddSection} className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-[var(--border)] py-2.5 text-sm font-semibold text-[var(--muted)] hover:text-[var(--fg)]">
-        <Layers className="h-4 w-4" /> Add New Section
+        <Layers className="h-4 w-4" /> {t("eb.addNewSection")}
       </button>
     </div>
   );
@@ -623,7 +624,7 @@ function QuestionEditor({
   };
   const saveRubricTemplate = async () => {
     if (!rubric.length) return;
-    const name = window.prompt("Name this rubric template:");
+    const name = window.prompt(t("eb.nameRubricTemplate"));
     if (!name?.trim()) return;
     try {
       const { rubric: saved } = await api.post<{ rubric: { id: string; name: string; criteria: RubricCriterion[] } }>("/admin/rubric-library", { name: name.trim(), criteria: rubric });
@@ -632,17 +633,18 @@ function QuestionEditor({
   };
 
   const isChoice = q.type === "mcq" || q.type === "multi_select" || q.type === "true_false";
+  const t = useT();
 
   return (
     <div className="space-y-4">
       {/* Breadcrumb + actions */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1.5 text-xs text-[var(--muted)]">
-          <span>{sectionTitle}</span> <ChevronRight className="h-3.5 w-3.5" /> <span className="font-semibold text-[var(--fg)]">Question {numberInGroup}</span>
+          <span>{sectionTitle}</span> <ChevronRight className="h-3.5 w-3.5" /> <span className="font-semibold text-[var(--fg)]">{t("eb.questionNumber", { n: numberInGroup })}</span>
         </div>
         <div className="flex items-center gap-1">
-          <button onClick={onDuplicate} title="Duplicate question" className="rounded-lg p-2 text-[var(--muted)] hover:bg-[var(--card-2)] hover:text-[var(--fg)]"><Copy className="h-4 w-4" /></button>
-          <button onClick={onDelete} title="Delete question" className="rounded-lg p-2 text-[var(--muted)] hover:bg-rose-500/15 hover:text-rose-500"><Trash2 className="h-4 w-4" /></button>
+          <button onClick={onDuplicate} title={t("eb.duplicateQuestion")} className="rounded-lg p-2 text-[var(--muted)] hover:bg-[var(--card-2)] hover:text-[var(--fg)]"><Copy className="h-4 w-4" /></button>
+          <button onClick={onDelete} title={t("eb.deleteQuestion")} className="rounded-lg p-2 text-[var(--muted)] hover:bg-rose-500/15 hover:text-rose-500"><Trash2 className="h-4 w-4" /></button>
         </div>
       </div>
 
@@ -650,17 +652,17 @@ function QuestionEditor({
       <div className="card rounded-2xl p-6">
         {/* Type / difficulty / points */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <Field label="Question type">
+          <Field label={t("eb.questionType")}>
             <select className="input h-10" value={q.type} onChange={(e) => onChangeType(e.target.value as QuestionType)}>
-              {(Object.keys(TYPE_META) as QuestionType[]).map((t) => <option key={t} value={t}>{TYPE_META[t].label}</option>)}
+              {(Object.keys(TYPE_META) as QuestionType[]).map((qt) => <option key={qt} value={qt}>{TYPE_META[qt].label}</option>)}
             </select>
           </Field>
-          <Field label="Difficulty">
+          <Field label={t("eb.difficulty")}>
             <select className="input h-10" value={q.difficulty ?? "medium"} onChange={(e) => patch({ difficulty: e.target.value as Question["difficulty"] })}>
               {DIFFICULTIES.map((d) => <option key={d.id} value={d.id}>{d.label}</option>)}
             </select>
           </Field>
-          <Field label="Points">
+          <Field label={t("eb.points")}>
             <input className="input h-10" type="number" min={0} step={0.5} value={q.points} disabled={rubric.length > 0}
               onChange={(e) => patch({ points: Number(e.target.value) })} />
           </Field>
@@ -670,18 +672,18 @@ function QuestionEditor({
         {aiEnabled && (
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <button type="button" onClick={suggestDifficulty} disabled={aiBusy || !q.prompt.trim()}
-              title={!q.prompt.trim() ? "Add a question prompt first" : "Estimate this question's difficulty with AI"}
+              title={!q.prompt.trim() ? t("eb.addPromptFirst") : t("eb.estimateDifficultyAI")}
               className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs font-semibold text-[var(--muted)] transition hover:border-[#c6ff34]/40 hover:text-[#c6ff34] disabled:opacity-50">
-              {aiBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} Suggest difficulty (AI)
+              {aiBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} {t("eb.suggestDifficultyAI")}
             </button>
             {aiResult && (
               <span className="inline-flex items-center gap-2 rounded-lg bg-[var(--card-2)] px-2.5 py-1.5 text-xs">
                 <span className={clsx("rounded-full px-2 py-0.5 font-bold capitalize",
                   aiResult.difficulty === "easy" ? "bg-emerald-500/15 text-emerald-500" : aiResult.difficulty === "medium" ? "bg-amber-500/15 text-amber-500" : "bg-rose-500/15 text-rose-500")}>{aiResult.difficulty}</span>
-                <span className="text-[var(--muted)]">{Math.round(aiResult.confidence * 100)}% confident</span>
+                <span className="text-[var(--muted)]">{t("eb.confidentPct", { n: Math.round(aiResult.confidence * 100) })}</span>
                 {aiResult.difficulty !== (q.difficulty ?? "medium")
-                  ? <button type="button" onClick={() => patch({ difficulty: aiResult.difficulty })} className="font-semibold text-[#c6ff34] hover:underline">Apply</button>
-                  : <span className="inline-flex items-center gap-0.5 text-emerald-500"><Check className="h-3 w-3" /> matches</span>}
+                  ? <button type="button" onClick={() => patch({ difficulty: aiResult.difficulty })} className="font-semibold text-[#c6ff34] hover:underline">{t("eb.apply")}</button>
+                  : <span className="inline-flex items-center gap-0.5 text-emerald-500"><Check className="h-3 w-3" /> {t("eb.matches")}</span>}
               </span>
             )}
             {aiResult?.rationale && <span className="w-full text-[11px] italic text-[var(--muted)]">“{aiResult.rationale}”</span>}
@@ -691,22 +693,22 @@ function QuestionEditor({
 
         {/* Question text */}
         <div className="mt-5">
-          <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">Question text</span>
+          <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t("eb.questionText")}</span>
           <div className="overflow-hidden rounded-lg border border-[var(--border)]">
             <div className="flex items-center gap-0.5 border-b border-[var(--border)] bg-[var(--card-2)] px-2 py-1.5">
-              <TbBtn title="Bold" onClick={() => wrap("**")}><Bold className="h-4 w-4" /></TbBtn>
-              <TbBtn title="Italic" onClick={() => wrap("*")}><Italic className="h-4 w-4" /></TbBtn>
-              <TbBtn title="Underline" onClick={() => wrap("<u>", "</u>")}><Underline className="h-4 w-4" /></TbBtn>
+              <TbBtn title={t("eb.tbBold")} onClick={() => wrap("**")}><Bold className="h-4 w-4" /></TbBtn>
+              <TbBtn title={t("eb.tbItalic")} onClick={() => wrap("*")}><Italic className="h-4 w-4" /></TbBtn>
+              <TbBtn title={t("eb.tbUnderline")} onClick={() => wrap("<u>", "</u>")}><Underline className="h-4 w-4" /></TbBtn>
               <span className="mx-1 h-4 w-px bg-[var(--border)]" />
-              <TbBtn title="Bullet list" onClick={() => prefixLine("- ")}><List className="h-4 w-4" /></TbBtn>
-              <TbBtn title="Code" onClick={() => wrap("`")}><CodeIcon className="h-4 w-4" /></TbBtn>
-              <TbBtn title="Image" onClick={() => { const url = prompt("Image URL"); if (url) wrap(`![](${url})`, ""); }}><ImageIcon className="h-4 w-4" /></TbBtn>
+              <TbBtn title={t("eb.tbBulletList")} onClick={() => prefixLine("- ")}><List className="h-4 w-4" /></TbBtn>
+              <TbBtn title={t("eb.tbCode")} onClick={() => wrap("`")}><CodeIcon className="h-4 w-4" /></TbBtn>
+              <TbBtn title={t("eb.tbImage")} onClick={() => { const url = prompt(t("eb.imageUrlPrompt")); if (url) wrap(`![](${url})`, ""); }}><ImageIcon className="h-4 w-4" /></TbBtn>
             </div>
             <textarea
               ref={promptRef}
               className="min-h-[110px] w-full resize-y bg-transparent px-3 py-2.5 text-sm outline-none placeholder:text-[var(--muted)]"
               value={q.prompt}
-              placeholder="Type your question here…"
+              placeholder={t("eb.typeQuestionHere")}
               onChange={(e) => patch({ prompt: e.target.value })}
             />
           </div>
@@ -716,10 +718,10 @@ function QuestionEditor({
         {isChoice ? (
           <div className="mt-5">
             <div className="flex items-center justify-between">
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">Answer options</span>
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t("eb.answerOptions")}</span>
               <label className="flex items-center gap-2 text-xs text-[var(--muted)]">
                 <input type="checkbox" className="h-3.5 w-3.5 accent-[#c6ff34]" checked={exam.shuffleOptions !== false} onChange={(e) => patchExam({ shuffleOptions: e.target.checked })} />
-                Shuffle Options
+                {t("eb.shuffleOptionsLabel")}
               </label>
             </div>
             <div className="mt-2 space-y-2">
@@ -731,15 +733,15 @@ function QuestionEditor({
                   <div key={i} className={clsx("flex items-center gap-2 rounded-lg border px-2.5 py-2 transition",
                     correct ? "border-emerald-500/50 bg-emerald-500/[0.07]" : "border-[var(--border)]")}>
                     <GripVertical className="h-4 w-4 shrink-0 text-[var(--border)]" />
-                    <button type="button" title={correct ? "Correct answer" : "Mark as correct"} onClick={() => (isMulti ? toggleMultiCorrect(opt) : markCorrect(opt))} className="shrink-0">
+                    <button type="button" title={correct ? t("eb.correctAnswerTag") : t("eb.markAsCorrect")} onClick={() => (isMulti ? toggleMultiCorrect(opt) : markCorrect(opt))} className="shrink-0">
                       {isMulti
                         ? (correct ? <span className="flex h-5 w-5 items-center justify-center rounded bg-emerald-500 text-white"><Check className="h-3.5 w-3.5" /></span> : <Square className="h-5 w-5 text-[var(--muted)] hover:text-[#c6ff34]" />)
                         : (correct ? <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500 text-white"><Check className="h-3.5 w-3.5" /></span> : <CircleDot className="h-5 w-5 text-[var(--muted)] hover:text-[#c6ff34]" />)}
                     </button>
                     {isTF
                       ? <span className="flex-1 text-sm capitalize">{opt}</span>
-                      : <input className="flex-1 bg-transparent text-sm outline-none" value={opt} onChange={(e) => editOption(i, e.target.value)} placeholder={`Option ${i + 1}`} />}
-                    {correct && <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold text-emerald-500">CORRECT</span>}
+                      : <input className="flex-1 bg-transparent text-sm outline-none" value={opt} onChange={(e) => editOption(i, e.target.value)} placeholder={t("eb.optionPlaceholder", { n: i + 1 })} />}
+                    {correct && <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold text-emerald-500">{t("eb.correctBadge")}</span>}
                     {!isTF && options.length > 2 && (
                       <button type="button" onClick={() => removeOption(i)} className="shrink-0 text-[var(--muted)] hover:text-rose-500"><X className="h-4 w-4" /></button>
                     )}
@@ -748,26 +750,26 @@ function QuestionEditor({
               })}
             </div>
             {(q.type === "mcq" || q.type === "multi_select") && (
-              <button type="button" onClick={addOption} className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-[#c6ff34] hover:underline"><Plus className="h-4 w-4" /> Add Option</button>
+              <button type="button" onClick={addOption} className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-[#c6ff34] hover:underline"><Plus className="h-4 w-4" /> {t("eb.addOption")}</button>
             )}
-            {q.type === "multi_select" && <p className="mt-1.5 text-[11px] text-[var(--muted)]">Tick every correct option — candidates must select all of them, and no extras, to score.</p>}
+            {q.type === "multi_select" && <p className="mt-1.5 text-[11px] text-[var(--muted)]">{t("eb.multiSelectHint")}</p>}
           </div>
         ) : q.type === "short" ? (
           <div className="mt-5 space-y-3">
-            <Field label="Primary accepted answer (auto-graded)">
-              <input className="input h-10" value={q.correctAnswer} placeholder="e.g. plagiarism" onChange={(e) => patch({ correctAnswer: e.target.value })} />
+            <Field label={t("eb.primaryAcceptedAnswer")}>
+              <input className="input h-10" value={q.correctAnswer} placeholder={t("eb.egPlagiarism")} onChange={(e) => patch({ correctAnswer: e.target.value })} />
             </Field>
-            <Field label="Also accept (comma-separated)">
-              <input className="input h-10" value={acceptedRaw} placeholder="e.g. plagiarising, plagiarizing"
+            <Field label={t("eb.alsoAccept")}>
+              <input className="input h-10" value={acceptedRaw} placeholder={t("eb.egPlagiarizing")}
                 onChange={(e) => { setAcceptedRaw(e.target.value); patch({ acceptedAnswers: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) }); }} />
             </Field>
-            <p className="text-[11px] text-[var(--muted)]">Any of these (case-insensitive) auto-grades as correct. Other answers go to manual review.</p>
+            <p className="text-[11px] text-[var(--muted)]">{t("eb.shortAnswerHint")}</p>
           </div>
         ) : q.type === "numeric" ? (
           <div className="mt-5 flex flex-wrap items-end gap-3">
-            <Field label="Correct value (auto-graded)"><input className="input h-10 w-40" type="number" step="any" value={q.correctAnswer} placeholder="e.g. 42" onChange={(e) => patch({ correctAnswer: e.target.value })} /></Field>
-            <Field label="± Tolerance"><input className="input h-10 w-32" type="number" min={0} step="any" value={q.tolerance ?? 0} onChange={(e) => patch({ tolerance: Math.max(0, Number(e.target.value) || 0) })} /></Field>
-            <span className="pb-2.5 text-[11px] text-[var(--muted)]">Accepts answers within ± tolerance.</span>
+            <Field label={t("eb.correctValueAutoGraded")}><input className="input h-10 w-40" type="number" step="any" value={q.correctAnswer} placeholder={t("eb.egNumeric")} onChange={(e) => patch({ correctAnswer: e.target.value })} /></Field>
+            <Field label={t("eb.tolerance")}><input className="input h-10 w-32" type="number" min={0} step="any" value={q.tolerance ?? 0} onChange={(e) => patch({ tolerance: Math.max(0, Number(e.target.value) || 0) })} /></Field>
+            <span className="pb-2.5 text-[11px] text-[var(--muted)]">{t("eb.toleranceHint")}</span>
           </div>
         ) : q.type === "matching" ? (
           <MatchingEditor q={q} patch={patch} />
@@ -781,31 +783,31 @@ function QuestionEditor({
           <ParameterizedEditor q={q} patch={patch} />
         ) : (
           <div className="mt-5 rounded-lg border border-dashed border-[var(--border)] px-3 py-3 text-sm text-[var(--muted)]">
-            {q.type === "code" ? "Code answer — candidates get a VS Code-style editor and can run their code."
-              : q.type === "file_upload" ? "File-upload answer — candidates attach a file (≤ 5 MB)."
-              : "Descriptive / long-form written answer."} Graded manually after submission. Configure the rubric{q.type === "code" ? " and runner" : ""} under Advanced Logic &amp; Settings.
+            {q.type === "code" ? t("eb.codeAnswerDesc")
+              : q.type === "file_upload" ? t("eb.fileUploadDesc")
+              : t("eb.essayDesc")} {q.type === "code" ? t("eb.gradedManuallyRunner") : t("eb.gradedManually")}
           </div>
         )}
 
         {/* Advanced */}
         <div className="mt-5 rounded-lg border border-[var(--border)]">
           <button onClick={() => setAdvanced((a) => !a)} className="flex w-full items-center justify-between px-3 py-2.5 text-sm font-semibold">
-            <span className="inline-flex items-center gap-2"><SettingsIcon className="h-4 w-4 text-[#c6ff34]" /> Advanced Logic &amp; Settings</span>
+            <span className="inline-flex items-center gap-2"><SettingsIcon className="h-4 w-4 text-[#c6ff34]" /> {t("eb.advancedLogicSettings")}</span>
             <ChevronDown className={clsx("h-4 w-4 text-[var(--muted)] transition", advanced && "rotate-180")} />
           </button>
           {advanced && (
             <div className="space-y-4 border-t border-[var(--border)] p-3">
-              <Field label="Section">
+              <Field label={t("eb.section")}>
                 <select className="input h-10" value={q.sectionId ?? ""} onChange={(e) => patch({ sectionId: e.target.value || null })}>
-                  <option value="">No section (General)</option>
+                  <option value="">{t("eb.noSectionGeneral")}</option>
                   {sections.map((s) => <option key={s.id} value={s.id}>{s.title}</option>)}
                 </select>
               </Field>
 
               <TagsField q={q} patch={patch} />
 
-              <Field label="Explanation (shown to candidates after results)">
-                <textarea className="input min-h-[60px] w-full resize-y" value={q.explanation ?? ""} placeholder="Explain why the correct answer is correct — appears on the candidate's result once released." onChange={(e) => patch({ explanation: e.target.value })} />
+              <Field label={t("eb.explanationLabel")}>
+                <textarea className="input min-h-[60px] w-full resize-y" value={q.explanation ?? ""} placeholder={t("eb.explanationPlaceholder")} onChange={(e) => patch({ explanation: e.target.value })} />
               </Field>
 
               {q.type === "code" && <CodeQuestionFields q={q} patch={patch} />}
@@ -813,29 +815,29 @@ function QuestionEditor({
               {(q.type === "essay" || q.type === "code" || q.type === "file_upload") && (
                 <div className="rounded-lg border border-[var(--border)] p-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">Grading rubric{rubric.length > 0 ? ` · ${rubricSum} pts total` : ""}</span>
+                    <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t("eb.gradingRubric")}{rubric.length > 0 ? t("eb.ptsTotal", { n: rubricSum }) : ""}</span>
                     <div className="flex items-center gap-2">
                       {rubricLib.length > 0 && (
                         <select className="input h-7 w-auto text-xs" value="" onChange={(e) => { if (e.target.value) applyRubricTemplate(e.target.value); }}>
-                          <option value="">Load template…</option>
+                          <option value="">{t("eb.loadTemplate")}</option>
                           {rubricLib.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
                         </select>
                       )}
                       {rubric.length > 0 && (
-                        <button type="button" onClick={saveRubricTemplate} title="Save this rubric to your reusable library" className="inline-flex items-center gap-1 text-xs text-[var(--muted)] hover:text-[#c6ff34]"><BookmarkPlus className="h-3.5 w-3.5" /> Save</button>
+                        <button type="button" onClick={saveRubricTemplate} title={t("eb.saveRubricTooltip")} className="inline-flex items-center gap-1 text-xs text-[var(--muted)] hover:text-[#c6ff34]"><BookmarkPlus className="h-3.5 w-3.5" /> {t("eb.save")}</button>
                       )}
-                      <button type="button" onClick={addCriterion} className="inline-flex items-center gap-1 text-xs text-[#c6ff34] hover:underline"><Plus className="h-3.5 w-3.5" /> Criterion</button>
+                      <button type="button" onClick={addCriterion} className="inline-flex items-center gap-1 text-xs text-[#c6ff34] hover:underline"><Plus className="h-3.5 w-3.5" /> {t("eb.criterion")}</button>
                     </div>
                   </div>
                   {rubric.length === 0 ? (
-                    <p className="mt-2 text-[11px] text-[var(--muted)]">No rubric — the grader awards a single mark out of {q.points}. Add criteria to grade against a structured rubric (points become the sum).</p>
+                    <p className="mt-2 text-[11px] text-[var(--muted)]">{t("eb.noRubricHint", { n: q.points })}</p>
                   ) : (
                     <div className="mt-2 space-y-1.5">
                       {rubric.map((c) => (
                         <div key={c.id} className="flex items-center gap-2">
-                          <input value={c.label} onChange={(e) => editCriterion(c.id, { label: e.target.value })} className="input h-8 flex-1 text-sm" placeholder="Criterion" />
+                          <input value={c.label} onChange={(e) => editCriterion(c.id, { label: e.target.value })} className="input h-8 flex-1 text-sm" placeholder={t("eb.criterion")} />
                           <input type="number" min={0} value={c.maxPoints} onChange={(e) => editCriterion(c.id, { maxPoints: Math.max(0, Number(e.target.value) || 0) })} className="input h-8 w-20 text-sm" />
-                          <span className="text-xs text-[var(--muted)]">pts</span>
+                          <span className="text-xs text-[var(--muted)]">{t("eb.ptsUnit")}</span>
                           <button type="button" onClick={() => removeCriterion(c.id)} className="text-[var(--muted)] hover:text-rose-500"><X className="h-4 w-4" /></button>
                         </div>
                       ))}
@@ -867,24 +869,25 @@ function SettingsPanel({
   assignClass: () => void; audienceMsg: string | null;
 }) {
   const open = exam.enrollment === "open";
+  const t = useT();
   return (
     <div className="space-y-4">
       {/* Details */}
       <div className="card rounded-2xl p-6">
-        <h2 className="text-sm font-bold">Examination details</h2>
+        <h2 className="text-sm font-bold">{t("eb.examDetails")}</h2>
         <input className="mt-3 w-full border-0 border-b border-[var(--border)] bg-transparent pb-1.5 text-2xl font-bold outline-none focus:border-[#c6ff34]"
-          value={exam.title} placeholder="Untitled examination" onChange={(e) => patchExam({ title: e.target.value })} />
+          value={exam.title} placeholder={t("eb.untitledExam")} onChange={(e) => patchExam({ title: e.target.value })} />
         <textarea className="mt-3 w-full resize-y rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 text-sm outline-none focus:border-[#c6ff34]"
-          rows={2} value={exam.description} placeholder="Add a description (instructions for candidates)…" onChange={(e) => patchExam({ description: e.target.value })} />
+          rows={2} value={exam.description} placeholder={t("eb.descriptionPlaceholder")} onChange={(e) => patchExam({ description: e.target.value })} />
         <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-          <Field label="Exam code"><input className="input h-9" value={exam.code} placeholder="CS101-F2026" onChange={(e) => patchExam({ code: e.target.value })} /></Field>
-          <Field label="Subject"><input className="input h-9" value={exam.subject ?? ""} placeholder="e.g. Physics" onChange={(e) => patchExam({ subject: e.target.value })} /></Field>
-          <Field label="Duration (min)"><input className="input h-9" type="number" min={1} value={exam.durationMinutes} onChange={(e) => patchExam({ durationMinutes: Number(e.target.value) })} /></Field>
-          <Field label="Pass mark (%)"><input className="input h-9" type="number" min={0} max={100} value={exam.passingScore} onChange={(e) => patchExam({ passingScore: Number(e.target.value) })} /></Field>
-          <Field label="Proctoring">
+          <Field label={t("eb.examCode")}><input className="input h-9" value={exam.code} placeholder="CS101-F2026" onChange={(e) => patchExam({ code: e.target.value })} /></Field>
+          <Field label={t("eb.subject")}><input className="input h-9" value={exam.subject ?? ""} placeholder={t("eb.egSubject")} onChange={(e) => patchExam({ subject: e.target.value })} /></Field>
+          <Field label={t("eb.durationMin")}><input className="input h-9" type="number" min={1} value={exam.durationMinutes} onChange={(e) => patchExam({ durationMinutes: Number(e.target.value) })} /></Field>
+          <Field label={t("eb.passMarkPct")}><input className="input h-9" type="number" min={0} max={100} value={exam.passingScore} onChange={(e) => patchExam({ passingScore: Number(e.target.value) })} /></Field>
+          <Field label={t("eb.proctoring")}>
             <button onClick={() => { const on = !exam.proctored; patchExam(on ? { proctored: true } : { proctored: false, lockdown: { ...exam.lockdown, violationLimit: 0 } }); }}
               className={clsx("flex h-9 items-center justify-between rounded-lg border px-3 text-sm font-medium", exam.proctored ? "border-[#c6ff34]/40 bg-[rgba(198,255,52,0.1)] text-[#c6ff34]" : "border-[var(--border)] text-[var(--muted)]")}>
-              {exam.proctored ? "On" : "Off"}
+              {exam.proctored ? t("eb.on") : t("eb.off")}
               <span className={clsx("ml-2 inline-flex h-4 w-7 items-center rounded-full p-0.5 transition", exam.proctored ? "bg-[#c6ff34]" : "bg-[var(--border)]")}>
                 <span className={clsx("h-3 w-3 rounded-full bg-white transition", exam.proctored && "translate-x-3")} />
               </span>
@@ -896,14 +899,14 @@ function SettingsPanel({
 
       {/* Audience */}
       <div className="card rounded-2xl p-6">
-        <div className="flex items-center gap-2 text-sm font-bold"><Users className="h-4 w-4 text-[#c6ff34]" /> Audience</div>
-        <p className="mt-0.5 text-xs text-[var(--muted)]">Choose who can see and take this exam.</p>
+        <div className="flex items-center gap-2 text-sm font-bold"><Users className="h-4 w-4 text-[#c6ff34]" /> {t("eb.audience")}</div>
+        <p className="mt-0.5 text-xs text-[var(--muted)]">{t("eb.audienceHint")}</p>
         <button onClick={() => patchExam({ enrollment: open ? "assigned" : "open" })} className="mt-3 flex w-full items-center justify-between gap-4 rounded-xl border border-[var(--border)] p-4 text-left transition hover:bg-[var(--card-2)]">
           <div className="flex items-start gap-3">
             {open ? <Globe className="mt-0.5 h-4 w-4 text-[#c6ff34]" /> : <Lock className="mt-0.5 h-4 w-4 text-amber-500" />}
             <div>
-              <p className="text-sm font-medium">Open to all candidates</p>
-              <p className="text-xs text-[var(--muted)]">{open ? "Every candidate sees this exam once published." : "Restricted — only the students and classes you assign below can take it."}</p>
+              <p className="text-sm font-medium">{t("eb.openToAll")}</p>
+              <p className="text-xs text-[var(--muted)]">{open ? t("eb.openHintOn") : t("eb.openHintOff")}</p>
             </div>
           </div>
           <span className={clsx("inline-flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition", open ? "bg-[#c6ff34]" : "bg-[var(--border)]")}>
@@ -912,7 +915,7 @@ function SettingsPanel({
         </button>
         {exam.enrollment === "assigned" && (
           <div className="mt-4 border-t border-[var(--border)] pt-4">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">Assign to a class</p>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t("eb.assignToClass")}</p>
             {audienceMsg && <p className="mt-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-400">{audienceMsg}</p>}
             {assignedClasses.length > 0 && (
               <div className="mt-2 space-y-1.5">
@@ -920,29 +923,29 @@ function SettingsPanel({
                   <div key={c.id} className="flex items-center justify-between rounded-lg border border-[var(--border)] px-3 py-2.5 text-sm">
                     <div>
                       <span className="font-medium">{c.name}</span>
-                      <span className="ml-1.5 text-xs text-[var(--muted)]">· {c.members} student{c.members === 1 ? "" : "s"}</span>
+                      <span className="ml-1.5 text-xs text-[var(--muted)]">{t("eb.studentsCount", { n: c.members })}</span>
                       {c.scheduledStart && (
                         <p className="mt-0.5 text-[11px] text-[var(--muted)]">
                           {new Date(c.scheduledStart).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
                         </p>
                       )}
                     </div>
-                    <span className="inline-flex items-center gap-1 text-xs text-emerald-500"><UserCheck className="h-3.5 w-3.5" /> Assigned</span>
+                    <span className="inline-flex items-center gap-1 text-xs text-emerald-500"><UserCheck className="h-3.5 w-3.5" /> {t("eb.assigned")}</span>
                   </div>
                 ))}
               </div>
             )}
             {classesAll.length === 0 ? (
-              <p className="mt-2 text-sm text-[var(--muted)]">No classes yet. Create one under Classes.</p>
+              <p className="mt-2 text-sm text-[var(--muted)]">{t("eb.noClassesYet")}</p>
             ) : (
               <div className="mt-2 space-y-2">
                 <select className="input h-9 w-full" value={pickClass} onChange={(e) => setPickClass(e.target.value)}>
-                  <option value="">Select a class…</option>
+                  <option value="">{t("eb.selectClass")}</option>
                   {classesAll.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.members})</option>)}
                 </select>
                 <div className="flex items-center gap-2">
-                  <input type="datetime-local" className="input h-9 flex-1 text-sm" value={pickWhen} onChange={(e) => setPickWhen(e.target.value)} title="Schedule exam for this class (optional)" />
-                  <button onClick={assignClass} disabled={!pickClass} className="btn btn-primary h-9 shrink-0 disabled:opacity-50"><Users className="h-4 w-4" /> Assign</button>
+                  <input type="datetime-local" className="input h-9 flex-1 text-sm" value={pickWhen} onChange={(e) => setPickWhen(e.target.value)} title={t("eb.scheduleClassTooltip")} />
+                  <button onClick={assignClass} disabled={!pickClass} className="btn btn-primary h-9 shrink-0 disabled:opacity-50"><Users className="h-4 w-4" /> {t("eb.assign")}</button>
                 </div>
               </div>
             )}
@@ -952,10 +955,10 @@ function SettingsPanel({
 
       {/* Question delivery */}
       <div className="card rounded-2xl p-6">
-        <div className="flex items-center gap-2 text-sm font-bold"><Shuffle className="h-4 w-4 text-[#c6ff34]" /> Question delivery</div>
-        <p className="mt-0.5 text-xs text-[var(--muted)]">Randomize what each candidate sees so no two students get the same paper.</p>
+        <div className="flex items-center gap-2 text-sm font-bold"><Shuffle className="h-4 w-4 text-[#c6ff34]" /> {t("eb.questionDelivery")}</div>
+        <p className="mt-0.5 text-xs text-[var(--muted)]">{t("eb.questionDeliveryHint")}</p>
         <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-          {([["shuffleQuestions", "Shuffle question order", "Each attempt gets questions in a different order."], ["shuffleOptions", "Shuffle answer options", "MCQ options are reordered per attempt."]] as const).map(([key, label, desc]) => {
+          {([["shuffleQuestions", t("eb.shuffleQuestionOrder"), t("eb.shuffleQuestionOrderDesc")], ["shuffleOptions", t("eb.shuffleAnswerOptions"), t("eb.shuffleAnswerOptionsDesc")]] as const).map(([key, label, desc]) => {
             const on = (exam as unknown as Record<string, unknown>)[key] !== false;
             return (
               <button key={key} onClick={() => patchExam({ [key]: !on } as Partial<Exam>)}
@@ -967,9 +970,9 @@ function SettingsPanel({
           })}
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-[var(--border)] pt-4 text-sm">
-          <Shuffle className="h-4 w-4 text-[var(--muted)]" /> Serve
-          <input type="number" min={0} className="input h-8 w-20" placeholder="all" value={exam.questionsPerAttempt ?? ""} onChange={(e) => patchExam({ questionsPerAttempt: e.target.value === "" ? null : Math.max(0, Number(e.target.value)) })} />
-          of {questions.length} questions per attempt <span className="text-xs text-[var(--muted)]">(blank = all — draws a random pool)</span>
+          <Shuffle className="h-4 w-4 text-[var(--muted)]" /> {t("eb.serve")}
+          <input type="number" min={0} className="input h-8 w-20" placeholder={t("eb.allPlaceholder")} value={exam.questionsPerAttempt ?? ""} onChange={(e) => patchExam({ questionsPerAttempt: e.target.value === "" ? null : Math.max(0, Number(e.target.value)) })} />
+          {t("eb.ofQuestionsPerAttempt", { n: questions.length })} <span className="text-xs text-[var(--muted)]">{t("eb.blankMeansAll")}</span>
         </div>
       </div>
 
@@ -978,17 +981,17 @@ function SettingsPanel({
 
       {/* Marking scheme */}
       <div className="card rounded-2xl p-6">
-        <div className="flex items-center gap-2 text-sm font-bold"><Target className="h-4 w-4 text-[#c6ff34]" /> Marking scheme</div>
+        <div className="flex items-center gap-2 text-sm font-bold"><Target className="h-4 w-4 text-[#c6ff34]" /> {t("eb.markingScheme")}</div>
         <div className="mt-3 space-y-2">
           <button onClick={() => patchExam({ partialCredit: !exam.partialCredit })}
             className={clsx("flex w-full items-center justify-between gap-3 rounded-xl border p-3 text-left transition", exam.partialCredit ? "border-[#c6ff34]/40 bg-[rgba(198,255,52,0.08)]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
-            <div><p className="text-sm font-medium">Partial credit (multi-select)</p><p className="text-xs text-[var(--muted)]">Award proportional marks for partly-correct multi-select answers.</p></div>
+            <div><p className="text-sm font-medium">{t("eb.partialCreditMulti")}</p><p className="text-xs text-[var(--muted)]">{t("eb.partialCreditDesc")}</p></div>
             <span className={clsx("inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition", exam.partialCredit ? "bg-[#c6ff34]" : "bg-[var(--border)]")}><span className={clsx("h-4 w-4 rounded-full bg-white transition", exam.partialCredit && "translate-x-4")} /></span>
           </button>
           <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)] p-3 text-sm">
-            <AlertTriangle className="h-4 w-4 text-amber-500" /> Negative marking — deduct
+            <AlertTriangle className="h-4 w-4 text-amber-500" /> {t("eb.negativeMarking")}
             <input type="number" min={0} max={100} step={5} className="input h-8 w-20" value={Math.round((exam.negativeMarking ?? 0) * 100)} onChange={(e) => patchExam({ negativeMarking: Math.max(0, Math.min(100, Number(e.target.value) || 0)) / 100 })} />
-            % for a wrong objective answer <span className="text-xs text-[var(--muted)]">(0 = off)</span>
+            {t("eb.forWrongObjective")} <span className="text-xs text-[var(--muted)]">{t("eb.zeroIsOff")}</span>
           </div>
         </div>
       </div>
@@ -999,16 +1002,16 @@ function SettingsPanel({
       {/* Study materials / resources */}
       <div className="card rounded-2xl p-6">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2 text-sm font-bold"><FileText className="h-4 w-4 text-[#c6ff34]" /> Study materials</div>
-          <button onClick={() => patchExam({ resources: [...(exam.resources ?? []), { label: "", url: "" }] })} className="inline-flex items-center gap-1 text-xs font-semibold text-[#c6ff34] hover:underline"><Plus className="h-3.5 w-3.5" /> Add link</button>
+          <div className="flex items-center gap-2 text-sm font-bold"><FileText className="h-4 w-4 text-[#c6ff34]" /> {t("eb.studyMaterials")}</div>
+          <button onClick={() => patchExam({ resources: [...(exam.resources ?? []), { label: "", url: "" }] })} className="inline-flex items-center gap-1 text-xs font-semibold text-[#c6ff34] hover:underline"><Plus className="h-3.5 w-3.5" /> {t("eb.addLink")}</button>
         </div>
-        <p className="mt-0.5 text-xs text-[var(--muted)]">Links shown to candidates on the exam page — revision notes, syllabus, past papers.</p>
+        <p className="mt-0.5 text-xs text-[var(--muted)]">{t("eb.studyMaterialsHint")}</p>
         <div className="mt-3 space-y-2">
           {(exam.resources ?? []).length === 0 ? (
-            <p className="text-xs text-[var(--muted)]">No resources yet.</p>
+            <p className="text-xs text-[var(--muted)]">{t("eb.noResourcesYet")}</p>
           ) : (exam.resources ?? []).map((r, i) => (
             <div key={i} className="flex items-center gap-2">
-              <input className="input h-9 w-40" value={r.label} placeholder="Label" onChange={(e) => patchExam({ resources: (exam.resources ?? []).map((x, idx) => idx === i ? { ...x, label: e.target.value } : x) })} />
+              <input className="input h-9 w-40" value={r.label} placeholder={t("eb.linkLabel")} onChange={(e) => patchExam({ resources: (exam.resources ?? []).map((x, idx) => idx === i ? { ...x, label: e.target.value } : x) })} />
               <input className="input h-9 flex-1" value={r.url} placeholder="https://…" onChange={(e) => patchExam({ resources: (exam.resources ?? []).map((x, idx) => idx === i ? { ...x, url: e.target.value } : x) })} />
               <button onClick={() => patchExam({ resources: (exam.resources ?? []).filter((_, idx) => idx !== i) })} className="text-[var(--muted)] hover:text-rose-500"><X className="h-4 w-4" /></button>
             </div>
@@ -1022,10 +1025,11 @@ function SettingsPanel({
 
 /* ─────────────────────────── Proctoring panel ─────────────────────────── */
 function ProctoringPanel({ exam, patchExam }: { exam: Exam; patchExam: (p: Partial<Exam>) => void }) {
+  const t = useT();
   return (
     <div className="card rounded-2xl p-6">
-      <div className="flex items-center gap-2 text-sm font-bold"><ShieldAlert className="h-4 w-4 text-[#c6ff34]" /> Lockdown &amp; integrity</div>
-      <p className="mt-0.5 text-xs text-[var(--muted)]">Rules enforced while a candidate takes this exam.</p>
+      <div className="flex items-center gap-2 text-sm font-bold"><ShieldAlert className="h-4 w-4 text-[#c6ff34]" /> {t("eb.lockdownIntegrity")}</div>
+      <p className="mt-0.5 text-xs text-[var(--muted)]">{t("eb.lockdownIntegrityDesc")}</p>
       <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
         {LOCKDOWN_RULES.map(({ key, label, desc }) => {
           const on = !!exam.lockdown?.[key];
@@ -1039,9 +1043,9 @@ function ProctoringPanel({ exam, patchExam }: { exam: Exam; patchExam: (p: Parti
         })}
       </div>
       <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-[var(--border)] pt-4 text-sm">
-        <AlertTriangle className="h-4 w-4 text-amber-500" /> Auto-submit after
+        <AlertTriangle className="h-4 w-4 text-amber-500" /> {t("eb.autoSubmitAfter")}
         <input type="number" min={0} className="input h-8 w-16" value={exam.lockdown?.violationLimit ?? 0} onChange={(e) => patchExam({ lockdown: { ...exam.lockdown, violationLimit: Number(e.target.value) } })} />
-        integrity violations <span className="text-xs text-[var(--muted)]">(0 = submit on first violation)</span>
+        {t("eb.integrityViolations")} <span className="text-xs text-[var(--muted)]">{t("eb.zeroSubmitFirst")}</span>
       </div>
 
       {/* Safe Exam Browser */}
@@ -1049,29 +1053,29 @@ function ProctoringPanel({ exam, patchExam }: { exam: Exam; patchExam: (p: Parti
         <button onClick={() => patchExam({ lockdown: { ...exam.lockdown, requireSafeExamBrowser: !exam.lockdown?.requireSafeExamBrowser } })}
           className={clsx("flex w-full items-center justify-between gap-3 rounded-xl border p-3 text-left transition", exam.lockdown?.requireSafeExamBrowser ? "border-[#c6ff34]/40 bg-[rgba(198,255,52,0.08)]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
           <div>
-            <p className="text-sm font-medium">Require Safe Exam Browser</p>
-            <p className="text-xs text-[var(--muted)]">Hard OS-level lockdown. The exam can only be taken inside SEB — the server rejects any other browser.</p>
-            <p className="mt-1 text-xs font-medium text-amber-500">Requires Windows, macOS or iPad — not available on Android or Chromebook.</p>
+            <p className="text-sm font-medium">{t("eb.requireSEB")}</p>
+            <p className="text-xs text-[var(--muted)]">{t("eb.requireSEBDesc")}</p>
+            <p className="mt-1 text-xs font-medium text-amber-500">{t("eb.sebPlatforms")}</p>
           </div>
           <span className={clsx("inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition", exam.lockdown?.requireSafeExamBrowser ? "bg-[#c6ff34]" : "bg-[var(--border)]")}><span className={clsx("h-4 w-4 rounded-full bg-white transition", exam.lockdown?.requireSafeExamBrowser && "translate-x-4")} /></span>
         </button>
         {exam.lockdown?.requireSafeExamBrowser && (
           <div className="mt-3 space-y-3">
             <div>
-              <label className="text-xs font-medium">Config Key(s)</label>
-              <p className="mb-1 text-xs text-[var(--muted)]">From the SEB Config Tool. One per line. SHA-256 hex.</p>
+              <label className="text-xs font-medium">{t("eb.configKeys")}</label>
+              <p className="mb-1 text-xs text-[var(--muted)]">{t("eb.configKeysHint")}</p>
               <textarea className="input min-h-[64px] w-full font-mono text-xs" placeholder="e.g. 6b7a…f3c2" value={(exam.lockdown?.sebConfigKeys ?? []).join("\n")} onChange={(e) => patchExam({ lockdown: { ...exam.lockdown, sebConfigKeys: e.target.value.split("\n").map((s) => s.trim()).filter(Boolean) } })} />
             </div>
             <div>
-              <label className="text-xs font-medium">Browser Exam Key(s) <span className="text-[var(--muted)]">(optional)</span></label>
+              <label className="text-xs font-medium">{t("eb.browserExamKeys")} <span className="text-[var(--muted)]">{t("eb.optional")}</span></label>
               <textarea className="input min-h-[48px] w-full font-mono text-xs" placeholder="optional" value={(exam.lockdown?.sebBrowserExamKeys ?? []).join("\n")} onChange={(e) => patchExam({ lockdown: { ...exam.lockdown, sebBrowserExamKeys: e.target.value.split("\n").map((s) => s.trim()).filter(Boolean) } })} />
             </div>
             <div>
-              <label className="text-xs font-medium">Launch link</label>
+              <label className="text-xs font-medium">{t("eb.launchLink")}</label>
               <input className="input h-9 w-full text-xs" placeholder="sebs://lockdown.jevislab.com/exam.seb" value={exam.lockdown?.sebLaunchUrl ?? ""} onChange={(e) => patchExam({ lockdown: { ...exam.lockdown, sebLaunchUrl: e.target.value } })} />
             </div>
             {(exam.lockdown?.sebConfigKeys ?? []).length === 0 && (exam.lockdown?.sebBrowserExamKeys ?? []).length === 0 && (
-              <p className="flex items-center gap-1.5 rounded-lg bg-amber-500/15 px-3 py-2 text-xs text-amber-500"><AlertTriangle className="h-3.5 w-3.5 shrink-0" /> Add at least one Config Key, or no one will be able to start this exam.</p>
+              <p className="flex items-center gap-1.5 rounded-lg bg-amber-500/15 px-3 py-2 text-xs text-amber-500"><AlertTriangle className="h-3.5 w-3.5 shrink-0" /> {t("eb.addConfigKeyWarning")}</p>
             )}
           </div>
         )}
@@ -1097,32 +1101,33 @@ const CODE_LANG_LABEL: Record<string, string> = {
 };
 
 function CodeQuestionFields({ q, patch }: { q: Question; patch: (p: Partial<Question>) => void }) {
+  const t = useT();
   const tests = q.testCases ?? [];
-  const setTest = (i: number, key: "input" | "expected", val: string) => patch({ testCases: tests.map((t, idx) => (idx === i ? { ...t, [key]: val } : t)) });
+  const setTest = (i: number, key: "input" | "expected", val: string) => patch({ testCases: tests.map((tc, idx) => (idx === i ? { ...tc, [key]: val } : tc)) });
   return (
     <div className="space-y-3 rounded-lg border border-[var(--border)] p-3">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">Language</span>
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t("eb.language")}</span>
         <select className="input h-8 w-auto" value={q.codeLanguage ?? "python"} onChange={(e) => patch({ codeLanguage: e.target.value })}>
           {CODE_LANGS.map((l) => <option key={l} value={l}>{CODE_LANG_LABEL[l]}</option>)}
         </select>
       </div>
       <label className="block">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">Starter code (optional)</span>
-        <textarea className="input mt-1 min-h-[70px] resize-y font-mono text-xs" value={q.starterCode ?? ""} onChange={(e) => patch({ starterCode: e.target.value })} placeholder="Pre-filled in the candidate's editor…" />
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t("eb.starterCodeOptional")}</span>
+        <textarea className="input mt-1 min-h-[70px] resize-y font-mono text-xs" value={q.starterCode ?? ""} onChange={(e) => patch({ starterCode: e.target.value })} placeholder={t("eb.starterCodePlaceholder")} />
       </label>
       <div>
         <div className="flex items-center justify-between">
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">Sample test cases{tests.length > 0 ? ` · ${tests.length}` : ""}</span>
-          <button type="button" onClick={() => patch({ testCases: [...tests, { input: "", expected: "" }] })} className="inline-flex items-center gap-1 text-xs text-[#c6ff34] hover:underline"><Plus className="h-3.5 w-3.5" /> Test case</button>
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t("eb.sampleTestCases")}{tests.length > 0 ? ` · ${tests.length}` : ""}</span>
+          <button type="button" onClick={() => patch({ testCases: [...tests, { input: "", expected: "" }] })} className="inline-flex items-center gap-1 text-xs text-[#c6ff34] hover:underline"><Plus className="h-3.5 w-3.5" /> {t("eb.testCase")}</button>
         </div>
         {tests.length > 0 && (
           <div className="mt-2 space-y-2">
-            {tests.map((t, i) => (
+            {tests.map((tc, i) => (
               <div key={i} className="flex items-start gap-2">
-                <textarea className="input min-h-[38px] flex-1 resize-y font-mono text-xs" value={t.input} onChange={(e) => setTest(i, "input", e.target.value)} placeholder="stdin" />
-                <textarea className="input min-h-[38px] flex-1 resize-y font-mono text-xs" value={t.expected} onChange={(e) => setTest(i, "expected", e.target.value)} placeholder="expected stdout" />
-                <button type="button" title="Remove" onClick={() => patch({ testCases: tests.filter((_, idx) => idx !== i) })} className="mt-1 rounded-lg p-1.5 text-[var(--muted)] hover:bg-[var(--card-2)] hover:text-[var(--fg)]"><Trash2 className="h-4 w-4" /></button>
+                <textarea className="input min-h-[38px] flex-1 resize-y font-mono text-xs" value={tc.input} onChange={(e) => setTest(i, "input", e.target.value)} placeholder={t("eb.stdinPlaceholder")} />
+                <textarea className="input min-h-[38px] flex-1 resize-y font-mono text-xs" value={tc.expected} onChange={(e) => setTest(i, "expected", e.target.value)} placeholder={t("eb.expectedStdoutPlaceholder")} />
+                <button type="button" title={t("eb.remove")} onClick={() => patch({ testCases: tests.filter((_, idx) => idx !== i) })} className="mt-1 rounded-lg p-1.5 text-[var(--muted)] hover:bg-[var(--card-2)] hover:text-[var(--fg)]"><Trash2 className="h-4 w-4" /></button>
               </div>
             ))}
           </div>
@@ -1133,11 +1138,12 @@ function CodeQuestionFields({ q, patch }: { q: Question; patch: (p: Partial<Ques
 }
 
 function CoverImageField({ exam, patch }: { exam: Exam; patch: (p: Partial<Exam>) => void }) {
+  const t = useT();
   const ref = useRef<HTMLInputElement>(null);
   const pick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 1_000_000) { alert("Cover image must be under 1 MB."); return; }
+    if (file.size > 1_000_000) { alert(t("eb.coverImageTooLarge")); return; }
     const r = new FileReader();
     r.onload = () => patch({ coverImage: String(r.result) });
     r.readAsDataURL(file);
@@ -1149,8 +1155,8 @@ function CoverImageField({ exam, patch }: { exam: Exam; patch: (p: Partial<Exam>
         ? <img src={exam.coverImage} alt="" className="h-16 w-28 shrink-0 rounded-md object-cover" />
         : <div className="flex h-16 w-28 shrink-0 items-center justify-center rounded-md border border-dashed border-[var(--border)] text-[var(--muted)]"><ImageIcon className="h-5 w-5" /></div>}
       <div className="flex items-center gap-2">
-        <button type="button" onClick={() => ref.current?.click()} className="btn btn-outline h-8 text-xs"><Plus className="h-3.5 w-3.5" /> {exam.coverImage ? "Change cover" : "Add cover image"}</button>
-        {exam.coverImage && <button type="button" onClick={() => patch({ coverImage: null })} className="btn btn-ghost h-8 text-xs">Remove</button>}
+        <button type="button" onClick={() => ref.current?.click()} className="btn btn-outline h-8 text-xs"><Plus className="h-3.5 w-3.5" /> {exam.coverImage ? t("eb.changeCover") : t("eb.addCoverImage")}</button>
+        {exam.coverImage && <button type="button" onClick={() => patch({ coverImage: null })} className="btn btn-ghost h-8 text-xs">{t("eb.remove")}</button>}
         <input ref={ref} type="file" accept="image/*" className="hidden" onChange={pick} />
       </div>
     </div>
@@ -1175,83 +1181,87 @@ function BuilderSkeleton() {
 
 /* ─────────────────────── Topic tags ─────────────────────── */
 function TagsField({ q, patch }: { q: Question; patch: (p: Partial<Question>) => void }) {
+  const t = useT();
   const [raw, setRaw] = useState("");
   const tags = q.tags ?? [];
-  const add = (t: string) => { const v = t.trim(); if (v && !tags.includes(v)) patch({ tags: [...tags, v] }); setRaw(""); };
+  const add = (v: string) => { const cleaned = v.trim(); if (cleaned && !tags.includes(cleaned)) patch({ tags: [...tags, cleaned] }); setRaw(""); };
   return (
-    <Field label="Topic tags">
+    <Field label={t("eb.topicTags")}>
       <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-[var(--border)] px-2 py-1.5">
-        {tags.map((t) => (
-          <span key={t} className="inline-flex items-center gap-1 rounded-full bg-[rgba(198,255,52,0.14)] px-2 py-0.5 text-xs font-medium text-[#c6ff34]">
-            <Tag className="h-3 w-3" />{t}
-            <button type="button" onClick={() => patch({ tags: tags.filter((x) => x !== t) })}><X className="h-3 w-3" /></button>
+        {tags.map((tg) => (
+          <span key={tg} className="inline-flex items-center gap-1 rounded-full bg-[rgba(198,255,52,0.14)] px-2 py-0.5 text-xs font-medium text-[#c6ff34]">
+            <Tag className="h-3 w-3" />{tg}
+            <button type="button" onClick={() => patch({ tags: tags.filter((x) => x !== tg) })}><X className="h-3 w-3" /></button>
           </span>
         ))}
-        <input className="min-w-[120px] flex-1 bg-transparent text-sm outline-none" value={raw} placeholder="Add a topic…"
+        <input className="min-w-[120px] flex-1 bg-transparent text-sm outline-none" value={raw} placeholder={t("eb.addTopicPlaceholder")}
           onChange={(e) => setRaw(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" || e.key === ",") { e.preventDefault(); add(raw); } }}
           onBlur={() => add(raw)} />
       </div>
-      <p className="mt-1 text-[11px] text-[var(--muted)]">Used for bank filtering and the exam blueprint (assemble “N from a topic”).</p>
+      <p className="mt-1 text-[11px] text-[var(--muted)]">{t("eb.topicTagsHint")}</p>
     </Field>
   );
 }
 
 /* ─────────────────────── Matching editor ─────────────────────── */
 function MatchingEditor({ q, patch }: { q: Question; patch: (p: Partial<Question>) => void }) {
+  const t = useT();
   const pairs = q.matchPairs ?? [];
   const set = (i: number, key: "left" | "right", val: string) => patch({ matchPairs: pairs.map((p, idx) => (idx === i ? { ...p, [key]: val } : p)) });
   return (
     <div className="mt-5">
-      <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">Matching pairs</span>
-      <p className="mb-2 text-[11px] text-[var(--muted)]">Candidates match each left prompt to its correct right value. Right values are shuffled when served.</p>
+      <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t("eb.matchingPairs")}</span>
+      <p className="mb-2 text-[11px] text-[var(--muted)]">{t("eb.matchingPairsHint")}</p>
       <div className="space-y-2">
         {pairs.map((p, i) => (
           <div key={i} className="flex items-center gap-2">
-            <input className="input h-9 flex-1" value={p.left} placeholder={`Prompt ${i + 1}`} onChange={(e) => set(i, "left", e.target.value)} />
+            <input className="input h-9 flex-1" value={p.left} placeholder={t("eb.promptN", { n: i + 1 })} onChange={(e) => set(i, "left", e.target.value)} />
             <ArrowLeftRight className="h-4 w-4 shrink-0 text-[var(--muted)]" />
-            <input className="input h-9 flex-1" value={p.right} placeholder={`Match ${i + 1}`} onChange={(e) => set(i, "right", e.target.value)} />
+            <input className="input h-9 flex-1" value={p.right} placeholder={t("eb.matchN", { n: i + 1 })} onChange={(e) => set(i, "right", e.target.value)} />
             <button type="button" onClick={() => patch({ matchPairs: pairs.filter((_, idx) => idx !== i) })} disabled={pairs.length <= 1} className="text-[var(--muted)] hover:text-rose-500 disabled:opacity-30"><X className="h-4 w-4" /></button>
           </div>
         ))}
       </div>
-      <button type="button" onClick={() => patch({ matchPairs: [...pairs, { left: "", right: "" }] })} className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-[#c6ff34] hover:underline"><Plus className="h-4 w-4" /> Add pair</button>
+      <button type="button" onClick={() => patch({ matchPairs: [...pairs, { left: "", right: "" }] })} className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-[#c6ff34] hover:underline"><Plus className="h-4 w-4" /> {t("eb.addPair")}</button>
     </div>
   );
 }
 
 /* ─────────────────────── Ordering editor ─────────────────────── */
 function OrderingEditor({ q, patch }: { q: Question; patch: (p: Partial<Question>) => void }) {
+  const t = useT();
   const seq = q.sequence ?? [];
   const set = (i: number, val: string) => patch({ sequence: seq.map((s, idx) => (idx === i ? val : s)) });
   const move = (i: number, dir: -1 | 1) => { const j = i + dir; if (j < 0 || j >= seq.length) return; const c = [...seq]; [c[i], c[j]] = [c[j], c[i]]; patch({ sequence: c }); };
   return (
     <div className="mt-5">
-      <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">Items in correct order</span>
-      <p className="mb-2 text-[11px] text-[var(--muted)]">List the items in their CORRECT sequence — they're shuffled when served, and candidates reorder them.</p>
+      <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t("eb.itemsInOrder")}</span>
+      <p className="mb-2 text-[11px] text-[var(--muted)]">{t("eb.itemsInOrderHint")}</p>
       <div className="space-y-2">
         {seq.map((it, i) => (
           <div key={i} className="flex items-center gap-2">
             <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-[var(--card-2)] text-[11px] font-bold text-[var(--muted)]">{i + 1}</span>
-            <input className="input h-9 flex-1" value={it} placeholder={`Item ${i + 1}`} onChange={(e) => set(i, e.target.value)} />
+            <input className="input h-9 flex-1" value={it} placeholder={t("eb.itemN", { n: i + 1 })} onChange={(e) => set(i, e.target.value)} />
             <button type="button" onClick={() => move(i, -1)} disabled={i === 0} className="rounded p-0.5 text-[var(--muted)] hover:text-[var(--fg)] disabled:opacity-30"><ChevronUp className="h-4 w-4" /></button>
             <button type="button" onClick={() => move(i, 1)} disabled={i === seq.length - 1} className="rounded p-0.5 text-[var(--muted)] hover:text-[var(--fg)] disabled:opacity-30"><ChevronDown className="h-4 w-4" /></button>
             <button type="button" onClick={() => patch({ sequence: seq.filter((_, idx) => idx !== i) })} disabled={seq.length <= 2} className="text-[var(--muted)] hover:text-rose-500 disabled:opacity-30"><X className="h-4 w-4" /></button>
           </div>
         ))}
       </div>
-      <button type="button" onClick={() => patch({ sequence: [...seq, ""] })} className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-[#c6ff34] hover:underline"><Plus className="h-4 w-4" /> Add item</button>
+      <button type="button" onClick={() => patch({ sequence: [...seq, ""] })} className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-[#c6ff34] hover:underline"><Plus className="h-4 w-4" /> {t("eb.addItem")}</button>
     </div>
   );
 }
 
 /* ─────────────────────── Cloze (fill-in-the-blank) editor ─────────────────────── */
 function ClozeBlankRow({ index, value, onChange, onRemove }: { index: number; value: string[]; onChange: (v: string[]) => void; onRemove: () => void }) {
+  const t = useT();
   const [raw, setRaw] = useState(value.join(", "));
   return (
     <div className="flex items-center gap-2">
-      <span className="w-16 shrink-0 text-xs font-semibold text-[var(--muted)]">Blank {index + 1}</span>
-      <input className="input h-9 flex-1" value={raw} placeholder="accepted, answers"
+      <span className="w-16 shrink-0 text-xs font-semibold text-[var(--muted)]">{t("eb.blankN", { n: index + 1 })}</span>
+      <input className="input h-9 flex-1" value={raw} placeholder={t("eb.acceptedAnswersPlaceholder")}
         onChange={(e) => setRaw(e.target.value)}
         onBlur={() => onChange(raw.split(",").map((s) => s.trim()).filter(Boolean))} />
       <button type="button" onClick={onRemove} className="text-[var(--muted)] hover:text-rose-500"><X className="h-4 w-4" /></button>
@@ -1259,14 +1269,15 @@ function ClozeBlankRow({ index, value, onChange, onRemove }: { index: number; va
   );
 }
 function ClozeEditor({ q, patch }: { q: Question; patch: (p: Partial<Question>) => void }) {
+  const t = useT();
   const blanks = q.blanks ?? [];
   const detected = (q.prompt.match(/___/g) ?? []).length;
   return (
     <div className="mt-5">
-      <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">Blanks &amp; accepted answers</span>
-      <p className="mb-2 text-[11px] text-[var(--muted)]">Put <code className="rounded bg-[var(--card-2)] px-1">___</code> (three underscores) in the question text for each blank, in order. Add the accepted answers (comma-separated) for each — case-insensitive.</p>
+      <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t("eb.blanksAcceptedAnswers")}</span>
+      <p className="mb-2 text-[11px] text-[var(--muted)]">{t("eb.clozeHint")}</p>
       {detected !== blanks.length && (
-        <p className="mb-2 flex items-center gap-1.5 rounded-lg bg-amber-500/15 px-2.5 py-1.5 text-[11px] text-amber-500"><AlertTriangle className="h-3.5 w-3.5 shrink-0" /> Your prompt has {detected} blank{detected === 1 ? "" : "s"} but {blanks.length} answer set{blanks.length === 1 ? "" : "s"} — they should match.</p>
+        <p className="mb-2 flex items-center gap-1.5 rounded-lg bg-amber-500/15 px-2.5 py-1.5 text-[11px] text-amber-500"><AlertTriangle className="h-3.5 w-3.5 shrink-0" /> {t("eb.clozeMismatch", { detected, n: blanks.length })}</p>
       )}
       <div className="space-y-2">
         {blanks.map((b, i) => (
@@ -1275,13 +1286,14 @@ function ClozeEditor({ q, patch }: { q: Question; patch: (p: Partial<Question>) 
             onRemove={() => patch({ blanks: blanks.filter((_, idx) => idx !== i) })} />
         ))}
       </div>
-      <button type="button" onClick={() => patch({ blanks: [...blanks, [""]] })} className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-[#c6ff34] hover:underline"><Plus className="h-4 w-4" /> Add blank</button>
+      <button type="button" onClick={() => patch({ blanks: [...blanks, [""]] })} className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-[#c6ff34] hover:underline"><Plus className="h-4 w-4" /> {t("eb.addBlank")}</button>
     </div>
   );
 }
 
 /* ─────────────────────── Parameterized editor ─────────────────────── */
 function ParameterizedEditor({ q, patch }: { q: Question; patch: (p: Partial<Question>) => void }) {
+  const t = useT();
   const vars = q.paramVariables ?? [];
   const setVar = (i: number, key: "name" | "min" | "max" | "decimals", val: string) =>
     patch({ paramVariables: vars.map((v, idx) => (idx === i ? { ...v, [key]: key === "name" ? val : Number(val) || 0 } : v)) });
@@ -1301,36 +1313,36 @@ function ParameterizedEditor({ q, patch }: { q: Question; patch: (p: Partial<Que
   return (
     <div className="mt-5 space-y-4">
       <div>
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">Variables</span>
-        <p className="mb-2 text-[11px] text-[var(--muted)]">Use <code className="rounded bg-[var(--card-2)] px-1">{'{name}'}</code> in the question text. Each candidate gets a random value between min and max.</p>
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t("eb.variables")}</span>
+        <p className="mb-2 text-[11px] text-[var(--muted)]">{t("eb.variablesHint")}</p>
         <div className="space-y-2">
           {vars.map((v, i) => (
             <div key={i} className="flex flex-wrap items-end gap-2">
-              <label className="text-[11px] text-[var(--muted)]">Name<input className="input mt-1 h-9 w-24" value={v.name} placeholder="d" onChange={(e) => setVar(i, "name", e.target.value)} /></label>
-              <label className="text-[11px] text-[var(--muted)]">Min<input className="input mt-1 h-9 w-24" type="number" step="any" value={v.min} onChange={(e) => setVar(i, "min", e.target.value)} /></label>
-              <label className="text-[11px] text-[var(--muted)]">Max<input className="input mt-1 h-9 w-24" type="number" step="any" value={v.max} onChange={(e) => setVar(i, "max", e.target.value)} /></label>
-              <label className="text-[11px] text-[var(--muted)]">Decimals<input className="input mt-1 h-9 w-20" type="number" min={0} value={v.decimals} onChange={(e) => setVar(i, "decimals", e.target.value)} /></label>
+              <label className="text-[11px] text-[var(--muted)]">{t("eb.varName")}<input className="input mt-1 h-9 w-24" value={v.name} placeholder="d" onChange={(e) => setVar(i, "name", e.target.value)} /></label>
+              <label className="text-[11px] text-[var(--muted)]">{t("eb.varMin")}<input className="input mt-1 h-9 w-24" type="number" step="any" value={v.min} onChange={(e) => setVar(i, "min", e.target.value)} /></label>
+              <label className="text-[11px] text-[var(--muted)]">{t("eb.varMax")}<input className="input mt-1 h-9 w-24" type="number" step="any" value={v.max} onChange={(e) => setVar(i, "max", e.target.value)} /></label>
+              <label className="text-[11px] text-[var(--muted)]">{t("eb.varDecimals")}<input className="input mt-1 h-9 w-20" type="number" min={0} value={v.decimals} onChange={(e) => setVar(i, "decimals", e.target.value)} /></label>
               <button type="button" onClick={() => removeVar(i)} className="mb-1.5 text-[var(--muted)] hover:text-rose-500"><X className="h-4 w-4" /></button>
             </div>
           ))}
         </div>
-        <button type="button" onClick={addVar} className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-[#c6ff34] hover:underline"><Plus className="h-4 w-4" /> Add variable</button>
+        <button type="button" onClick={addVar} className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-[#c6ff34] hover:underline"><Plus className="h-4 w-4" /> {t("eb.addVariable")}</button>
       </div>
 
-      <Field label="Answer formula">
-        <input className="input h-10" value={q.paramFormula ?? ""} placeholder="e.g. d / t" onChange={(e) => patch({ paramFormula: e.target.value })} />
+      <Field label={t("eb.answerFormula")}>
+        <input className="input h-10" value={q.paramFormula ?? ""} placeholder={t("eb.egFormula")} onChange={(e) => patch({ paramFormula: e.target.value })} />
       </Field>
-      <p className="-mt-2 text-[11px] text-[var(--muted)]">Use the variable names with <code className="rounded bg-[var(--card-2)] px-1">+ − * / ^ ( )</code> and functions like <code className="rounded bg-[var(--card-2)] px-1">sqrt, round, abs, min, max</code>. Computed per candidate.</p>
+      <p className="-mt-2 text-[11px] text-[var(--muted)]">{t("eb.formulaHint")}</p>
 
-      <Field label="± Tolerance">
+      <Field label={t("eb.tolerance")}>
         <input className="input h-10 w-32" type="number" min={0} step="any" value={q.paramTolerance ?? 0} onChange={(e) => patch({ paramTolerance: Math.max(0, Number(e.target.value) || 0) })} />
       </Field>
 
       {vars.length > 0 && (
         <div className="rounded-lg border border-[var(--border)] bg-[var(--card-2)] p-3 text-xs">
-          <p className="font-semibold text-[var(--muted)]">Preview · sample values</p>
-          <p className="mt-1">{previewPrompt || <span className="text-[var(--muted)]">Add a prompt with {'{name}'} markers…</span>}</p>
-          <p className="mt-1 text-[var(--muted)]">Correct answer: <span className="font-semibold text-emerald-400">{previewAnswer == null ? "— (check formula)" : String(Math.round(previewAnswer * 1e6) / 1e6)}</span></p>
+          <p className="font-semibold text-[var(--muted)]">{t("eb.previewSampleValues")}</p>
+          <p className="mt-1">{previewPrompt || <span className="text-[var(--muted)]">{t("eb.addPromptWithMarkers")}</span>}</p>
+          <p className="mt-1 text-[var(--muted)]">{t("eb.correctAnswerLabel")} <span className="font-semibold text-emerald-400">{previewAnswer == null ? t("eb.checkFormula") : String(Math.round(previewAnswer * 1e6) / 1e6)}</span></p>
         </div>
       )}
     </div>
@@ -1339,6 +1351,7 @@ function ParameterizedEditor({ q, patch }: { q: Question; patch: (p: Partial<Que
 
 /* ─────────────────────── Hotspot editor ─────────────────────── */
 function HotspotEditor({ q, patch }: { q: Question; patch: (p: Partial<Question>) => void }) {
+  const t = useT();
   const fileRef = useRef<HTMLInputElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const startRef = useRef<{ x: number; y: number } | null>(null);
@@ -1348,7 +1361,7 @@ function HotspotEditor({ q, patch }: { q: Question; patch: (p: Partial<Question>
   const pick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; e.target.value = "";
     if (!file) return;
-    if (file.size > 2_000_000) { alert("Image must be under 2 MB."); return; }
+    if (file.size > 2_000_000) { alert(t("eb.imageTooLarge")); return; }
     const r = new FileReader();
     r.onload = () => patch({ imageUrl: String(r.result) });
     r.readAsDataURL(file);
@@ -1363,11 +1376,11 @@ function HotspotEditor({ q, patch }: { q: Question; patch: (p: Partial<Question>
   return (
     <div className="mt-5">
       <div className="flex items-center justify-between">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">Image &amp; correct regions</span>
-        <button type="button" onClick={() => fileRef.current?.click()} className="btn btn-outline h-8 text-xs"><ImageIcon className="h-3.5 w-3.5" /> {q.imageUrl ? "Change image" : "Upload image"}</button>
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t("eb.imageAndRegions")}</span>
+        <button type="button" onClick={() => fileRef.current?.click()} className="btn btn-outline h-8 text-xs"><ImageIcon className="h-3.5 w-3.5" /> {q.imageUrl ? t("eb.changeImage") : t("eb.uploadImage")}</button>
         <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={pick} />
       </div>
-      <p className="mb-2 mt-1 text-[11px] text-[var(--muted)]">Click and drag on the image to draw the correct region(s). A click inside any region scores.</p>
+      <p className="mb-2 mt-1 text-[11px] text-[var(--muted)]">{t("eb.hotspotHint")}</p>
       {q.imageUrl ? (
         <div ref={boxRef} onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp}
           className="relative inline-block max-w-full cursor-crosshair select-none overflow-hidden rounded-lg border border-[var(--border)]">
@@ -1381,45 +1394,46 @@ function HotspotEditor({ q, patch }: { q: Question; patch: (p: Partial<Question>
           {draft && <div className="absolute border-2 border-dashed border-emerald-400 bg-emerald-400/10" style={{ left: `${draft.x}%`, top: `${draft.y}%`, width: `${draft.w}%`, height: `${draft.h}%` }} />}
         </div>
       ) : (
-        <div className="flex h-32 items-center justify-center rounded-lg border border-dashed border-[var(--border)] text-sm text-[var(--muted)]">Upload an image to mark hotspots.</div>
+        <div className="flex h-32 items-center justify-center rounded-lg border border-dashed border-[var(--border)] text-sm text-[var(--muted)]">{t("eb.uploadImageToMark")}</div>
       )}
-      {q.imageUrl && <p className="mt-1.5 text-[11px] text-[var(--muted)]">{hotspots.length} region{hotspots.length === 1 ? "" : "s"} marked.</p>}
+      {q.imageUrl && <p className="mt-1.5 text-[11px] text-[var(--muted)]">{t("eb.regionsMarked", { n: hotspots.length })}</p>}
     </div>
   );
 }
 
 /* ─────────────────────── Exam blueprint ─────────────────────── */
 function BlueprintEditor({ exam, questions, patchExam }: { exam: Exam; questions: Question[]; patchExam: (p: Partial<Exam>) => void }) {
+  const t = useT();
   const bp = exam.blueprint ?? [];
   const allTags = [...new Set(questions.flatMap((q) => q.tags ?? []))].sort();
   const set = (i: number, key: "tag" | "count", val: string | number) => patchExam({ blueprint: bp.map((r, idx) => (idx === i ? { ...r, [key]: val } : r)) });
   const total = bp.reduce((s, r) => s + (r.count || 0), 0);
   return (
     <div className="card rounded-2xl p-6">
-      <div className="flex items-center gap-2 text-sm font-bold"><ListChecks className="h-4 w-4 text-[#c6ff34]" /> Exam blueprint</div>
-      <p className="mt-0.5 text-xs text-[var(--muted)]">Auto-assemble each attempt by drawing a set number of questions from each topic tag. When set, this overrides the random pool draw above.</p>
+      <div className="flex items-center gap-2 text-sm font-bold"><ListChecks className="h-4 w-4 text-[#c6ff34]" /> {t("eb.examBlueprint")}</div>
+      <p className="mt-0.5 text-xs text-[var(--muted)]">{t("eb.examBlueprintHint")}</p>
       {allTags.length === 0 ? (
-        <p className="mt-3 text-xs text-[var(--muted)]">Tag some questions first (in a question's Advanced settings) to build a blueprint.</p>
+        <p className="mt-3 text-xs text-[var(--muted)]">{t("eb.tagQuestionsFirst")}</p>
       ) : (
         <>
           <div className="mt-3 space-y-2">
             {bp.map((r, i) => {
-              const avail = questions.filter((q) => (q.tags ?? []).some((t) => t.toLowerCase() === r.tag.toLowerCase())).length;
+              const avail = questions.filter((q) => (q.tags ?? []).some((tag) => tag.toLowerCase() === r.tag.toLowerCase())).length;
               return (
                 <div key={i} className="flex flex-wrap items-center gap-2 text-sm">
-                  <Shuffle className="h-4 w-4 text-[var(--muted)]" /> Draw
-                  <input type="number" min={1} className="input h-8 w-16" value={r.count} onChange={(e) => set(i, "count", Math.max(1, Number(e.target.value) || 1))} /> from
+                  <Shuffle className="h-4 w-4 text-[var(--muted)]" /> {t("eb.draw")}
+                  <input type="number" min={1} className="input h-8 w-16" value={r.count} onChange={(e) => set(i, "count", Math.max(1, Number(e.target.value) || 1))} /> {t("eb.from")}
                   <select className="input h-8 w-auto" value={r.tag} onChange={(e) => set(i, "tag", e.target.value)}>
-                    {allTags.map((t) => <option key={t} value={t}>{t}</option>)}
+                    {allTags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}
                   </select>
-                  <span className={clsx("text-xs", r.count > avail ? "text-amber-500" : "text-[var(--muted)]")}>({avail} available)</span>
+                  <span className={clsx("text-xs", r.count > avail ? "text-amber-500" : "text-[var(--muted)]")}>{t("eb.availableCount", { n: avail })}</span>
                   <button type="button" onClick={() => patchExam({ blueprint: bp.filter((_, idx) => idx !== i) })} className="text-[var(--muted)] hover:text-rose-500"><X className="h-4 w-4" /></button>
                 </div>
               );
             })}
           </div>
-          <button type="button" onClick={() => patchExam({ blueprint: [...bp, { tag: allTags[0], count: 1 }] })} className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-[#c6ff34] hover:underline"><Plus className="h-4 w-4" /> Add blueprint rule</button>
-          {bp.length > 0 && <p className="mt-2 text-xs text-[var(--muted)]">Assembles {total} question{total === 1 ? "" : "s"} per attempt{exam.shuffleQuestions === false ? "" : ", in shuffled order"}.</p>}
+          <button type="button" onClick={() => patchExam({ blueprint: [...bp, { tag: allTags[0], count: 1 }] })} className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-[#c6ff34] hover:underline"><Plus className="h-4 w-4" /> {t("eb.addBlueprintRule")}</button>
+          {bp.length > 0 && <p className="mt-2 text-xs text-[var(--muted)]">{t("eb.assemblesQuestions", { n: total })}{exam.shuffleQuestions === false ? "" : t("eb.inShuffledOrder")}.</p>}
         </>
       )}
     </div>
@@ -1434,6 +1448,7 @@ function toLocalInput(iso?: string | null) {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
 function GradingSchemeCard({ exam, patchExam }: { exam: Exam; patchExam: (p: Partial<Exam>) => void }) {
+  const t = useT();
   const scale = exam.gradeScale ?? { mode: "none" as const, value: 0 };
   const bands = exam.gradeBands ?? [];
   const [busy, setBusy] = useState(false);
@@ -1441,29 +1456,29 @@ function GradingSchemeCard({ exam, patchExam }: { exam: Exam; patchExam: (p: Par
   const setBand = (i: number, key: "label" | "min", val: string | number) => patchExam({ gradeBands: bands.map((b, idx) => (idx === i ? { ...b, [key]: val } : b)) });
   const recompute = async () => {
     setBusy(true); setMsg(null);
-    try { const r = await api.post<{ updated: number }>(`/admin/exams/${exam.id}/recompute-results`); setMsg(`Re-applied to ${r.updated} existing result${r.updated === 1 ? "" : "s"}.`); }
+    try { const r = await api.post<{ updated: number }>(`/admin/exams/${exam.id}/recompute-results`); setMsg(t("eb.reappliedResults", { n: r.updated })); }
     catch (e) { setMsg((e as Error).message); }
     finally { setBusy(false); }
   };
   return (
     <div className="card rounded-2xl p-6">
-      <div className="flex items-center gap-2 text-sm font-bold"><Target className="h-4 w-4 text-[#c6ff34]" /> Grading scheme &amp; release</div>
-      <p className="mt-0.5 text-xs text-[var(--muted)]">Curve raw scores, set letter-grade boundaries, and choose when students see their results.</p>
+      <div className="flex items-center gap-2 text-sm font-bold"><Target className="h-4 w-4 text-[#c6ff34]" /> {t("eb.gradingSchemeRelease")}</div>
+      <p className="mt-0.5 text-xs text-[var(--muted)]">{t("eb.gradingSchemeReleaseHint")}</p>
 
       {/* Curve */}
       <div className="mt-4">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">Score curve</span>
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t("eb.scoreCurve")}</span>
         <div className="mt-1.5 flex flex-wrap items-center gap-2 text-sm">
           <select className="input h-9 w-auto" value={scale.mode} onChange={(e) => patchExam({ gradeScale: { mode: e.target.value as "none" | "add" | "multiply", value: scale.value } })}>
-            <option value="none">No curve</option>
-            <option value="add">Add points</option>
-            <option value="multiply">Multiply by factor</option>
+            <option value="none">{t("eb.noCurve")}</option>
+            <option value="add">{t("eb.addPoints")}</option>
+            <option value="multiply">{t("eb.multiplyByFactor")}</option>
           </select>
           {scale.mode !== "none" && (
             <>
               <input type="number" step={scale.mode === "multiply" ? 0.05 : 1} className="input h-9 w-24" value={scale.value}
                 onChange={(e) => patchExam({ gradeScale: { mode: scale.mode, value: Number(e.target.value) || 0 } })} />
-              <span className="text-xs text-[var(--muted)]">{scale.mode === "add" ? "points added to every score (capped at 100)" : "× every raw score (capped at 100)"}</span>
+              <span className="text-xs text-[var(--muted)]">{scale.mode === "add" ? t("eb.pointsAddedHint") : t("eb.multiplyHint")}</span>
             </>
           )}
         </div>
@@ -1472,20 +1487,20 @@ function GradingSchemeCard({ exam, patchExam }: { exam: Exam; patchExam: (p: Par
       {/* Letter boundaries */}
       <div className="mt-5">
         <div className="flex items-center justify-between">
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">Grade boundaries{bands.length ? ` · ${bands.length}` : ""}</span>
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t("eb.gradeBoundaries")}{bands.length ? ` · ${bands.length}` : ""}</span>
           <div className="flex items-center gap-2">
-            <button type="button" onClick={() => patchExam({ gradeBands: DEFAULT_GRADE_BANDS.map((b) => ({ ...b })) })} className="text-xs text-[var(--muted)] hover:text-[#c6ff34]">Use A–F default</button>
-            <button type="button" onClick={() => patchExam({ gradeBands: [...bands, { label: "", min: 0 }] })} className="inline-flex items-center gap-1 text-xs text-[#c6ff34] hover:underline"><Plus className="h-3.5 w-3.5" /> Band</button>
+            <button type="button" onClick={() => patchExam({ gradeBands: DEFAULT_GRADE_BANDS.map((b) => ({ ...b })) })} className="text-xs text-[var(--muted)] hover:text-[#c6ff34]">{t("eb.useDefaultAF")}</button>
+            <button type="button" onClick={() => patchExam({ gradeBands: [...bands, { label: "", min: 0 }] })} className="inline-flex items-center gap-1 text-xs text-[#c6ff34] hover:underline"><Plus className="h-3.5 w-3.5" /> {t("eb.band")}</button>
           </div>
         </div>
         {bands.length === 0 ? (
-          <p className="mt-1.5 text-[11px] text-[var(--muted)]">No letter grades — results show the percentage only.</p>
+          <p className="mt-1.5 text-[11px] text-[var(--muted)]">{t("eb.noLetterGrades")}</p>
         ) : (
           <div className="mt-2 space-y-1.5">
             {bands.map((b, i) => (
               <div key={i} className="flex items-center gap-2 text-sm">
                 <input className="input h-8 w-20" value={b.label} placeholder="A" maxLength={8} onChange={(e) => setBand(i, "label", e.target.value)} />
-                <span className="text-xs text-[var(--muted)]">when score ≥</span>
+                <span className="text-xs text-[var(--muted)]">{t("eb.whenScoreGte")}</span>
                 <input type="number" min={0} max={100} className="input h-8 w-20" value={b.min} onChange={(e) => setBand(i, "min", Math.max(0, Math.min(100, Number(e.target.value) || 0)))} />
                 <span className="text-xs text-[var(--muted)]">%</span>
                 <button type="button" onClick={() => patchExam({ gradeBands: bands.filter((_, idx) => idx !== i) })} className="text-[var(--muted)] hover:text-rose-500"><X className="h-4 w-4" /></button>
@@ -1497,26 +1512,26 @@ function GradingSchemeCard({ exam, patchExam }: { exam: Exam; patchExam: (p: Par
 
       {/* Scheduled release */}
       <div className="mt-5">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">Scheduled result release</span>
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t("eb.scheduledResultRelease")}</span>
         <div className="mt-1.5 flex flex-wrap items-center gap-2 text-sm">
           <input type="datetime-local" className="input h-9 w-auto" value={toLocalInput(exam.resultsReleaseAt)}
             onChange={(e) => patchExam({ resultsReleaseAt: e.target.value ? new Date(e.target.value).toISOString() : null })} />
-          {exam.resultsReleaseAt && <button type="button" onClick={() => patchExam({ resultsReleaseAt: null })} className="text-xs text-[var(--muted)] hover:text-rose-500">Clear</button>}
+          {exam.resultsReleaseAt && <button type="button" onClick={() => patchExam({ resultsReleaseAt: null })} className="text-xs text-[var(--muted)] hover:text-rose-500">{t("eb.clear")}</button>}
         </div>
-        <p className="mt-1 text-[11px] text-[var(--muted)]">{exam.resultsReleaseAt ? "Students can't see their score until this time." : "Leave blank to release results as soon as they're graded."}</p>
+        <p className="mt-1 text-[11px] text-[var(--muted)]">{exam.resultsReleaseAt ? t("eb.releaseHeldHint") : t("eb.releaseImmediateHint")}</p>
       </div>
 
       {/* Anonymous grading */}
       <button type="button" onClick={() => patchExam({ anonymousGrading: !exam.anonymousGrading })}
         className={clsx("mt-5 flex w-full items-center justify-between gap-3 rounded-xl border p-3 text-left transition", exam.anonymousGrading ? "border-[#c6ff34]/40 bg-[rgba(198,255,52,0.08)]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
-        <div><p className="text-sm font-medium">Anonymous (double-blind) grading</p><p className="text-xs text-[var(--muted)]">Hide candidate identity from graders while marking — names, emails and webcam frames are revealed only after release.</p></div>
+        <div><p className="text-sm font-medium">{t("eb.anonymousGrading")}</p><p className="text-xs text-[var(--muted)]">{t("eb.anonymousGradingDesc")}</p></div>
         <span className={clsx("inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition", exam.anonymousGrading ? "bg-[#c6ff34]" : "bg-[var(--border)]")}><span className={clsx("h-4 w-4 rounded-full bg-white transition", exam.anonymousGrading && "translate-x-4")} /></span>
       </button>
 
       {/* Apply to existing */}
       <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-[var(--border)] pt-4">
         <button type="button" onClick={recompute} disabled={busy} className="btn btn-outline h-9 disabled:opacity-50">
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Apply scheme to existing results
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} {t("eb.applySchemeExisting")}
         </button>
         {msg && <span className="text-xs text-[var(--muted)]">{msg}</span>}
       </div>
@@ -1527,6 +1542,7 @@ function GradingSchemeCard({ exam, patchExam }: { exam: Exam; patchExam: (p: Par
 /* ─────────────────────── Pick-from-bank modal ─────────────────────── */
 type BankQ = Question & { examTitle: string; examCode: string; examStatus: string };
 function PickFromBankModal({ excludeExamId, onClose, onAdd }: { excludeExamId: string; onClose: () => void; onAdd: (ids: string[]) => Promise<void> }) {
+  const t = useT();
   const [all, setAll] = useState<BankQ[] | null>(null);
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState("");
@@ -1536,31 +1552,31 @@ function PickFromBankModal({ excludeExamId, onClose, onAdd }: { excludeExamId: s
   const filtered = (all ?? []).filter((q) =>
     q.examId !== excludeExamId &&
     (type === "all" || q.type === type) &&
-    (!query.trim() || q.prompt.toLowerCase().includes(query.trim().toLowerCase()) || (q.tags ?? []).some((t) => t.toLowerCase().includes(query.trim().toLowerCase()))));
+    (!query.trim() || q.prompt.toLowerCase().includes(query.trim().toLowerCase()) || (q.tags ?? []).some((tag) => tag.toLowerCase().includes(query.trim().toLowerCase()))));
   const toggle = (id: string) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const confirm = async () => { if (!sel.size) return; setBusy(true); try { await onAdd([...sel]); } finally { setBusy(false); } };
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
       <div className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-2xl border border-[var(--border)] bg-[var(--card)] shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-3.5">
-          <h2 className="inline-flex items-center gap-2 text-base font-bold"><Library className="h-5 w-5 text-[#c6ff34]" /> Pick from question bank</h2>
+          <h2 className="inline-flex items-center gap-2 text-base font-bold"><Library className="h-5 w-5 text-[#c6ff34]" /> {t("eb.pickFromBank")}</h2>
           <button onClick={onClose} className="rounded p-1 text-[var(--muted)] hover:text-[var(--fg)]"><X className="h-4 w-4" /></button>
         </div>
         <div className="flex flex-wrap items-center gap-2 border-b border-[var(--border)] px-5 py-3">
           <div className="flex min-w-[180px] flex-1 items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--card-2)] px-3 py-1.5">
             <Search className="h-4 w-4 text-[var(--muted)]" />
-            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search prompt or tag…" className="w-full bg-transparent text-sm outline-none" />
+            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("eb.searchPromptOrTag")} className="w-full bg-transparent text-sm outline-none" />
           </div>
           <select value={type} onChange={(e) => setType(e.target.value as typeof type)} className="input h-9 w-auto text-sm">
-            <option value="all">All types</option>
-            {(Object.keys(TYPE_META) as QuestionType[]).map((t) => <option key={t} value={t}>{TYPE_META[t].short}</option>)}
+            <option value="all">{t("eb.allTypes")}</option>
+            {(Object.keys(TYPE_META) as QuestionType[]).map((qt) => <option key={qt} value={qt}>{TYPE_META[qt].short}</option>)}
           </select>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
           {!all ? (
-            <div className="flex items-center gap-2 p-6 text-sm text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> Loading bank…</div>
+            <div className="flex items-center gap-2 p-6 text-sm text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("eb.loadingBank")}</div>
           ) : filtered.length === 0 ? (
-            <p className="p-6 text-center text-sm text-[var(--muted)]">No matching questions in other exams.</p>
+            <p className="p-6 text-center text-sm text-[var(--muted)]">{t("eb.noMatchingBank")}</p>
           ) : filtered.map((q) => {
             const M = TYPE_META[q.type]; const on = sel.has(q.id);
             return (
@@ -1568,10 +1584,10 @@ function PickFromBankModal({ excludeExamId, onClose, onAdd }: { excludeExamId: s
                 <span className={clsx("mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded", on ? "bg-[#c6ff34] text-[#111110]" : "border border-[var(--border)] text-transparent")}><Check className="h-3.5 w-3.5" /></span>
                 <M.icon className="mt-0.5 h-4 w-4 shrink-0 text-[var(--muted)]" />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium">{q.prompt || "(no prompt)"}</span>
+                  <span className="block truncate text-sm font-medium">{q.prompt || t("eb.noPrompt")}</span>
                   <span className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-[var(--muted)]">
                     <span>{M.short}</span> · <span>{q.points} pts</span> · <span className="truncate">{q.examTitle}</span>
-                    {(q.tags ?? []).slice(0, 3).map((t) => <span key={t} className="rounded-full bg-[var(--card-2)] px-1.5 py-px text-[#c6ff34]">{t}</span>)}
+                    {(q.tags ?? []).slice(0, 3).map((tag) => <span key={tag} className="rounded-full bg-[var(--card-2)] px-1.5 py-px text-[#c6ff34]">{tag}</span>)}
                   </span>
                 </span>
               </button>
@@ -1579,10 +1595,10 @@ function PickFromBankModal({ excludeExamId, onClose, onAdd }: { excludeExamId: s
           })}
         </div>
         <div className="flex items-center justify-between border-t border-[var(--border)] px-5 py-3">
-          <span className="text-xs text-[var(--muted)]">{sel.size} selected</span>
+          <span className="text-xs text-[var(--muted)]">{t("eb.selectedCount", { n: sel.size })}</span>
           <div className="flex items-center gap-2">
-            <button onClick={onClose} className="btn btn-outline h-9">Cancel</button>
-            <button onClick={confirm} disabled={!sel.size || busy} className="btn btn-primary h-9 disabled:opacity-50">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} Add {sel.size || ""} to exam</button>
+            <button onClick={onClose} className="btn btn-outline h-9">{t("eb.cancel")}</button>
+            <button onClick={confirm} disabled={!sel.size || busy} className="btn btn-primary h-9 disabled:opacity-50">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} {t("eb.addToExam", { n: sel.size || "" })}</button>
           </div>
         </div>
       </div>
@@ -1591,23 +1607,24 @@ function PickFromBankModal({ excludeExamId, onClose, onAdd }: { excludeExamId: s
 }
 
 function PreviewView({ exam, questions }: { exam: Exam; questions: Question[] }) {
+  const t = useT();
   return (
     <div className="card overflow-hidden">
       <div className="h-2.5 w-full" style={{ background: G.accent }} />
       <div className="p-6">
         <h2 className="text-2xl font-bold">{exam.title}</h2>
         {exam.description && <p className="mt-1 text-sm text-[var(--muted)]">{exam.description}</p>}
-        <p className="mt-2 text-xs text-[var(--muted)]">{exam.durationMinutes} min · Pass ≥ {exam.passingScore}%{exam.proctored ? " · Proctored" : ""}</p>
+        <p className="mt-2 text-xs text-[var(--muted)]">{exam.durationMinutes} min · {t("eb.passGte")} {exam.passingScore}%{exam.proctored ? t("eb.proctoredTag") : ""}</p>
         <div className="mt-6 space-y-6">
-          {questions.length === 0 && <p className="text-sm text-[var(--muted)]">No questions yet.</p>}
+          {questions.length === 0 && <p className="text-sm text-[var(--muted)]">{t("eb.noQuestionsYet")}</p>}
           {questions.map((q, i) => (
             <div key={q.id}>
-              <p className="text-sm font-medium">{i + 1}. <MathText>{q.prompt || "(no prompt)"}</MathText> <span className="text-xs text-[var(--muted)]">· {q.points} pts</span></p>
+              <p className="text-sm font-medium">{i + 1}. <MathText>{q.prompt || t("eb.noPrompt")}</MathText> <span className="text-xs text-[var(--muted)]">· {q.points} pts</span></p>
               <div className="mt-2 space-y-2 pl-4">
                 {q.type === "short" || q.type === "numeric" ? (
-                  <div className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--muted)]">{q.type === "numeric" ? "Numeric answer…" : "Short text answer…"}</div>
+                  <div className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--muted)]">{q.type === "numeric" ? t("eb.numericAnswerPlaceholder") : t("eb.shortTextAnswerPlaceholder")}</div>
                 ) : q.type === "essay" || q.type === "code" || q.type === "file_upload" ? (
-                  <div className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--muted)]">{q.type === "code" ? "Code editor…" : q.type === "file_upload" ? "File upload…" : "Long-form answer…"}</div>
+                  <div className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--muted)]">{q.type === "code" ? t("eb.codeEditorPlaceholder") : q.type === "file_upload" ? t("eb.fileUploadPlaceholder") : t("eb.longFormAnswerPlaceholder")}</div>
                 ) : q.type === "matching" ? (
                   <div className="space-y-1.5">
                     {(q.matchPairs ?? []).map((p, j) => (
@@ -1617,13 +1634,13 @@ function PreviewView({ exam, questions }: { exam: Exam; questions: Question[] })
                 ) : q.type === "ordering" ? (
                   <ol className="list-decimal space-y-1 pl-5 text-sm">{(q.sequence ?? []).map((it, j) => <li key={j}>{it}</li>)}</ol>
                 ) : q.type === "cloze" ? (
-                  <p className="text-sm text-[var(--muted)]">{(q.blanks ?? []).length} blank{(q.blanks ?? []).length === 1 ? "" : "s"} to fill.</p>
+                  <p className="text-sm text-[var(--muted)]">{t("eb.blanksToFill", { n: (q.blanks ?? []).length })}</p>
                 ) : q.type === "hotspot" ? (
-                  q.imageUrl ? <img src={q.imageUrl} alt="" className="max-h-48 rounded-lg border border-[var(--border)]" /> : <div className="rounded-lg border border-dashed border-[var(--border)] px-3 py-2 text-sm text-[var(--muted)]">No image yet</div>
+                  q.imageUrl ? <img src={q.imageUrl} alt="" className="max-h-48 rounded-lg border border-[var(--border)]" /> : <div className="rounded-lg border border-dashed border-[var(--border)] px-3 py-2 text-sm text-[var(--muted)]">{t("eb.noImageYet")}</div>
                 ) : q.type === "parameterized" ? (
                   <div className="space-y-1.5 text-sm text-[var(--muted)]">
-                    <input className="input max-w-xs" type="number" placeholder="Enter a number…" disabled />
-                    <p className="text-[11px]"><span className="text-[#c6ff34]">⚙</span> Numbers in <code className="rounded bg-[var(--card-2)] px-1">{'{…}'}</code> are randomised per candidate; the answer is computed from the formula.</p>
+                    <input className="input max-w-xs" type="number" placeholder={t("eb.enterNumberPlaceholder")} disabled />
+                    <p className="text-[11px]"><span className="text-[#c6ff34]">⚙</span> {t("eb.randomizedPerCandidate")}</p>
                   </div>
                 ) : (
                   (q.options ?? []).map((opt) => (
