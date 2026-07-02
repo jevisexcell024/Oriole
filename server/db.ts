@@ -570,10 +570,19 @@ export async function initDb() {
     }
   }
 
-  // Encrypt any user avatar stored as plaintext before avatars were encrypted at
-  // rest (idempotent; no-op without a DATA_ENCRYPTION_KEY).
+  // Encrypt any user avatar/phone stored as plaintext before these fields were
+  // encrypted at rest (idempotent; no-op without a DATA_ENCRYPTION_KEY).
   for (const u of db.data.users) {
     if (typeof u.avatarUrl === "string") { const e = encryptString(u.avatarUrl); if (e !== u.avatarUrl) { u.avatarUrl = e; changed = true; } }
+    if (typeof u.phone === "string") { const e = encryptString(u.phone); if (e !== u.phone) { u.phone = e; changed = true; } }
+  }
+
+  // Encrypt any webhook secret stored as plaintext before this field was
+  // encrypted at rest (idempotent; no-op without a DATA_ENCRYPTION_KEY).
+  for (const s of db.data.settings) {
+    for (const w of s.webhooks ?? []) {
+      if (typeof w.secret === "string") { const e = encryptString(w.secret); if (e !== w.secret) { w.secret = e; changed = true; } }
+    }
   }
 
   // Grading-lifecycle backfill for attempts created before this feature.

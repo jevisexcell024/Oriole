@@ -12,7 +12,7 @@ const TWO_FA_COOKIE = "orcalis_2fa";
 export function toSafeUser(u: User): SafeUser {
   return {
     id: u.id, email: u.email, name: u.name, role: u.role, avatarUrl: u.avatarUrl ? (decryptString(u.avatarUrl) ?? undefined) : undefined,
-    gender: u.gender, phone: u.phone, studentClass: u.studentClass, notificationPrefs: u.notificationPrefs,
+    gender: u.gender, phone: u.phone ? (decryptString(u.phone) ?? undefined) : undefined, studentClass: u.studentClass, notificationPrefs: u.notificationPrefs,
     twoFactorEnabled: !!u.twoFactorEnabled,
   };
 }

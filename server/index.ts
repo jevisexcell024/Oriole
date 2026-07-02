@@ -638,7 +638,10 @@ async function sendExamReminders() {
       try { await sendMail(u.email, `Reminder — ${exam.title} starts ${label}`, text, html); } catch { /* best-effort */ }
       // Optional SMS/WhatsApp reminder (only when enabled in settings, a provider is configured, and the student has a phone).
       if ((getSettings().smsReminders ?? false) && smsEnabled() && u.phone) {
-        try { await sendSms(u.phone, `Oriole: "${exam.title}" starts ${label} (${new Date(startIso).toLocaleString()}). Run your system check beforehand.`); } catch { /* best-effort */ }
+        const phoneNumber = decryptString(u.phone);
+        if (phoneNumber) {
+          try { await sendSms(phoneNumber, `Oriole: "${exam.title}" starts ${label} (${new Date(startIso).toLocaleString()}). Run your system check beforehand.`); } catch { /* best-effort */ }
+        }
       }
       sent.push(tag);
       return true;
@@ -1495,7 +1498,7 @@ app.post("/api/admin/candidates", requireRole("admin"), async (req, res) => {
     gender: typeof b.gender === "string" ? b.gender : undefined,
     age: typeof b.age === "number" ? b.age : undefined,
     studentClass: typeof b.studentClass === "string" ? b.studentClass.trim() : undefined,
-    phone: typeof b.phone === "string" ? b.phone.trim() : undefined,
+    phone: typeof b.phone === "string" && b.phone.trim() ? encryptString(b.phone.trim()) : undefined,
   };
   db.data!.users.push(user);
   await db.write();
@@ -1529,7 +1532,7 @@ app.post("/api/admin/candidates/bulk", requireRole("admin"), async (req, res) =>
       gender: typeof row?.gender === "string" && row.gender.trim() ? row.gender.trim() : undefined,
       age: row?.age !== undefined && row?.age !== "" && Number.isFinite(ageNum) ? ageNum : undefined,
       studentClass: typeof row?.studentClass === "string" && row.studentClass.trim() ? row.studentClass.trim() : undefined,
-      phone: typeof row?.phone === "string" && row.phone.trim() ? row.phone.trim() : undefined,
+      phone: typeof row?.phone === "string" && row.phone.trim() ? encryptString(row.phone.trim()) : undefined,
     });
     created.push({ name, email, tempPassword });
   }
@@ -2356,7 +2359,7 @@ app.get("/api/admin/students/:id/report", requireRoles(...STAFF), (req, res) => 
     late: regs.filter((r) => r.flaggedLate).length,
   };
   res.json({
-    student: { name: student.name, email: student.email, studentClass: student.studentClass ?? null, gender: student.gender ?? null, phone: student.phone ?? null },
+    student: { name: student.name, email: student.email, studentClass: student.studentClass ?? null, gender: student.gender ?? null, phone: student.phone ? (decryptString(student.phone) ?? null) : null },
     summary: {
       attempts: exams.length,
       avgScore: scores.length ? Math.round(scores.reduce((s, x) => s + x, 0) / scores.length) : null,
@@ -2975,7 +2978,7 @@ app.get("/api/admin/students", requireRole("admin"), async (_req, res) => {
         gender: u.gender ?? null,
         age: u.age ?? null,
         studentClass: u.studentClass ?? null,
-        phone: u.phone ?? null,
+        phone: u.phone ? (decryptString(u.phone) ?? null) : null,
         enrollments: regs.length,
         confirmed: regs.filter((r) => r.approval === "confirmed").length,
         completed: attempts.length,
@@ -3017,7 +3020,7 @@ app.patch("/api/admin/students/:id", requireRole("admin"), async (req, res) => {
   if (typeof b.gender === "string") u.gender = b.gender;
   if ("age" in b) u.age = b.age === null || b.age === "" ? undefined : Number(b.age);
   if (typeof b.studentClass === "string") u.studentClass = b.studentClass.trim();
-  if (typeof b.phone === "string") u.phone = b.phone.trim();
+  if (typeof b.phone === "string") u.phone = b.phone.trim() ? encryptString(b.phone.trim()) : undefined;
   await db.upsert("users", u);
   await recordAudit(req, "student.updated", `${u.name} <${u.email}>`);
   res.json({ ok: true });
@@ -3322,7 +3325,7 @@ app.patch("/api/me/profile", requireAuth, async (req, res) => {
   const user = currentUser(req)!;
   const b = req.body ?? {};
   if (typeof b.name === "string" && b.name.trim()) user.name = b.name.trim().slice(0, 120);
-  if (typeof b.phone === "string") user.phone = b.phone.trim().slice(0, 40) || undefined;
+  if (typeof b.phone === "string") { const p = b.phone.trim().slice(0, 40); user.phone = p ? encryptString(p) : undefined; }
   if (typeof b.gender === "string") user.gender = ["male", "female", "other", ""].includes(b.gender.toLowerCase()) ? (b.gender || undefined) : user.gender;
   if (typeof b.avatarUrl === "string") {
     // Accept a small data-URL image, or empty string to clear it.
@@ -3688,7 +3691,7 @@ function dispatchWebhook(event: WebhookEvent, data: Record<string, unknown>) {
     try {
       const res = await fetch(w.url, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-orcalis-event": event, "x-orcalis-signature": sign(w.secret, body) },
+        headers: { "Content-Type": "application/json", "x-orcalis-event": event, "x-orcalis-signature": sign(decryptString(w.secret) ?? w.secret, body) },
         body,
         signal: AbortSignal.timeout(8000),
       });
@@ -3702,7 +3705,7 @@ app.get("/api/admin/integrations", requireRole("admin"), (_req, res) => {
   const s = getSettings();
   res.json({
     events: WEBHOOK_EVENTS,
-    webhooks: s.webhooks ?? [],
+    webhooks: (s.webhooks ?? []).map((w) => ({ ...w, secret: decryptString(w.secret) ?? w.secret })),
     apiKeys: (s.apiKeys ?? []).map((k) => ({ id: k.id, name: k.name, prefix: k.prefix, createdAt: k.createdAt, lastUsedAt: k.lastUsedAt ?? null })),
   });
 });
@@ -3712,11 +3715,12 @@ app.post("/api/admin/webhooks", requireRole("admin"), async (req, res) => {
   const events = Array.isArray(req.body?.events) ? (req.body.events as unknown[]).filter((e): e is WebhookEvent => WEBHOOK_EVENTS.includes(e as WebhookEvent)) : [];
   if (events.length === 0) return res.status(400).json({ error: "Pick at least one event." });
   const s = getSettings();
-  const hook = { id: nanoid(10), url, events, secret: "whsec_" + randomBytes(18).toString("hex"), active: true, createdAt: now(), lastStatus: null as number | null, lastAt: null as string | null };
+  const rawSecret = "whsec_" + randomBytes(18).toString("hex");
+  const hook = { id: nanoid(10), url, events, secret: encryptString(rawSecret), active: true, createdAt: now(), lastStatus: null as number | null, lastAt: null as string | null };
   s.webhooks = [...(s.webhooks ?? []), hook];
   await db.upsert("settings", s);
   await recordAudit(req, "webhook.created", url);
-  res.json({ webhook: hook });
+  res.json({ webhook: { ...hook, secret: rawSecret } });
 });
 app.patch("/api/admin/webhooks/:id", requireRole("admin"), async (req, res) => {
   const s = getSettings();
@@ -3730,7 +3734,7 @@ app.patch("/api/admin/webhooks/:id", requireRole("admin"), async (req, res) => {
     w.url = newUrl;
   }
   await db.upsert("settings", s);
-  res.json({ webhook: w });
+  res.json({ webhook: { ...w, secret: decryptString(w.secret) ?? w.secret } });
 });
 app.delete("/api/admin/webhooks/:id", requireRole("admin"), async (req, res) => {
   const s = getSettings();
