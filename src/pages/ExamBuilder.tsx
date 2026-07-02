@@ -23,41 +23,44 @@ type Tab = "structure" | "settings" | "proctoring";
 
 const G = { accent: "#c6ff34", deep: "#111110" };
 
-const LOCKDOWN_RULES: { key: Exclude<keyof LockdownConfig, "violationLimit">; label: string; desc: string }[] = [
-  { key: "fullscreen", label: "Fullscreen lock", desc: "Block the exam when fullscreen is exited." },
-  { key: "blockCopyPaste", label: "Block copy / paste", desc: "Disable copy, paste, selection, right-click." },
-  { key: "blockShortcuts", label: "Block shortcuts", desc: "Devtools, print, save, view-source." },
-  { key: "tabSwitchDetection", label: "Tab-switch detection", desc: "Flag focus loss and tab changes." },
-  { key: "blockSecondScreen", label: "Block second screen", desc: "Lock the exam when an extra monitor is detected (single-display only). Off = flag only." },
-  { key: "webcam", label: "Require webcam", desc: "Camera required to start and during the exam." },
-  { key: "faceMonitoring", label: "Face monitoring", desc: "Continuous face-presence checks." },
-  { key: "requireIdentity", label: "Identity check", desc: "Collect student / registration no. at check-in." },
-  { key: "requireIdDocument", label: "Photo-ID capture", desc: "Candidate submits a photo ID for the proctor to verify." },
-  { key: "audioMonitoring", label: "Audio monitoring", desc: "Flag sustained talking / background noise during the exam." },
-  { key: "requireRoomScan", label: "Room scan", desc: "Capture a short webcam room scan at check-in." },
-  { key: "requireAgreement", label: "Rules agreement", desc: "Require accepting rules & policies." },
+// label/desc hold i18n KEYS, not literal strings — these constants live
+// outside any component (no useT() available here), so callers translate
+// with t(rule.labelKey) / t(rule.descKey) at render time.
+const LOCKDOWN_RULES: { key: Exclude<keyof LockdownConfig, "violationLimit">; labelKey: string; descKey: string }[] = [
+  { key: "fullscreen", labelKey: "eb.lockFullscreen", descKey: "eb.lockFullscreenDesc" },
+  { key: "blockCopyPaste", labelKey: "eb.lockCopyPaste", descKey: "eb.lockCopyPasteDesc" },
+  { key: "blockShortcuts", labelKey: "eb.lockShortcuts", descKey: "eb.lockShortcutsDesc" },
+  { key: "tabSwitchDetection", labelKey: "eb.lockTabSwitch", descKey: "eb.lockTabSwitchDesc" },
+  { key: "blockSecondScreen", labelKey: "eb.lockSecondScreen", descKey: "eb.lockSecondScreenDesc" },
+  { key: "webcam", labelKey: "eb.lockWebcam", descKey: "eb.lockWebcamDesc" },
+  { key: "faceMonitoring", labelKey: "eb.lockFaceMonitoring", descKey: "eb.lockFaceMonitoringDesc" },
+  { key: "requireIdentity", labelKey: "eb.lockIdentity", descKey: "eb.lockIdentityDesc" },
+  { key: "requireIdDocument", labelKey: "eb.lockIdDocument", descKey: "eb.lockIdDocumentDesc" },
+  { key: "audioMonitoring", labelKey: "eb.lockAudioMonitoring", descKey: "eb.lockAudioMonitoringDesc" },
+  { key: "requireRoomScan", labelKey: "eb.lockRoomScan", descKey: "eb.lockRoomScanDesc" },
+  { key: "requireAgreement", labelKey: "eb.lockAgreement", descKey: "eb.lockAgreementDesc" },
 ];
 
-const TYPE_META: Record<QuestionType, { label: string; short: string; icon: typeof Circle }> = {
-  mcq: { label: "Multiple Choice (MCQ)", short: "MCQ", icon: ListChecks },
-  multi_select: { label: "Multi-select", short: "Multi", icon: CheckSquare },
-  true_false: { label: "True / False", short: "T/F", icon: ToggleLeft },
-  short: { label: "Short Text", short: "Text", icon: TypeIcon },
-  numeric: { label: "Numeric", short: "Numeric", icon: Hash },
-  essay: { label: "Descriptive", short: "Descriptive", icon: FileText },
-  code: { label: "Code", short: "Code", icon: CodeIcon },
-  matching: { label: "Matching", short: "Match", icon: ArrowLeftRight },
-  ordering: { label: "Ordering / Sequence", short: "Order", icon: ListOrdered },
-  cloze: { label: "Fill in the blank", short: "Cloze", icon: TextCursorInput },
-  hotspot: { label: "Image Hotspot", short: "Hotspot", icon: MousePointerClick },
-  file_upload: { label: "File Upload", short: "File", icon: Upload },
-  parameterized: { label: "Parameterized (Math)", short: "Math", icon: Calculator },
+const TYPE_META: Record<QuestionType, { labelKey: string; shortKey: string; icon: typeof Circle }> = {
+  mcq: { labelKey: "eb.typeMcq", shortKey: "eb.typeMcqShort", icon: ListChecks },
+  multi_select: { labelKey: "eb.typeMultiSelect", shortKey: "eb.typeMultiSelectShort", icon: CheckSquare },
+  true_false: { labelKey: "eb.typeTrueFalse", shortKey: "eb.typeTrueFalseShort", icon: ToggleLeft },
+  short: { labelKey: "eb.typeShort", shortKey: "eb.typeShortShort", icon: TypeIcon },
+  numeric: { labelKey: "eb.typeNumeric", shortKey: "eb.typeNumericShort", icon: Hash },
+  essay: { labelKey: "eb.typeEssay", shortKey: "eb.typeEssayShort", icon: FileText },
+  code: { labelKey: "eb.typeCode", shortKey: "eb.typeCodeShort", icon: CodeIcon },
+  matching: { labelKey: "eb.typeMatching", shortKey: "eb.typeMatchingShort", icon: ArrowLeftRight },
+  ordering: { labelKey: "eb.typeOrdering", shortKey: "eb.typeOrderingShort", icon: ListOrdered },
+  cloze: { labelKey: "eb.typeCloze", shortKey: "eb.typeClozeShort", icon: TextCursorInput },
+  hotspot: { labelKey: "eb.typeHotspot", shortKey: "eb.typeHotspotShort", icon: MousePointerClick },
+  file_upload: { labelKey: "eb.typeFileUpload", shortKey: "eb.typeFileUploadShort", icon: Upload },
+  parameterized: { labelKey: "eb.typeParameterized", shortKey: "eb.typeParameterizedShort", icon: Calculator },
 };
 
 const DIFFICULTIES = [
-  { id: "easy", label: "Easy", color: "#16A34A" },
-  { id: "medium", label: "Medium", color: "#E9B949" },
-  { id: "hard", label: "Hard", color: "#DC2626" },
+  { id: "easy", labelKey: "eb.diffEasy", color: "#16A34A" },
+  { id: "medium", labelKey: "eb.diffMedium", color: "#E9B949" },
+  { id: "hard", labelKey: "eb.diffHard", color: "#DC2626" },
 ] as const;
 
 const fmtDur = (m: number) => (m >= 60 ? `${Math.round((m / 60) * 10) / 10} hr` : `${m} min`);
@@ -526,7 +529,7 @@ function StructureTree({
                       <button onClick={(e) => { e.stopPropagation(); onMove(g.items, q.id, 1); }} disabled={i === g.items.length - 1} className="rounded p-0.5 text-[var(--muted)] hover:text-[var(--fg)] disabled:opacity-30"><ChevronDown className="h-3.5 w-3.5" /></button>
                       <button onClick={(e) => { e.stopPropagation(); onDelete(q.id); }} className="rounded p-0.5 text-[var(--muted)] hover:text-rose-500"><Trash2 className="h-3.5 w-3.5" /></button>
                     </span>
-                    <span className={clsx("shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold group-hover/q:hidden", isActive ? "bg-[rgba(198,255,52,0.16)] text-[#c6ff34]" : "bg-[var(--card-2)] text-[var(--muted)]")}>{M.short}</span>
+                    <span className={clsx("shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold group-hover/q:hidden", isActive ? "bg-[rgba(198,255,52,0.16)] text-[#c6ff34]" : "bg-[var(--card-2)] text-[var(--muted)]")}>{t(M.shortKey)}</span>
                   </div>
                 );
               })}
@@ -654,12 +657,12 @@ function QuestionEditor({
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <Field label={t("eb.questionType")}>
             <select className="input h-10" value={q.type} onChange={(e) => onChangeType(e.target.value as QuestionType)}>
-              {(Object.keys(TYPE_META) as QuestionType[]).map((qt) => <option key={qt} value={qt}>{TYPE_META[qt].label}</option>)}
+              {(Object.keys(TYPE_META) as QuestionType[]).map((qt) => <option key={qt} value={qt}>{t(TYPE_META[qt].labelKey)}</option>)}
             </select>
           </Field>
           <Field label={t("eb.difficulty")}>
             <select className="input h-10" value={q.difficulty ?? "medium"} onChange={(e) => patch({ difficulty: e.target.value as Question["difficulty"] })}>
-              {DIFFICULTIES.map((d) => <option key={d.id} value={d.id}>{d.label}</option>)}
+              {DIFFICULTIES.map((d) => <option key={d.id} value={d.id}>{t(d.labelKey)}</option>)}
             </select>
           </Field>
           <Field label={t("eb.points")}>
@@ -1031,12 +1034,12 @@ function ProctoringPanel({ exam, patchExam }: { exam: Exam; patchExam: (p: Parti
       <div className="flex items-center gap-2 text-sm font-bold"><ShieldAlert className="h-4 w-4 text-[#c6ff34]" /> {t("eb.lockdownIntegrity")}</div>
       <p className="mt-0.5 text-xs text-[var(--muted)]">{t("eb.lockdownIntegrityDesc")}</p>
       <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-        {LOCKDOWN_RULES.map(({ key, label, desc }) => {
+        {LOCKDOWN_RULES.map(({ key, labelKey, descKey }) => {
           const on = !!exam.lockdown?.[key];
           return (
             <button key={key} onClick={() => patchExam({ lockdown: { ...exam.lockdown, [key]: !on } })}
               className={clsx("flex items-center justify-between gap-3 rounded-xl border p-3 text-left transition", on ? "border-[#c6ff34]/40 bg-[rgba(198,255,52,0.08)]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
-              <div><p className="text-sm font-medium">{label}</p><p className="text-xs text-[var(--muted)]">{desc}</p></div>
+              <div><p className="text-sm font-medium">{t(labelKey)}</p><p className="text-xs text-[var(--muted)]">{t(descKey)}</p></div>
               <span className={clsx("inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition", on ? "bg-[#c6ff34]" : "bg-[var(--border)]")}><span className={clsx("h-4 w-4 rounded-full bg-white transition", on && "translate-x-4")} /></span>
             </button>
           );
@@ -1569,7 +1572,7 @@ function PickFromBankModal({ excludeExamId, onClose, onAdd }: { excludeExamId: s
           </div>
           <select value={type} onChange={(e) => setType(e.target.value as typeof type)} className="input h-9 w-auto text-sm">
             <option value="all">{t("eb.allTypes")}</option>
-            {(Object.keys(TYPE_META) as QuestionType[]).map((qt) => <option key={qt} value={qt}>{TYPE_META[qt].short}</option>)}
+            {(Object.keys(TYPE_META) as QuestionType[]).map((qt) => <option key={qt} value={qt}>{t(TYPE_META[qt].shortKey)}</option>)}
           </select>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
@@ -1586,7 +1589,7 @@ function PickFromBankModal({ excludeExamId, onClose, onAdd }: { excludeExamId: s
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-medium">{q.prompt || t("eb.noPrompt")}</span>
                   <span className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-[var(--muted)]">
-                    <span>{M.short}</span> · <span>{q.points} pts</span> · <span className="truncate">{q.examTitle}</span>
+                    <span>{t(M.shortKey)}</span> · <span>{q.points} pts</span> · <span className="truncate">{q.examTitle}</span>
                     {(q.tags ?? []).slice(0, 3).map((tag) => <span key={tag} className="rounded-full bg-[var(--card-2)] px-1.5 py-px text-[#c6ff34]">{tag}</span>)}
                   </span>
                 </span>
