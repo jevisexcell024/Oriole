@@ -20,6 +20,9 @@ server/.pgdata/
 server/data.json
 server/data.json.migrated
 
+# Local scheduled DB backups (host-specific, not source)
+backups/
+
 # Logs & OS cruft
 *.log
 .DS_Store
