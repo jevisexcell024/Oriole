@@ -41,8 +41,8 @@ SIS) and **student** (check-in, sit proctored exams, view results & certificates
 
 - **Node.js 20 LTS or newer** (developed on Node 24.15.0 / npm 11.12.1). The esbuild
   bundle targets node18, so anything ≥18 runs, but install with a current LTS.
-- **Git** optional — *this project is not currently a git repo* (no remote, no commits).
-  Migrate by copying the folder (see §4), not by cloning.
+- **Git** — this is a git repo (local `main` branch, no remote configured yet).
+  Migrate by cloning/copying the `.git` history along with the folder (see §4).
 - No global tools required; everything is in `devDependencies`.
 
 ## 4. How to migrate the folder
@@ -202,13 +202,9 @@ Engine: `src/lib/i18n.tsx` (`I18nProvider`, `useI18n`, `useT()` → `TFn`) + cen
 all 5 langs per key). RTL via `document.documentElement.dir`; lang persisted in localStorage
 key `orcalis-lang`.
 
-- **Done:** all student screens; nearly all admin screens (dashboard, results, grading,
-  candidates, classes, calendar, certificates, attendance, audit logs, regrades, reports,
-  violations, system health, integrity, team, organization, scheduler, student report, SIS,
-  item analysis, integrations, analytics, manage exams, exam library, settings,
-  communication, attempt review).
-- **Remaining:** `src/pages/ExamBuilder.tsx` (~1600 lines, the largest) — the final screen
-  to translate.
+- **Done:** all student screens and all admin screens, including
+  `src/pages/ExamBuilder.tsx` (~1600 lines, the largest — translated last). i18n rollout
+  is complete across the app.
 - **Deliberately left in English** (technical/format-critical): CSV/LMS gradebook headers
   (Canvas/Moodle), `x-orcalis-signature`, `/api/v1/...`, `Authorization: Bearer ...`,
   `SMS_PROVIDER=twilio`, raw proctor-event type codes, import column aliases, short
@@ -221,7 +217,8 @@ key `orcalis-lang`.
   between machines breaks — delete the pid (or don't copy `.pgdata` at all).
 - **Always run build/test from THIS folder** (`Orcalis v2/orcalis-v2`). A sibling project
   on the Desktop will give unrelated failures.
-- **Not a git repo** here — there's no history to push/pull; back up by zipping the folder.
+- **No remote configured** — commits are local-only for now; back up by zipping the folder
+  (including `.git/`) until a remote is set up.
 - `assertProductionEnv()` hard-exits in prod if core secrets are missing — set them first.
 
 ---
