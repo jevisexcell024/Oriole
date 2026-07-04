@@ -34,7 +34,6 @@
     "helmet": "^8.2.0",
     "jsonwebtoken": "^9.0.2",
     "katex": "^0.17.0",
-    "lowdb": "^7.0.1",
     "lucide-react": "^0.468.0",
     "mammoth": "^1.12.0",
     "nanoid": "^5.0.9",
