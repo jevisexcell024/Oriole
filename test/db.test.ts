@@ -13,6 +13,8 @@ let emailStore: typeof import("../server/db.ts")["emailStore"];
 let proctorStore: typeof import("../server/db.ts")["proctorStore"];
 let answerStore: typeof import("../server/db.ts")["answerStore"];
 
+// PGlite's WASM cold-start + the full CREATE TABLE/INDEX migration in initDb()
+// genuinely takes ~11-12s on some machines, past vitest's default 10s hook timeout.
 beforeAll(async () => {
   const mod = await import("../server/db.ts");
   db = mod.db;
@@ -22,7 +24,7 @@ beforeAll(async () => {
   proctorStore = mod.proctorStore;
   answerStore = mod.answerStore;
   await mod.initDb();
-});
+}, 30000);
 
 afterAll(async () => { await db.close(); });
 
