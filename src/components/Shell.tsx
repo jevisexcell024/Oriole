@@ -1,7 +1,8 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
-  LogOut, LayoutDashboard, BookOpen, BarChart3, CalendarCheck, CalendarDays, Megaphone, User, Dumbbell, Menu, X, ChevronsLeft, LayoutGrid, Bell,
+  LogOut, LayoutDashboard, BookOpen, BarChart3, CalendarDays, Megaphone, User, Menu, X, ChevronsLeft, LayoutGrid, Bell,
+  MessageCircle, Library, GraduationCap, Clock,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { NotificationsBell } from "@/components/Announcements";
@@ -16,18 +17,28 @@ function greetingKeyFor(d: Date) {
   return h < 12 ? "greeting.morning" : h < 18 ? "greeting.afternoon" : "greeting.evening";
 }
 
-// Student portal navigation. (Certificates and Payments intentionally excluded.)
-const NAV = [
-  { to: "/dashboard", labelKey: "nav.dashboard", icon: LayoutDashboard },
-  { to: "/exams", labelKey: "nav.myExams", icon: BookOpen },
-  { to: "/calendar", labelKey: "nav.calendar", icon: CalendarDays },
-  { to: "/results", labelKey: "nav.myResults", icon: BarChart3 },
-  { to: "/attendance", labelKey: "nav.attendance", icon: CalendarCheck },
-  { to: "/announcements", labelKey: "nav.announcements", icon: Megaphone },
-  { to: "/inbox", labelKey: "nav.inbox", icon: Bell },
-  { to: "/profile", labelKey: "nav.profile", icon: User },
-  { to: "/practice", labelKey: "nav.practiceTests", icon: Dumbbell },
+// Student portal navigation, grouped into sections. (Certificates, Payments,
+// Attendance and Practice Tests intentionally excluded from the sidebar —
+// their routes still work, just aren't linked here.)
+const NAV_SECTIONS: { titleKey?: string; items: { to: string; labelKey: string; icon: typeof LayoutDashboard }[] }[] = [
+  { items: [
+    { to: "/dashboard", labelKey: "nav.dashboard", icon: LayoutDashboard },
+    { to: "/exams", labelKey: "nav.myExams", icon: BookOpen },
+    { to: "/calendar", labelKey: "nav.calendar", icon: CalendarDays },
+    { to: "/results", labelKey: "nav.myResults", icon: BarChart3 },
+  ] },
+  { titleKey: "nav.sectionCommunication", items: [
+    { to: "/announcements", labelKey: "nav.announcements", icon: Megaphone },
+    { to: "/inbox", labelKey: "nav.inbox", icon: Bell },
+    { to: "/chat", labelKey: "nav.chat", icon: MessageCircle },
+  ] },
+  { titleKey: "nav.sectionStudyMaterials", items: [
+    { to: "/library", labelKey: "nav.library", icon: Library },
+    { to: "/learning-materials", labelKey: "nav.learningMaterials", icon: GraduationCap },
+    { to: "/timetable", labelKey: "nav.timetable", icon: Clock },
+  ] },
 ];
+const NAV = NAV_SECTIONS.flatMap((s) => s.items);
 
 export function Shell({ children }: { children: ReactNode }) {
   const { user, logout } = useAuth();
@@ -87,22 +98,35 @@ export function Shell({ children }: { children: ReactNode }) {
         </div>
 
         <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-5">
-          {NAV.map((n) => {
-            const active = isActive(n.to);
-            return (
-              <Link key={n.to} to={n.to}
-                title={collapsed ? t(n.labelKey) : undefined}
-                className={clsx("group relative flex items-center gap-2.5 rounded-[3px] px-3 py-2 text-[13px] font-medium transition",
-                  collapsed && "lg:justify-center lg:px-0",
-                  active
-                    ? "bg-[#c6ff34] text-[#111110]"
-                    : "text-[#D7E3E6] hover:bg-[#c6ff34] hover:text-[#111110]")}>
-                {active && <span className="absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-full bg-[#111110]" />}
-                <n.icon className={clsx("h-4 w-4 shrink-0 transition-colors", active ? "text-[#111110]" : "text-[#9FBCC2] group-hover:text-[#111110]")} />
-                <span className={clsx("flex-1", collapsed && "lg:hidden")}>{t(n.labelKey)}</span>
-              </Link>
-            );
-          })}
+          {NAV_SECTIONS.map((section, si) => (
+            <div key={si} className={clsx(si > 0 && "mt-4")}>
+              {section.titleKey && (
+                <p className={clsx(
+                  "px-3 pb-1.5 pt-1 text-[10px] font-bold uppercase tracking-wider text-[#6E7C87]",
+                  collapsed && "lg:hidden",
+                )}>
+                  {t(section.titleKey)}
+                </p>
+              )}
+              {si > 0 && collapsed && <div className="mx-2 mb-1.5 hidden border-t border-[var(--border)] lg:block" />}
+              {section.items.map((n) => {
+                const active = isActive(n.to);
+                return (
+                  <Link key={n.to} to={n.to}
+                    title={collapsed ? t(n.labelKey) : undefined}
+                    className={clsx("group relative flex items-center gap-2.5 rounded-[3px] px-3 py-2 text-[13px] font-medium transition",
+                      collapsed && "lg:justify-center lg:px-0",
+                      active
+                        ? "bg-[#c6ff34] text-[#111110]"
+                        : "text-[#D7E3E6] hover:bg-[#c6ff34] hover:text-[#111110]")}>
+                    {active && <span className="absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-full bg-[#111110]" />}
+                    <n.icon className={clsx("h-4 w-4 shrink-0 transition-colors", active ? "text-[#111110]" : "text-[#9FBCC2] group-hover:text-[#111110]")} />
+                    <span className={clsx("flex-1", collapsed && "lg:hidden")}>{t(n.labelKey)}</span>
+                  </Link>
+                );
+              })}
+            </div>
+          ))}
         </nav>
 
         {/* User (→ profile) + sign out */}

@@ -18,6 +18,10 @@ import { PracticeTests } from "@/pages/PracticeTests";
 import { StudentCalendar, AdminCalendar } from "@/pages/Calendar";
 import { AdminItemAnalysis } from "@/pages/AdminItemAnalysis";
 import { StudentInbox, AdminInbox } from "@/pages/Inbox";
+import { Chat } from "@/pages/Chat";
+import { Library } from "@/pages/Library";
+import { LearningMaterials } from "@/pages/LearningMaterials";
+import { Timetable } from "@/pages/Timetable";
 import { Checkin } from "@/pages/Checkin";
 import { Session } from "@/pages/Session";
 import { Result } from "@/pages/Result";
@@ -100,6 +104,10 @@ function App() {
         <Route path="/practice" element={<Protected><PracticeTests /></Protected>} />
         <Route path="/calendar" element={<Protected><StudentCalendar /></Protected>} />
         <Route path="/inbox" element={<Protected><StudentInbox /></Protected>} />
+        <Route path="/chat" element={<Protected><Chat /></Protected>} />
+        <Route path="/library" element={<Protected><Library /></Protected>} />
+        <Route path="/learning-materials" element={<Protected><LearningMaterials /></Protected>} />
+        <Route path="/timetable" element={<Protected><Timetable /></Protected>} />
         <Route path="/exams/:registrationId/checkin" element={<Protected><Checkin /></Protected>} />
         <Route path="/attempts/:attemptId/session" element={<Protected><Session /></Protected>} />
         <Route path="/attempts/:attemptId/result" element={<Protected><Result /></Protected>} />
