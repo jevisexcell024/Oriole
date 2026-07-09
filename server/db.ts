@@ -7,10 +7,11 @@ import { fileURLToPath } from "node:url";
 import { randomBytes, createHash } from "node:crypto";
 import { encryptString } from "./crypto.ts";
 import type {
-  User, Exam, Question, Registration, Attempt, Answer, ProctorEvent, Certificate, Snapshot, EmailMessage, Announcement, OrgSettings, AuditLog,
-  Faculty, Department, Program, Campus, AcademicYear, ClassGroup, RegradeRequest,
+  User, Exam, Question, Registration, Attempt, Answer, ProctorEvent, Certificate, Snapshot, EmailMessage, Announcement, AnnouncementRead, OrgSettings, AuditLog,
+  Faculty, Department, Program, Campus, AcademicYear, ClassGroup, RegradeRequest, Book, ReadingProgress,
+  ResourceVersion, ResourceBookmark, ResourceRating, ResourceDownloadLog,
 } from "../shared/types.ts";
-import { DEFAULT_LOCKDOWN } from "../shared/types.ts";
+import { DEFAULT_LOCKDOWN, DEFAULT_LEARNING_STRUCTURE } from "../shared/types.ts";
 
 export interface Schema {
   users: User[];
@@ -36,6 +37,13 @@ export interface Schema {
   academicYears: AcademicYear[];
   classes: ClassGroup[];
   regradeRequests: RegradeRequest[];
+  books: Book[];
+  readingProgress: ReadingProgress[];
+  resourceVersions: ResourceVersion[];
+  resourceBookmarks: ResourceBookmark[];
+  resourceRatings: ResourceRating[];
+  resourceDownloadLogs: ResourceDownloadLog[];
+  announcementReads: AnnouncementRead[];
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -45,6 +53,9 @@ const defaultData: Schema = {
   attempts: [], certificates: [], announcements: [],
   settings: [],
   faculties: [], departments: [], programs: [], campuses: [], academicYears: [], classes: [], regradeRequests: [],
+  books: [], readingProgress: [],
+  resourceVersions: [], resourceBookmarks: [], resourceRatings: [], resourceDownloadLogs: [],
+  announcementReads: [],
 };
 
 // Each collection is stored in a Postgres table as (id, doc jsonb). This keeps a
@@ -66,6 +77,13 @@ const TABLES: { key: keyof Schema; table: string; idField: string }[] = [
   { key: "academicYears", table: "academic_years", idField: "id" },
   { key: "classes", table: "class_groups", idField: "id" },
   { key: "regradeRequests", table: "regrade_requests", idField: "id" },
+  { key: "books", table: "books", idField: "id" },
+  { key: "readingProgress", table: "reading_progress", idField: "id" },
+  { key: "resourceVersions", table: "resource_versions", idField: "id" },
+  { key: "resourceBookmarks", table: "resource_bookmarks", idField: "id" },
+  { key: "resourceRatings", table: "resource_ratings", idField: "id" },
+  { key: "resourceDownloadLogs", table: "resource_download_logs", idField: "id" },
+  { key: "announcementReads", table: "announcement_reads", idField: "id" },
 ];
 
 const TABLE_BY_KEY = new Map(TABLES.map((t) => [t.key, t]));
@@ -590,6 +608,21 @@ export async function initDb() {
   for (const att of db.data.attempts) {
     if (att.status === "submitted" && !att.gradingStatus) { att.gradingStatus = "released"; changed = true; }
   }
+  // DLRMS backfill for books created before the resource-type/visibility/
+  // versioning/engagement fields existed. Existing books were effectively
+  // "live" already, so they become resourceType "eBook", status "published",
+  // institution-wide visibility, version 1, zeroed counters.
+  for (const book of db.data.books) {
+    if (!book.resourceType) { book.resourceType = "eBook"; changed = true; }
+    if (!book.visibility) { book.visibility = { scope: "institution", classIds: [], studentIds: [] }; changed = true; }
+    if (!book.status) { book.status = "published"; changed = true; }
+    if (book.canDownload === undefined) { book.canDownload = true; changed = true; }
+    if (book.canPreview === undefined) { book.canPreview = true; changed = true; }
+    if (book.version === undefined) { book.version = 1; changed = true; }
+    if (book.viewCount === undefined) { book.viewCount = 0; changed = true; }
+    if (book.downloadCount === undefined) { book.downloadCount = 0; changed = true; }
+  }
+
   // Ensure the single org-settings record exists; backfill new profile fields.
   let org = db.data.settings.find((s) => s.id === "org");
   if (!org) {
@@ -605,6 +638,7 @@ export async function initDb() {
   if (org.accreditation === undefined) { org.accreditation = ""; changed = true; }
   if (org.phone === undefined) { org.phone = ""; changed = true; }
   if (org.address === undefined) { org.address = ""; changed = true; }
+  if (!org.learningStructure) { org.learningStructure = { ...DEFAULT_LEARNING_STRUCTURE }; changed = true; }
 
   // Bootstrap a permanent admin account if one with this email doesn't exist.
   // Override via env in production (ADMIN_EMAIL / ADMIN_PASSWORD / ADMIN_NAME).

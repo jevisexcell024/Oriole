@@ -1,16 +1,20 @@
 import { useEffect, useState } from "react";
 import {
-  Building2, Loader2, Save, CheckCircle2, GraduationCap, BookOpen, Library, MapPin, CalendarRange, Plus, Trash2,
+  Building2, Loader2, Save, CheckCircle2, GraduationCap, BookOpen, Library, MapPin, CalendarRange, Plus, Trash2, Layers,
 } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
 import { PageHeader } from "@/components/PageHeader";
 import { api } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { invalidateLearningStructureCache } from "@/lib/learningStructure";
+import type { LearningStructureConfig, LearningStructureMode } from "@shared/types";
+import { LEARNING_STRUCTURE_MODES, DEFAULT_LEARNING_STRUCTURE } from "@shared/types";
 import { clsx } from "clsx";
 
 interface Settings {
   id: string; name: string; type?: string; accreditation?: string; website: string; phone?: string; address?: string; plan?: string;
   supportEmail: string; timezone: string; defaultPassingScore: number; defaultProctored: boolean; autoConfirmEnrollment: boolean;
+  learningStructure?: LearningStructureConfig;
 }
 interface Faculty { id: string; name: string; }
 interface Department { id: string; name: string; facultyId?: string | null; }
@@ -25,6 +29,7 @@ interface Inst {
 
 const TABS = [
   { key: "overview", labelKey: "aorg.tabOverview", icon: Building2 },
+  { key: "structure", labelKey: "aorg.tabStructure", icon: Layers },
   { key: "faculties", labelKey: "aorg.faculties", icon: GraduationCap },
   { key: "departments", labelKey: "aorg.departments", icon: BookOpen },
   { key: "programs", labelKey: "aorg.programs", icon: Library },
@@ -140,6 +145,8 @@ export function AdminOrganization() {
               </div>
             </div>
           </div>
+        ) : tab === "structure" ? (
+          <LearningStructureTab config={data.settings.learningStructure ?? DEFAULT_LEARNING_STRUCTURE} onChanged={load} />
         ) : tab === "faculties" ? (
           <SimpleTab kind="faculties" title={t("aorg.faculties")} placeholder={t("aorg.facultyPh")} empty={t("aorg.noFaculties")} items={data.faculties} onChanged={load} />
         ) : tab === "departments" ? (
@@ -314,6 +321,82 @@ function AcademicYearsTab({ items, onChanged }: { items: AcademicYear[]; onChang
       </div>
       <List items={items} onDelete={del} empty={t("aorg.noYears")}
         render={(y) => <>{y.name}{y.current && <span className="ml-2 rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-semibold text-emerald-400">{t("aorg.current")}</span>}{(y.startDate || y.endDate) && <span className="ml-2 text-xs text-[var(--muted)]">· {fmt(y.startDate)} – {fmt(y.endDate)}</span>}</>} />
+    </Panel>
+  );
+}
+
+const MODE_META: Record<LearningStructureMode, { labelKey: string; descKey: string }> = {
+  academic: { labelKey: "aorg.modeAcademic", descKey: "aorg.modeAcademicDesc" },
+  cohort: { labelKey: "aorg.modeCohort", descKey: "aorg.modeCohortDesc" },
+  hybrid: { labelKey: "aorg.modeHybrid", descKey: "aorg.modeHybridDesc" },
+};
+
+function LearningStructureTab({ config, onChanged }: { config: LearningStructureConfig; onChanged: () => void }) {
+  const t = useT();
+  const [draft, setDraft] = useState<LearningStructureConfig>(config);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  useEffect(() => { setDraft(config); }, [config]);
+
+  const patch = (p: Partial<LearningStructureConfig>) => setDraft((d) => ({ ...d, ...p }));
+
+  const save = async () => {
+    setSaving(true); setMsg(null);
+    try {
+      await api.patch("/admin/settings", { learningStructure: draft });
+      invalidateLearningStructureCache();
+      setMsg(t("aorg.saved"));
+      onChanged();
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <Panel title={t("aorg.tabStructure")}>
+      <p className="text-sm text-[var(--muted)]">{t("aorg.structureSubtitle")}</p>
+
+      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {LEARNING_STRUCTURE_MODES.map((mode) => {
+          const meta = MODE_META[mode];
+          const active = draft.mode === mode;
+          return (
+            <button key={mode} onClick={() => patch({ mode })}
+              className={clsx("rounded-xl border p-4 text-left transition",
+                active ? "border-[var(--color-navy)] bg-[var(--color-navy)]/10" : "border-[var(--border)] hover:border-white/20")}>
+              <p className="text-sm font-bold">{t(meta.labelKey)}</p>
+              <p className="mt-1 text-xs text-[var(--muted)]">{t(meta.descKey)}</p>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {([
+          ["useAcademicYears", "aorg.useAcademicYears"],
+          ["useSemesters", "aorg.useSemesters"],
+          ["useLevels", "aorg.useLevels"],
+          ["useCohorts", "aorg.useCohorts"],
+        ] as const).map(([key, labelKey]) => (
+          <label key={key} className="flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2.5 text-sm">
+            <input type="checkbox" checked={draft[key]} onChange={(e) => patch({ [key]: e.target.checked } as Partial<LearningStructureConfig>)} />
+            {t(labelKey)}
+          </label>
+        ))}
+      </div>
+
+      <h3 className="mt-6 text-sm font-bold">{t("aorg.terminology")}</h3>
+      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Field label={t("aorg.academicYearLabel")}><input className="input h-10" value={draft.academicYearLabel} onChange={(e) => patch({ academicYearLabel: e.target.value })} /></Field>
+        <Field label={t("aorg.semesterLabel")}><input className="input h-10" value={draft.semesterLabel} onChange={(e) => patch({ semesterLabel: e.target.value })} /></Field>
+        <Field label={t("aorg.levelLabel")}><input className="input h-10" value={draft.levelLabel} onChange={(e) => patch({ levelLabel: e.target.value })} /></Field>
+        <Field label={t("aorg.cohortLabel")}><input className="input h-10" value={draft.cohortLabel} onChange={(e) => patch({ cohortLabel: e.target.value })} /></Field>
+      </div>
+
+      <div className="mt-5 flex items-center gap-3">
+        <button onClick={save} disabled={saving} className="btn btn-primary disabled:opacity-50">
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} {t("aorg.saveStructure")}
+        </button>
+        {msg && <span className="inline-flex items-center gap-1.5 text-sm text-emerald-400"><CheckCircle2 className="h-4 w-4" /> {msg}</span>}
+      </div>
     </Panel>
   );
 }

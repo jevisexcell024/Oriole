@@ -1,6 +1,6 @@
 ﻿import { type ReactNode, useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { LogOut, BookOpen, BarChart3, Radio, CalendarClock, CalendarDays, LineChart, Award, Users, ClipboardCheck, GraduationCap, CalendarCheck, Bell, ShieldAlert, FileText, HeartPulse, Building2, ScrollText, Settings, LayoutDashboard, Users2, Menu, X, ChevronsLeft, MessageSquareWarning, Webhook } from "lucide-react";
+import { LogOut, BookOpen, BarChart3, Radio, CalendarClock, CalendarDays, LineChart, Award, Users, ClipboardCheck, GraduationCap, CalendarCheck, Bell, ShieldAlert, FileText, HeartPulse, Building2, ScrollText, Settings, LayoutDashboard, Users2, Menu, X, ChevronsLeft, MessageSquareWarning, Webhook, Library } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { useT } from "@/lib/i18n";
 import { can, type Cap } from "@/lib/roles";
@@ -26,6 +26,7 @@ const SECTIONS: { labelKey: string; items: NavItem[] }[] = [
       { to: "/admin/analytics", labelKey: "anav.analytics", icon: LineChart, cap: "results" },
       { to: "/admin/candidates", labelKey: "anav.students", icon: Users, cap: "students" },
       { to: "/admin/classes", labelKey: "anav.classes", icon: Users2, cap: "exams" },
+      { to: "/admin/library", labelKey: "anav.library", icon: Library, cap: "org" },
       { to: "/admin/grading", labelKey: "anav.grading", icon: ClipboardCheck, cap: "grading" },
       { to: "/admin/regrades", labelKey: "anav.regrades", icon: MessageSquareWarning, cap: "grading" },
       { to: "/admin/results", labelKey: "anav.results", icon: BarChart3, cap: "results" },

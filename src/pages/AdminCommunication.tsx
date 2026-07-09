@@ -15,7 +15,7 @@ type Channel = "in_app" | "email" | "sms" | "whatsapp";
 interface Announcement {
   id: string; title: string; message: string; audience: string; priority: string;
   channels: Channel[]; status: string; scheduledFor: string | null; createdAt: string;
-  sentAt: string | null; emailedCount?: number;
+  sentAt: string | null; emailedCount?: number; pinned?: boolean; department?: string;
 }
 interface Kpis { total: number; sent: number; scheduled: number; drafts: number; }
 interface MailerStatus { mode: string; live: boolean; from: string; host: string | null; lastError: string | null; }
@@ -25,7 +25,7 @@ interface ExamOpt { id: string; title: string }
 const fmt = (s: string | null) => (s ? new Date(s).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—");
 
 const PRIORITY_TONE: Record<string, string> = {
-  normal: "bg-[var(--card-2)] text-[var(--muted)]", high: "bg-amber-500/20 text-amber-400", urgent: "bg-rose-500/20 text-rose-400",
+  normal: "bg-[var(--card-2)] text-[var(--muted)]", high: "bg-blue-500/20 text-blue-400", urgent: "bg-rose-500/20 text-rose-400",
 };
 const STATUS_TONE: Record<string, string> = {
   sent: "bg-emerald-500/20 text-emerald-400", scheduled: "bg-blue-500/20 text-blue-400", draft: "bg-orange-500/20 text-orange-400",
@@ -169,6 +169,8 @@ function NewAnnouncementModal({ t, mailer, onClose, onCreated }: { t: TFn; maile
   const [priority, setPriority] = useState("normal");
   const [channels, setChannels] = useState<Channel[]>(["in_app"]);
   const [scheduledFor, setScheduledFor] = useState("");
+  const [department, setDepartment] = useState("");
+  const [pinned, setPinned] = useState(false);
   const [busy, setBusy] = useState<"send" | "draft" | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -179,7 +181,7 @@ function NewAnnouncementModal({ t, mailer, onClose, onCreated }: { t: TFn; maile
     setBusy(draft ? "draft" : "send"); setErr(null);
     try {
       await api.post("/admin/announcements", {
-        title, message, audience, priority, channels,
+        title, message, audience, priority, channels, department: department.trim() || undefined, pinned,
         scheduledFor: scheduledFor ? new Date(scheduledFor).toISOString() : null, draft,
       });
       onCreated();
@@ -243,8 +245,17 @@ function NewAnnouncementModal({ t, mailer, onClose, onCreated }: { t: TFn; maile
           {smsWarn && <p className="mt-1.5 text-[11px] text-amber-400">{t("acom.smsWarn")}</p>}
         </div>
 
-        <label className="mt-3 block text-sm font-medium">{t("acom.fldSchedule")} <span className="font-normal text-[var(--muted)]">{t("acom.scheduleOpt")}</span>
-          <input type="datetime-local" className="input mt-1 h-10" value={scheduledFor} onChange={(e) => setScheduledFor(e.target.value)} />
+        <div className="mt-3 grid grid-cols-2 gap-3">
+          <label className="block text-sm font-medium">{t("acom.fldDepartment")}
+            <input className="input mt-1 h-10" placeholder={t("acom.departmentPh")} value={department} onChange={(e) => setDepartment(e.target.value)} />
+          </label>
+          <label className="mt-3 block text-sm font-medium">{t("acom.fldSchedule")} <span className="font-normal text-[var(--muted)]">{t("acom.scheduleOpt")}</span>
+            <input type="datetime-local" className="input mt-1 h-10" value={scheduledFor} onChange={(e) => setScheduledFor(e.target.value)} />
+          </label>
+        </div>
+
+        <label className="mt-3 flex items-center gap-2 text-sm font-medium">
+          <input type="checkbox" checked={pinned} onChange={(e) => setPinned(e.target.checked)} /> {t("acom.fldPinned")}
         </label>
 
         {err && <p className="mt-3 text-sm text-rose-400">{err}</p>}

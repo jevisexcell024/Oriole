@@ -17,7 +17,8 @@
     "typecheck": "tsc -b",
     "test": "vitest run",
     "test:watch": "vitest",
-    "loadtest": "node scripts/load-test.mjs"
+    "loadtest": "node scripts/load-test.mjs",
+    "deploy:zip": "npm run build:cpanel && powershell -ExecutionPolicy Bypass -File scripts/package-deploy.ps1"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.2",
@@ -38,6 +39,7 @@
     "mammoth": "^1.12.0",
     "nanoid": "^5.0.9",
     "nodemailer": "^9.0.1",
+    "pdf-lib": "^1.17.1",
     "pg": "^8.21.0",
     "pino": "^10.3.1",
     "pino-http": "^11.0.0",

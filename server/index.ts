@@ -1,4 +1,5 @@
 import express from "express";
+import { PDFDocument, StandardFonts } from "pdf-lib";
 import type { Request, Response } from "express";
 import cookieParser from "cookie-parser";
 import bcrypt from "bcryptjs";
@@ -38,8 +39,13 @@ const STAFF: ("admin" | "facilitator" | "proctor")[] = ["admin", "facilitator", 
 const GRADERS: ("admin" | "facilitator")[] = ["admin", "facilitator"];
 import type {
   Answer, Attempt, Certificate, Exam, ExamListItem, ProctorEvent, PublicQuestion, Question, Registration, RubricCriterion, RegradeRequest, WebhookEvent,
+  Book, BookGenre, ReadingProgress, ResourceType, ResourceDifficulty, ResourceVersion, ResourceBookmark, ResourceRating, ResourceDownloadLog, User,
+  LearningStructureMode, AnnouncementRead,
 } from "../shared/types.ts";
-import { DEFAULT_LOCKDOWN, WEBHOOK_EVENTS, PROCTOR_EVENT_TYPES } from "../shared/types.ts";
+import {
+  DEFAULT_LOCKDOWN, WEBHOOK_EVENTS, PROCTOR_EVENT_TYPES, BOOK_GENRES, RESOURCE_TYPES, RESOURCE_DIFFICULTIES,
+  LEARNING_STRUCTURE_MODES, DEFAULT_LEARNING_STRUCTURE,
+} from "../shared/types.ts";
 
 /** Per-severity weight deducted from the integrity score for each logged violation. */
 const SEVERITY_WEIGHT: Record<string, number> = { high: 12, warning: 5, info: 0 };
@@ -150,6 +156,10 @@ app.use((req, res, next) => {
 
 app.use(httpLogger); // structured request/response logging
 app.use(securityHeaders); // helmet security headers
+// Library book uploads (PDF documents) need more headroom than the global
+// 2mb cap. Mounted BEFORE the global parser so it wins for this one path —
+// body-parser is a no-op on a second pass once the body is already parsed.
+app.use("/api/admin/books", express.json({ limit: "25mb" }));
 app.use(express.json({ limit: "2mb" })); // webcam snapshots / verification photos
 app.use(cookieParser());
 app.use("/api/auth/login", authLimiter); // brute-force protection on credentials
@@ -384,7 +394,8 @@ app.get("/api/exams", requireAuth, async (req, res) => {
       db.data!.attempts
         .filter((a) => a.registrationId === registration!.id)
         .sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0] ?? null;
-    items.push({ registration, exam, attempt });
+    const questionCount = db.data!.questions.filter((q) => q.examId === exam.id).length;
+    items.push({ registration, exam, attempt, questionCount });
   }
 
   if (mutated) await db.write();
@@ -1509,7 +1520,7 @@ app.get("/api/admin/exams/:id", requireRole("admin"), (req, res) => {
 });
 
 // ---- admin: candidates & assignment ----
-app.get("/api/admin/candidates", requireRole("admin"), (_req, res) => {
+app.get("/api/admin/candidates", requireRoles(...GRADERS), (_req, res) => {
   const candidates = db.data!.users
     .filter((u) => u.role === "candidate")
     .map((u) => ({ id: u.id, name: u.name, email: u.email }));
@@ -3288,7 +3299,7 @@ app.get("/api/admin/announcements", requireRoles(...GRADERS), (_req, res) => {
 
 app.post("/api/admin/announcements", requireRoles(...GRADERS), async (req, res) => {
   const user = currentUser(req)!;
-  const { title, message, audience, priority, channels, scheduledFor, draft } = req.body ?? {};
+  const { title, message, audience, priority, channels, scheduledFor, draft, pinned, department } = req.body ?? {};
   if (!title?.trim() || !message?.trim()) return res.status(400).json({ error: "Title and message are required." });
 
   const validChannels = ["in_app", "email", "sms", "whatsapp"];
@@ -3323,6 +3334,8 @@ app.post("/api/admin/announcements", requireRoles(...GRADERS), async (req, res) 
     sentAt: status === "sent" ? now() : null,
     emailedCount,
     createdBy: user.id,
+    pinned: !!pinned,
+    department: typeof department === "string" ? department.trim().slice(0, 80) : undefined,
   };
   db.data!.announcements.push(ann);
   await db.upsert("announcements", ann);
@@ -3440,6 +3453,33 @@ app.get("/api/my/summary", requireAuth, async (req, res) => {
   });
 });
 
+// The candidate's own monthly average score alongside an anonymized
+// institution-wide average for the same months — no other candidate's
+// individual data is exposed, just an aggregate.
+app.get("/api/my/score-trend", requireAuth, (req, res) => {
+  const user = currentUser(req)!;
+  const monthKey = (iso: string) => iso.slice(0, 7); // "YYYY-MM"
+  const submitted = db.data!.attempts.filter((a) => a.status === "submitted" && a.submittedAt && typeof a.score === "number" && !examById(a.examId)?.practice);
+
+  const months: string[] = [];
+  const cursor = new Date();
+  cursor.setDate(1);
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(cursor.getFullYear(), cursor.getMonth() - i, 1);
+    months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+  }
+
+  const trend = months.map((key) => {
+    const inMonth = submitted.filter((a) => monthKey(a.submittedAt!) === key);
+    const mine = inMonth.filter((a) => a.candidateId === user.id);
+    const avg = (rows: typeof inMonth) => rows.length ? Math.round(rows.reduce((s, a) => s + (a.score ?? 0), 0) / rows.length) : null;
+    const label = new Date(`${key}-01`).toLocaleDateString(undefined, { month: "short" });
+    return { month: label, myScore: avg(mine), classAvg: avg(inMonth) };
+  });
+
+  res.json({ trend });
+});
+
 app.get("/api/practice", requireAuth, async (req, res) => {
   const user = currentUser(req)!;
   const practiceExams = db.data!.exams.filter((e) => e.status === "published" && e.practice);
@@ -3465,11 +3505,43 @@ app.get("/api/practice", requireAuth, async (req, res) => {
 app.get("/api/announcements", requireAuth, (req, res) => {
   const u = currentUser(req)!;
   const auds = u.role === "candidate" ? ["everyone", "students"] : ["everyone", "admins"];
+  const myReads = new Set(db.data!.announcementReads.filter((r) => r.candidateId === u.id).map((r) => r.announcementId));
   const announcements = db.data!.announcements
     .filter((a) => a.status === "sent" && a.channels.includes("in_app") && auds.includes(a.audience))
     .sort((a, b) => (b.sentAt ?? b.createdAt).localeCompare(a.sentAt ?? a.createdAt))
-    .map((a) => ({ id: a.id, title: a.title, message: a.message, priority: a.priority, sentAt: a.sentAt ?? a.createdAt }));
+    .map((a) => ({
+      id: a.id, title: a.title, message: a.message, priority: a.priority, sentAt: a.sentAt ?? a.createdAt,
+      pinned: !!a.pinned, department: a.department ?? null,
+      author: db.data!.users.find((x) => x.id === a.createdBy)?.name ?? "Administration",
+      read: myReads.has(a.id),
+    }));
   res.json({ announcements });
+});
+
+app.post("/api/announcements/:id/read", requireAuth, async (req, res) => {
+  const u = currentUser(req)!;
+  const id = String(req.params.id);
+  if (!db.data!.announcements.some((a) => a.id === id)) return res.status(404).json({ error: "Announcement not found." });
+  if (!db.data!.announcementReads.some((r) => r.announcementId === id && r.candidateId === u.id)) {
+    const read: AnnouncementRead = { id: nanoid(10), announcementId: id, candidateId: u.id, readAt: now() };
+    db.data!.announcementReads.push(read);
+    await db.upsert("announcementReads", read);
+  }
+  res.json({ ok: true });
+});
+
+app.post("/api/announcements/read-all", requireAuth, async (req, res) => {
+  const u = currentUser(req)!;
+  const auds = u.role === "candidate" ? ["everyone", "students"] : ["everyone", "admins"];
+  const visible = db.data!.announcements.filter((a) => a.status === "sent" && a.channels.includes("in_app") && auds.includes(a.audience));
+  const already = new Set(db.data!.announcementReads.filter((r) => r.candidateId === u.id).map((r) => r.announcementId));
+  for (const a of visible) {
+    if (already.has(a.id)) continue;
+    const read: AnnouncementRead = { id: nanoid(10), announcementId: a.id, candidateId: u.id, readAt: now() };
+    db.data!.announcementReads.push(read);
+    await db.upsert("announcementReads", read);
+  }
+  res.json({ ok: true });
 });
 
 // Unified notification feed — derived from live data (no stored model). Candidates
@@ -3503,6 +3575,14 @@ app.get("/api/notifications", requireAuth, (req, res) => {
     }
     for (const a of db.data!.announcements.filter((x) => x.status === "sent" && x.channels.includes("in_app") && ["everyone", "students"].includes(x.audience))) {
       items.push({ id: `ann-${a.id}`, type: "announcement", title: a.title, body: a.message, at: a.sentAt ?? a.createdAt, link: "/announcements" });
+    }
+    // New/updated library resources the student can see, published in the last 14 days.
+    const recentCutoff = now - 14 * 24 * 3600_000;
+    for (const b of db.data!.books.filter((x) => x.status === "published" && studentCanSeeBook(x, u))) {
+      const at = b.updatedAt ?? b.createdAt;
+      if (new Date(at).getTime() > recentCutoff) {
+        items.push({ id: `book-${b.id}-${at}`, type: "resource", title: `New library resource: ${b.title}`, body: `${b.resourceType} added to the library.`, at, link: "/library" });
+      }
     }
   } else {
     const pending = db.data!.attempts.filter((a) => a.gradingStatus === "pending_review").length;
@@ -3842,9 +3922,33 @@ app.patch("/api/admin/settings", requireRole("admin"), async (req, res) => {
   if (b.digestFrequency === "off" || b.digestFrequency === "daily" || b.digestFrequency === "weekly") s.digestFrequency = b.digestFrequency;
   if (typeof b.auditRetentionDays === "number") s.auditRetentionDays = Math.max(0, Math.min(3650, Math.floor(b.auditRetentionDays)));
   if (typeof b.smsReminders === "boolean") s.smsReminders = b.smsReminders;
+  if (b.learningStructure && typeof b.learningStructure === "object") {
+    const ls = b.learningStructure as Record<string, unknown>;
+    const current = s.learningStructure ?? DEFAULT_LEARNING_STRUCTURE;
+    const mode = LEARNING_STRUCTURE_MODES.includes(ls.mode as LearningStructureMode) ? (ls.mode as LearningStructureMode) : current.mode;
+    s.learningStructure = {
+      mode,
+      useAcademicYears: typeof ls.useAcademicYears === "boolean" ? ls.useAcademicYears : current.useAcademicYears,
+      useSemesters: typeof ls.useSemesters === "boolean" ? ls.useSemesters : current.useSemesters,
+      useLevels: typeof ls.useLevels === "boolean" ? ls.useLevels : current.useLevels,
+      useCohorts: typeof ls.useCohorts === "boolean" ? ls.useCohorts : current.useCohorts,
+      academicYearLabel: typeof ls.academicYearLabel === "string" && ls.academicYearLabel.trim() ? ls.academicYearLabel.trim() : current.academicYearLabel,
+      semesterLabel: typeof ls.semesterLabel === "string" && ls.semesterLabel.trim() ? ls.semesterLabel.trim() : current.semesterLabel,
+      levelLabel: typeof ls.levelLabel === "string" && ls.levelLabel.trim() ? ls.levelLabel.trim() : current.levelLabel,
+      cohortLabel: typeof ls.cohortLabel === "string" && ls.cohortLabel.trim() ? ls.cohortLabel.trim() : current.cohortLabel,
+    };
+  }
   await db.upsert("settings", s);
   await recordAudit(req, "settings.updated", "Updated organization settings");
   res.json({ settings: s });
+});
+
+// Foundational Learning Structure config (Academic/Cohort/Hybrid) — read by
+// any authenticated role, since every module eventually needs to know which
+// structural concepts are active for this institution. Write access stays
+// admin-only via PATCH /api/admin/settings above.
+app.get("/api/learning-structure", requireAuth, (_req, res) => {
+  res.json({ learningStructure: getSettings().learningStructure ?? DEFAULT_LEARNING_STRUCTURE });
 });
 
 // Send the admin summary digest immediately (covers the last 7 days).
@@ -3904,7 +4008,7 @@ const INSTITUTION_KINDS: Record<string, "faculties" | "departments" | "programs"
 };
 const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name);
 
-app.get("/api/admin/institution", requireRole("admin"), (_req, res) => {
+app.get("/api/admin/institution", requireRoles(...GRADERS), (_req, res) => {
   const d = db.data!;
   res.json({
     settings: getSettings(),
@@ -4293,7 +4397,7 @@ app.get("/api/admin/dashboard", requireRoles(...STAFF), async (_req, res) => {
 });
 
 // ---- admin: Classes (cohorts) ----
-app.get("/api/admin/classes", requireRole("admin"), (_req, res) => {
+app.get("/api/admin/classes", requireRoles(...GRADERS), (_req, res) => {
   const classes = [...db.data!.classes]
     .sort((a, b) => a.name.localeCompare(b.name))
     .map((c) => ({ id: c.id, name: c.name, code: c.code ?? "", description: c.description ?? "", members: c.memberIds.length, assignments: c.assignments.length }));
@@ -4361,6 +4465,558 @@ app.delete("/api/admin/classes/:id", requireRole("admin"), async (req, res) => {
   db.data!.classes = db.data!.classes.filter((c) => c.id !== req.params.id);
   await db.remove("classes", String(req.params.id));
   res.json({ ok: true });
+});
+
+// ---- admin: digital library / DLRMS ----
+// coverImage follows the exact same convention as Exam.coverImage: a
+// validated data:image/ URL, no separate file storage. There is no in-app
+// reader — externalUrl is an optional plain link to the resource's content
+// (the recommended way to reference lecture-length video/audio, since direct
+// upload is bounded by the data-URL-in-JSONB storage model below).
+const BOOK_FILE_MAX = 25_000_000; // matches the express.json limit set for this route
+const ALLOWED_RESOURCE_MIME = [
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document", // .docx
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation", // .pptx
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", // .xlsx
+  "application/zip", "application/x-zip-compressed",
+  "audio/mpeg", "audio/mp3", "video/mp4",
+  "image/jpeg", "image/png", "image/webp",
+];
+
+function sha256OfDataUrl(dataUrl: string): string {
+  return createHash("sha256").update(dataUrl.slice(dataUrl.indexOf(",") + 1), "base64").digest("hex");
+}
+function decodedByteLength(dataUrl: string): number {
+  return Buffer.byteLength(dataUrl.slice(dataUrl.indexOf(",") + 1), "base64");
+}
+
+/** Average rating (0 if none yet) and count for a resource — computed on
+ *  read since resourceRatings is small per-book, no need to denormalize. */
+function ratingSummary(bookId: string): { avg: number; count: number } {
+  const ratings = db.data!.resourceRatings.filter((r) => r.bookId === bookId);
+  if (!ratings.length) return { avg: 0, count: 0 };
+  return { avg: Math.round((ratings.reduce((s, r) => s + r.score, 0) / ratings.length) * 10) / 10, count: ratings.length };
+}
+
+/** Real access-control gate: institution-wide by default, or scoped to
+ *  specific classes (via ClassGroup.memberIds — the only real enrollment
+ *  primitive this app has) and/or specific students. Faculty/department/
+ *  programme/course/level are descriptive metadata only, not gates, since
+ *  User has no faculty/department/programme fields to check against. */
+function studentCanSeeBook(book: Book, user: User): boolean {
+  if (book.status !== "published") return false;
+  const nowIso = now();
+  if (book.availableFrom && book.availableFrom > nowIso) return false;
+  if (book.availableUntil && book.availableUntil < nowIso) return false;
+  if (book.visibility.scope === "institution") return true;
+  if (book.visibility.studentIds.includes(user.id)) return true;
+  return db.data!.classes.some((c) => book.visibility.classIds.includes(c.id) && c.memberIds.includes(user.id));
+}
+
+function studentsInScope(book: Book): User[] {
+  if (book.visibility.scope === "institution") return db.data!.users.filter((u) => u.role === "candidate");
+  const ids = new Set(book.visibility.studentIds);
+  for (const cls of db.data!.classes) if (book.visibility.classIds.includes(cls.id)) for (const id of cls.memberIds) ids.add(id);
+  return db.data!.users.filter((u) => u.role === "candidate" && ids.has(u.id));
+}
+
+/** Best-effort email fan-out when an admin/facilitator opts in to notify
+ *  students at publish time. In-app notification is separate — see the
+ *  derived /api/notifications feed below, which needs no opt-in. */
+async function notifyResourcePublished(book: Book) {
+  const url = `${env.appUrl}/library`;
+  const subject = `New library resource: ${book.title}`;
+  const text = `Hi,\n\nA new resource "${book.title}" (${book.resourceType}) has been added to the library.\n\nView it at ${url}\n\n— Oriole`;
+  const bodyHtml = `<p style="margin:0 0 12px;font-size:15px;color:#111827"><strong>New library resource</strong></p>
+     <p style="margin:0 0 16px">"${esc(book.title)}" (${esc(book.resourceType)}) has been added to the library.</p>
+     ${ctaButton("Open the library", url)}`;
+  for (const student of studentsInScope(book)) {
+    try { await sendMail(student.email, subject, text, buildHtml(bodyHtml, student.email)); } catch { /* best-effort */ }
+  }
+}
+
+// Sync field validation only — fileData's page count (if it's a PDF) is
+// detected asynchronously by detectPdfPageCount, since that requires
+// actually parsing the document.
+function validateBookBody(b: Record<string, unknown>): { errors: string[]; book: Partial<Book>; manualTotalPages: number | null; duplicateOf: { id: string; title: string } | null } {
+  const errors: string[] = [];
+  const title = String(b.title ?? "").trim();
+  const author = String(b.author ?? "").trim();
+  const genre = String(b.genre ?? BOOK_GENRES[0]);
+  const resourceType = String(b.resourceType ?? "") as ResourceType;
+  if (!title) errors.push("Title is required.");
+  if (!author) errors.push("Author is required.");
+  if (!RESOURCE_TYPES.includes(resourceType)) errors.push("A valid resource type is required.");
+  if (resourceType === "eBook" && !BOOK_GENRES.includes(genre as BookGenre)) errors.push("A valid genre is required for eBooks.");
+
+  const totalPagesRaw = Number(b.totalPages);
+  const manualTotalPages = Number.isFinite(totalPagesRaw) && totalPagesRaw >= 1 ? Math.round(totalPagesRaw) : null;
+
+  let coverImage: string | null = null;
+  if (typeof b.coverImage === "string" && b.coverImage.startsWith("data:image/") && b.coverImage.length < 1_500_000) {
+    coverImage = b.coverImage;
+  } else if (b.coverImage) {
+    errors.push("Cover image must be a valid image under ~1MB.");
+  }
+
+  let fileData: string | null = null;
+  let fileMime: string | null = null;
+  let fileSize: number | null = null;
+  let checksum: string | null = null;
+  let duplicateOf: { id: string; title: string } | null = null;
+  const fileName = typeof b.fileName === "string" ? b.fileName.trim().slice(0, 200) : null;
+  if (typeof b.fileData === "string" && b.fileData.startsWith("data:")) {
+    const mime = b.fileData.slice(5, b.fileData.indexOf(";"));
+    if (!ALLOWED_RESOURCE_MIME.includes(mime)) {
+      errors.push("Unsupported file type. Allowed: PDF, DOCX, PPTX, XLSX, ZIP, MP3, MP4, JPEG/PNG/WEBP.");
+    } else if (b.fileData.length >= BOOK_FILE_MAX) {
+      errors.push("The uploaded file must be under ~20MB. For lecture-length video/audio, use an external link instead.");
+    } else {
+      fileData = b.fileData;
+      fileMime = mime;
+      fileSize = decodedByteLength(b.fileData);
+      checksum = sha256OfDataUrl(b.fileData);
+      const existing = db.data!.books.find((bk) => bk.checksum === checksum);
+      if (existing) duplicateOf = { id: existing.id, title: existing.title };
+    }
+  } else if (b.fileData) {
+    errors.push("Invalid file upload.");
+  }
+
+  let externalUrl: string | null = null;
+  if (typeof b.externalUrl === "string" && b.externalUrl.trim()) {
+    try { externalUrl = new URL(b.externalUrl.trim()).toString(); }
+    catch { errors.push("The resource link must be a valid URL."); }
+  }
+
+  const tags = Array.isArray(b.tags) ? (b.tags as unknown[]).map((t) => String(t).trim()).filter(Boolean).slice(0, 20) : [];
+  const difficultyRaw = String(b.difficulty ?? "");
+  const difficulty: ResourceDifficulty | null = (RESOURCE_DIFFICULTIES as readonly string[]).includes(difficultyRaw) ? (difficultyRaw as ResourceDifficulty) : null;
+  const readingTimeRaw = Number(b.estimatedReadingTime);
+  const estimatedReadingTime = Number.isFinite(readingTimeRaw) && readingTimeRaw > 0 ? Math.round(readingTimeRaw) : null;
+
+  const faculty = db.data!.faculties.find((f) => f.id === b.facultyId);
+  const department = db.data!.departments.find((d) => d.id === b.departmentId);
+  const program = db.data!.programs.find((p) => p.id === b.programId);
+  const academicYear = db.data!.academicYears.find((y) => y.id === b.academicYearId);
+
+  const visibilityScope: "institution" | "scoped" = b.visibilityScope === "scoped" ? "scoped" : "institution";
+  const classIds = Array.isArray(b.classIds) ? (b.classIds as unknown[]).map(String).filter((id) => db.data!.classes.some((c) => c.id === id)) : [];
+  const studentIds = Array.isArray(b.studentIds) ? (b.studentIds as unknown[]).map(String).filter((id) => db.data!.users.some((u) => u.id === id && u.role === "candidate")) : [];
+
+  const status: "draft" | "published" = b.status === "published" ? "published" : "draft";
+
+  let availableFrom: string | null = null;
+  if (typeof b.availableFrom === "string" && b.availableFrom.trim()) {
+    const d = new Date(b.availableFrom);
+    if (Number.isNaN(d.getTime())) errors.push("Scheduled publish date is invalid.");
+    else availableFrom = d.toISOString();
+  }
+  let availableUntil: string | null = null;
+  if (typeof b.availableUntil === "string" && b.availableUntil.trim()) {
+    const d = new Date(b.availableUntil);
+    if (Number.isNaN(d.getTime())) errors.push("Expiry date is invalid.");
+    else availableUntil = d.toISOString();
+  }
+
+  const downloadLimitRaw = Number(b.downloadLimit);
+  const downloadLimit = Number.isFinite(downloadLimitRaw) && downloadLimitRaw > 0 ? Math.round(downloadLimitRaw) : null;
+
+  return {
+    errors, manualTotalPages, duplicateOf,
+    book: {
+      title, author, genre: genre as BookGenre, resourceType,
+      coverImage, fileData, fileName, fileMime, fileSize, checksum, externalUrl,
+      description: String(b.description ?? "").trim(),
+      summary: String(b.summary ?? "").trim() || undefined,
+      tags,
+      academicYearId: academicYear?.id ?? null, academicYearName: academicYear?.name ?? null,
+      semester: String(b.semester ?? "").trim() || undefined,
+      facultyId: faculty?.id ?? null, facultyName: faculty?.name ?? null,
+      departmentId: department?.id ?? null, departmentName: department?.name ?? null,
+      programId: program?.id ?? null, programName: program?.name ?? null,
+      course: String(b.course ?? "").trim() || undefined,
+      courseCode: String(b.courseCode ?? "").trim() || undefined,
+      level: String(b.level ?? "").trim() || undefined,
+      instructor: String(b.instructor ?? "").trim() || undefined,
+      publisher: String(b.publisher ?? "").trim() || undefined,
+      edition: String(b.edition ?? "").trim() || undefined,
+      isbn: String(b.isbn ?? "").trim() || undefined,
+      language: String(b.language ?? "").trim() || undefined,
+      difficulty,
+      estimatedReadingTime,
+      visibility: { scope: visibilityScope, classIds, studentIds },
+      status,
+      availableFrom, availableUntil,
+      canDownload: b.canDownload !== false,
+      canPreview: b.canPreview !== false,
+      downloadLimit,
+      watermarkPdf: !!b.watermarkPdf,
+    },
+  };
+}
+
+/** Parses an uploaded PDF's page count from its data: URL. Returns null (not
+ *  a thrown error) for non-PDF uploads or any other resource type — page
+ *  count isn't reliably derivable without a layout engine for those, so they
+ *  fall back to a manually-entered page count instead of hard-failing. */
+async function detectPdfPageCount(dataUrl: string): Promise<number | null> {
+  if (!dataUrl.startsWith("data:application/pdf")) return null;
+  try {
+    const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
+    const bytes = Buffer.from(base64, "base64");
+    const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+    return doc.getPageCount();
+  } catch {
+    return null;
+  }
+}
+
+app.get("/api/admin/books", requireRoles(...GRADERS), (_req, res) => {
+  const books = [...db.data!.books].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  res.json({ books });
+});
+
+app.post("/api/admin/books", requireRoles(...GRADERS), async (req, res) => {
+  const { errors, book: partial, manualTotalPages, duplicateOf } = validateBookBody(req.body ?? {});
+  if (errors.length) return res.status(400).json({ errors });
+
+  const detected = partial.fileData ? await detectPdfPageCount(partial.fileData) : null;
+  const totalPages = detected ?? manualTotalPages ?? 0;
+
+  const user = currentUser(req)!;
+  const book: Book = {
+    id: nanoid(10),
+    title: partial.title!, author: partial.author!, genre: partial.genre!, resourceType: partial.resourceType!, totalPages,
+    pagesAutoDetected: detected !== null,
+    coverImage: partial.coverImage ?? null, fileData: partial.fileData ?? null, fileName: partial.fileName ?? null,
+    fileMime: partial.fileMime ?? null, fileSize: partial.fileSize ?? null, checksum: partial.checksum ?? null,
+    externalUrl: partial.externalUrl ?? null, description: partial.description ?? "",
+    summary: partial.summary, tags: partial.tags ?? [],
+    academicYearId: partial.academicYearId ?? null, academicYearName: partial.academicYearName ?? null,
+    semester: partial.semester, facultyId: partial.facultyId ?? null, facultyName: partial.facultyName ?? null,
+    departmentId: partial.departmentId ?? null, departmentName: partial.departmentName ?? null,
+    programId: partial.programId ?? null, programName: partial.programName ?? null,
+    course: partial.course, courseCode: partial.courseCode, level: partial.level, instructor: partial.instructor,
+    publisher: partial.publisher, edition: partial.edition, isbn: partial.isbn, language: partial.language,
+    difficulty: partial.difficulty ?? null, estimatedReadingTime: partial.estimatedReadingTime ?? null,
+    visibility: partial.visibility!, status: partial.status!, availableFrom: partial.availableFrom ?? null, availableUntil: partial.availableUntil ?? null,
+    canDownload: partial.canDownload!, canPreview: partial.canPreview!, downloadLimit: partial.downloadLimit ?? null, watermarkPdf: partial.watermarkPdf,
+    version: 1, viewCount: 0, downloadCount: 0,
+    uploadedBy: user.id, createdAt: now(),
+  };
+  db.data!.books.push(book);
+  await db.upsert("books", book);
+  await recordAudit(req, book.status === "published" ? "book.published" : "book.uploaded", book.title);
+  if (book.status === "published" && req.body?.notifyEmail) notifyResourcePublished(book).catch(() => {});
+  res.json({ book, duplicateOf });
+});
+
+app.patch("/api/admin/books/:id", requireRoles(...GRADERS), async (req, res) => {
+  const book = db.data!.books.find((b) => b.id === req.params.id);
+  if (!book) return res.status(404).json({ error: "Book not found." });
+  const wasPublished = book.status === "published";
+  const { errors, book: partial, manualTotalPages, duplicateOf } = validateBookBody({ ...book, ...req.body });
+  if (errors.length) return res.status(400).json({ errors });
+
+  // Only re-detect / version when a new file was actually uploaded (fileData
+  // changed) — don't re-parse or version on every unrelated metadata edit.
+  const fileChanged = "fileData" in req.body && req.body.fileData !== book.fileData && !!partial.fileData;
+  if (fileChanged) {
+    const prevVersion: ResourceVersion = {
+      id: nanoid(10), bookId: book.id, version: book.version,
+      fileData: book.fileData, fileName: book.fileName, fileMime: book.fileMime, fileSize: book.fileSize, checksum: book.checksum,
+      changeLog: typeof req.body?.changeLog === "string" ? req.body.changeLog.trim().slice(0, 300) : undefined,
+      uploadedBy: currentUser(req)!.id, createdAt: now(),
+    };
+    db.data!.resourceVersions.push(prevVersion);
+    await db.upsert("resourceVersions", prevVersion);
+  }
+  const detected = fileChanged && partial.fileData ? await detectPdfPageCount(partial.fileData) : null;
+  const totalPages = detected ?? manualTotalPages ?? book.totalPages;
+
+  Object.assign(book, partial, {
+    totalPages, pagesAutoDetected: detected !== null ? true : (fileChanged ? false : book.pagesAutoDetected),
+    version: fileChanged ? book.version + 1 : book.version,
+    updatedAt: now(),
+  });
+  await db.upsert("books", book);
+  await recordAudit(req, fileChanged ? "book.version_added" : "book.updated", book.title);
+  if (!wasPublished && book.status === "published" && req.body?.notifyEmail) notifyResourcePublished(book).catch(() => {});
+  res.json({ book, duplicateOf });
+});
+
+app.get("/api/admin/books/:id/versions", requireRoles(...GRADERS), (req, res) => {
+  const versions = db.data!.resourceVersions.filter((v) => v.bookId === req.params.id).sort((a, b) => b.version - a.version);
+  res.json({ versions });
+});
+
+app.post("/api/admin/books/:id/versions/:versionId/restore", requireRoles(...GRADERS), async (req, res) => {
+  const book = db.data!.books.find((b) => b.id === req.params.id);
+  if (!book) return res.status(404).json({ error: "Book not found." });
+  const version = db.data!.resourceVersions.find((v) => v.id === req.params.versionId && v.bookId === book.id);
+  if (!version) return res.status(404).json({ error: "Version not found." });
+
+  // Snapshot the CURRENT file as a version before restoring, so restoring is itself reversible.
+  const snapshot: ResourceVersion = {
+    id: nanoid(10), bookId: book.id, version: book.version,
+    fileData: book.fileData, fileName: book.fileName, fileMime: book.fileMime, fileSize: book.fileSize, checksum: book.checksum,
+    changeLog: `Replaced by restoring v${version.version}`, uploadedBy: currentUser(req)!.id, createdAt: now(),
+  };
+  db.data!.resourceVersions.push(snapshot);
+  await db.upsert("resourceVersions", snapshot);
+
+  book.fileData = version.fileData ?? null; book.fileName = version.fileName ?? null;
+  book.fileMime = version.fileMime ?? null; book.fileSize = version.fileSize ?? null; book.checksum = version.checksum ?? null;
+  book.version = book.version + 1;
+  book.updatedAt = now();
+  await db.upsert("books", book);
+  await recordAudit(req, "book.version_restored", `${book.title} → v${version.version}`);
+  res.json({ book });
+});
+
+app.delete("/api/admin/books/:id", requireRoles(...GRADERS), async (req, res) => {
+  const id = String(req.params.id);
+  const book = db.data!.books.find((b) => b.id === id);
+  db.data!.books = db.data!.books.filter((b) => b.id !== id);
+  db.data!.readingProgress = db.data!.readingProgress.filter((p) => p.bookId !== id);
+  db.data!.resourceVersions = db.data!.resourceVersions.filter((v) => v.bookId !== id);
+  db.data!.resourceBookmarks = db.data!.resourceBookmarks.filter((b) => b.bookId !== id);
+  db.data!.resourceRatings = db.data!.resourceRatings.filter((r) => r.bookId !== id);
+  db.data!.resourceDownloadLogs = db.data!.resourceDownloadLogs.filter((d) => d.bookId !== id);
+  await db.remove("books", id);
+  await db.write();
+  await recordAudit(req, "book.deleted", book ? book.title : `Deleted book ${id}`);
+  res.json({ ok: true });
+});
+
+app.get("/api/admin/library/dashboard", requireRoles(...GRADERS), (_req, res) => {
+  const books = db.data!.books;
+  const byType: Record<string, number> = {};
+  for (const b of books) byType[b.resourceType] = (byType[b.resourceType] ?? 0) + 1;
+  const byStatus = { draft: books.filter((b) => b.status === "draft").length, published: books.filter((b) => b.status === "published").length };
+  const totalViews = books.reduce((s, b) => s + (b.viewCount ?? 0), 0);
+  const totalDownloads = books.reduce((s, b) => s + (b.downloadCount ?? 0), 0);
+  const totalBookmarks = db.data!.resourceBookmarks.length;
+  const storageUsed = books.reduce((s, b) => s + (b.fileSize ?? 0), 0);
+  const pendingReviews = books.filter((b) => b.status === "draft").length;
+
+  // Real week-over-week growth in total resource count, from createdAt —
+  // no fabricated trend, just a genuine before/after comparison.
+  const weekAgo = Date.now() - 7 * 24 * 3600_000;
+  const newThisWeek = books.filter((b) => new Date(b.createdAt).getTime() > weekAgo).length;
+  const totalAWeekAgo = books.length - newThisWeek;
+  const weekOverWeekPct = totalAWeekAgo > 0 ? Math.round((newThisWeek / totalAWeekAgo) * 1000) / 10 : null;
+
+  const bookmarkCounts = new Map<string, number>();
+  for (const bm of db.data!.resourceBookmarks) bookmarkCounts.set(bm.bookId, (bookmarkCounts.get(bm.bookId) ?? 0) + 1);
+  const resources = books.map((b) => ({
+    id: b.id, title: b.title, resourceType: b.resourceType, status: b.status,
+    viewCount: b.viewCount ?? 0, downloadCount: b.downloadCount ?? 0, bookmarkCount: bookmarkCounts.get(b.id) ?? 0,
+    createdAt: b.createdAt,
+  }));
+
+  const contributorCounts = new Map<string, number>();
+  for (const b of books) contributorCounts.set(b.uploadedBy, (contributorCounts.get(b.uploadedBy) ?? 0) + 1);
+  const topContributors = [...contributorCounts.entries()]
+    .sort((a, b) => b[1] - a[1]).slice(0, 5)
+    .map(([userId, count]) => ({ userId, name: db.data!.users.find((u) => u.id === userId)?.name ?? "Unknown", count }));
+
+  res.json({
+    totalResources: books.length, byType, byStatus, totalViews, totalDownloads, totalBookmarks, storageUsed, pendingReviews,
+    newThisWeek, weekOverWeekPct, resources, topContributors,
+  });
+});
+
+// ---- student: browse the library, engage with resources, track progress ----
+app.get("/api/books", requireAuth, (req, res) => {
+  const user = currentUser(req)!;
+  const isStaff = user.role !== "candidate";
+  const myProgress = new Map(db.data!.readingProgress.filter((p) => p.candidateId === user.id).map((p) => [p.bookId, p]));
+  const myBookmarks = new Set(db.data!.resourceBookmarks.filter((b) => b.candidateId === user.id).map((b) => b.bookId));
+
+  let list = db.data!.books.filter((b) => isStaff || studentCanSeeBook(b, user));
+
+  const q = String(req.query.q ?? "").trim().toLowerCase();
+  if (q) list = list.filter((b) => [b.title, b.author, b.course, b.courseCode, ...(b.tags ?? [])].some((v) => v?.toLowerCase().includes(q)));
+  const type = String(req.query.type ?? "");
+  if (type) list = list.filter((b) => b.resourceType === type);
+  const facultyId = String(req.query.facultyId ?? "");
+  if (facultyId) list = list.filter((b) => b.facultyId === facultyId);
+  const departmentId = String(req.query.departmentId ?? "");
+  if (departmentId) list = list.filter((b) => b.departmentId === departmentId);
+  const programId = String(req.query.programId ?? "");
+  if (programId) list = list.filter((b) => b.programId === programId);
+  const level = String(req.query.level ?? "");
+  if (level) list = list.filter((b) => b.level === level);
+  const language = String(req.query.language ?? "");
+  if (language) list = list.filter((b) => b.language === language);
+
+  const sort = String(req.query.sort ?? "newest");
+  list = [...list].sort((a, b) => {
+    if (sort === "popular") return (b.viewCount + b.downloadCount) - (a.viewCount + a.downloadCount);
+    if (sort === "downloads") return b.downloadCount - a.downloadCount;
+    if (sort === "rating") return ratingSummary(b.id).avg - ratingSummary(a.id).avg;
+    return b.createdAt.localeCompare(a.createdAt);
+  });
+
+  const items = list.map((book) => {
+    const rating = ratingSummary(book.id);
+    return {
+      book, progress: myProgress.get(book.id) ?? null, bookmarked: myBookmarks.has(book.id),
+      avgRating: rating.avg, ratingCount: rating.count,
+      bookmarkCount: db.data!.resourceBookmarks.filter((bm) => bm.bookId === book.id).length,
+    };
+  });
+  res.json({ items });
+});
+
+app.get("/api/books/:id", requireAuth, (req, res) => {
+  const user = currentUser(req)!;
+  const book = db.data!.books.find((b) => b.id === req.params.id);
+  if (!book || (user.role === "candidate" && !studentCanSeeBook(book, user))) return res.status(404).json({ error: "Resource not found." });
+
+  const progress = db.data!.readingProgress.find((p) => p.bookId === book.id && p.candidateId === user.id) ?? null;
+  const bookmarked = db.data!.resourceBookmarks.some((b) => b.bookId === book.id && b.candidateId === user.id);
+  const myRating = db.data!.resourceRatings.find((r) => r.bookId === book.id && r.candidateId === user.id) ?? null;
+  const rating = ratingSummary(book.id);
+  const relatedResources = db.data!.books
+    .filter((b) => b.id !== book.id && b.status === "published" && (user.role !== "candidate" || studentCanSeeBook(b, user)))
+    .filter((b) => (book.course && b.course === book.course) || (book.departmentId && b.departmentId === book.departmentId))
+    .slice(0, 4);
+
+  res.json({
+    book, progress, bookmarked, myRating, avgRating: rating.avg, ratingCount: rating.count,
+    bookmarkCount: db.data!.resourceBookmarks.filter((bm) => bm.bookId === book.id).length,
+    relatedResources,
+  });
+});
+
+app.post("/api/books/:id/view", requireAuth, async (req, res) => {
+  const user = currentUser(req)!;
+  const book = db.data!.books.find((b) => b.id === req.params.id);
+  if (!book || (user.role === "candidate" && !studentCanSeeBook(book, user))) return res.status(404).json({ error: "Resource not found." });
+  book.viewCount = (book.viewCount ?? 0) + 1;
+  await db.upsert("books", book);
+  res.json({ viewCount: book.viewCount });
+});
+
+app.get("/api/books/:id/download", requireAuth, async (req, res) => {
+  const user = currentUser(req)!;
+  const book = db.data!.books.find((b) => b.id === req.params.id);
+  if (!book || (user.role === "candidate" && !studentCanSeeBook(book, user))) return res.status(404).json({ error: "Resource not found." });
+  if (!book.fileData) return res.status(404).json({ error: "This resource has no downloadable file." });
+  if (user.role === "candidate") {
+    if (!book.canDownload) return res.status(403).json({ error: "Downloading this resource isn't allowed." });
+    if (book.downloadLimit != null) {
+      const count = db.data!.resourceDownloadLogs.filter((d) => d.bookId === book.id && d.candidateId === user.id).length;
+      if (count >= book.downloadLimit) return res.status(403).json({ error: "You've reached the download limit for this resource." });
+    }
+  }
+
+  const base64 = book.fileData.slice(book.fileData.indexOf(",") + 1);
+  let bytes: Buffer = Buffer.from(base64, "base64");
+  const mime = book.fileMime || "application/octet-stream";
+  if (book.watermarkPdf && mime === "application/pdf") {
+    try {
+      const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+      const font = await doc.embedFont(StandardFonts.Helvetica);
+      const stamp = `Issued to ${user.name} (${user.email}) · ${new Date().toLocaleDateString()} · Do not redistribute`;
+      for (const page of doc.getPages()) page.drawText(stamp, { x: 20, y: 12, size: 7, font, opacity: 0.6 });
+      bytes = Buffer.from(await doc.save());
+    } catch { /* if watermarking fails, fall back to the unwatermarked original rather than blocking the download */ }
+  }
+
+  if (user.role === "candidate") {
+    const log: ResourceDownloadLog = { id: nanoid(10), bookId: book.id, candidateId: user.id, at: now() };
+    db.data!.resourceDownloadLogs.push(log);
+    await db.upsert("resourceDownloadLogs", log);
+  }
+  book.downloadCount = (book.downloadCount ?? 0) + 1;
+  await db.upsert("books", book);
+
+  res.setHeader("Content-Type", mime);
+  res.setHeader("Content-Disposition", `attachment; filename="${(book.fileName || book.title).replace(/["\r\n]/g, "")}"`);
+  res.send(bytes);
+});
+
+/** Serves the file inline for in-platform reading — gated by `canPreview`
+ *  (not `canDownload`), and deliberately doesn't touch downloadCount,
+ *  downloadLimit, or watermarking: those are download-specific protections,
+ *  not relevant to viewing inside the app. */
+app.get("/api/books/:id/read", requireAuth, (req, res) => {
+  const user = currentUser(req)!;
+  const book = db.data!.books.find((b) => b.id === req.params.id);
+  if (!book || (user.role === "candidate" && !studentCanSeeBook(book, user))) return res.status(404).json({ error: "Resource not found." });
+  if (!book.fileData) return res.status(404).json({ error: "This resource has no readable file." });
+  if (user.role === "candidate" && !book.canPreview) return res.status(403).json({ error: "Previewing this resource isn't allowed." });
+
+  const base64 = book.fileData.slice(book.fileData.indexOf(",") + 1);
+  const bytes = Buffer.from(base64, "base64");
+  const mime = book.fileMime || "application/octet-stream";
+  res.setHeader("Content-Type", mime);
+  res.setHeader("Content-Disposition", `inline; filename="${(book.fileName || book.title).replace(/["\r\n]/g, "")}"`);
+  res.send(bytes);
+});
+
+app.post("/api/books/:id/bookmark", requireAuth, async (req, res) => {
+  const user = currentUser(req)!;
+  const book = db.data!.books.find((b) => b.id === req.params.id);
+  if (!book) return res.status(404).json({ error: "Resource not found." });
+  if (!db.data!.resourceBookmarks.some((bm) => bm.bookId === book.id && bm.candidateId === user.id)) {
+    const bookmark: ResourceBookmark = { id: nanoid(10), bookId: book.id, candidateId: user.id, createdAt: now() };
+    db.data!.resourceBookmarks.push(bookmark);
+    await db.upsert("resourceBookmarks", bookmark);
+  }
+  res.json({ ok: true, bookmarked: true });
+});
+
+app.delete("/api/books/:id/bookmark", requireAuth, async (req, res) => {
+  const user = currentUser(req)!;
+  const bookmark = db.data!.resourceBookmarks.find((b) => b.bookId === req.params.id && b.candidateId === user.id);
+  if (bookmark) {
+    db.data!.resourceBookmarks = db.data!.resourceBookmarks.filter((b) => b.id !== bookmark.id);
+    await db.remove("resourceBookmarks", bookmark.id);
+  }
+  res.json({ ok: true, bookmarked: false });
+});
+
+app.post("/api/books/:id/rating", requireAuth, async (req, res) => {
+  const user = currentUser(req)!;
+  const book = db.data!.books.find((b) => b.id === req.params.id);
+  if (!book) return res.status(404).json({ error: "Resource not found." });
+  const score = Math.round(Number(req.body?.score));
+  if (!Number.isFinite(score) || score < 1 || score > 5) return res.status(400).json({ error: "score must be between 1 and 5." });
+  const comment = typeof req.body?.comment === "string" ? req.body.comment.trim().slice(0, 500) : undefined;
+
+  let rating = db.data!.resourceRatings.find((r) => r.bookId === book.id && r.candidateId === user.id);
+  if (rating) {
+    rating.score = score; rating.comment = comment;
+  } else {
+    rating = { id: nanoid(10), bookId: book.id, candidateId: user.id, score, comment, createdAt: now() };
+    db.data!.resourceRatings.push(rating);
+  }
+  await db.upsert("resourceRatings", rating);
+  res.json({ rating, ...ratingSummary(book.id) });
+});
+
+app.post("/api/books/:id/progress", requireAuth, async (req, res) => {
+  const book = db.data!.books.find((b) => b.id === req.params.id);
+  if (!book) return res.status(404).json({ error: "Book not found." });
+  const currentPage = Math.max(0, Math.min(book.totalPages, Math.round(Number(req.body?.currentPage))));
+  if (!Number.isFinite(currentPage)) return res.status(400).json({ error: "currentPage must be a number." });
+  const user = currentUser(req)!;
+  let progress = db.data!.readingProgress.find((p) => p.bookId === book.id && p.candidateId === user.id);
+  if (progress) {
+    progress.currentPage = currentPage;
+    progress.updatedAt = now();
+  } else {
+    progress = { id: nanoid(10), bookId: book.id, candidateId: user.id, currentPage, updatedAt: now() };
+    db.data!.readingProgress.push(progress);
+  }
+  await db.upsert("readingProgress", progress);
+  res.json({ progress });
 });
 
 app.post("/api/admin/classes/:id/members", requireRole("admin"), async (req, res) => {

@@ -6,7 +6,7 @@ import {
   Users, Globe, Lock, UserCheck, ShieldAlert, Shuffle, CheckSquare, Square, Hash, FileText,
   Code as CodeIcon, Target, Layers, GripVertical, Bold, Italic, Underline, List, Image as ImageIcon,
   Save, Loader2, Settings as SettingsIcon, ListTree, ArrowLeftRight, ListOrdered, MousePointerClick,
-  Upload, TextCursorInput, Tag, Library, Search, BookmarkPlus, Sparkles, Clock, Calculator,
+  Upload, TextCursorInput, Tag, Library, Search, BookmarkPlus, Sparkles, Clock, Calculator, CalendarClock,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useT } from "@/lib/i18n";
@@ -270,12 +270,18 @@ export function ExamBuilder() {
   const publish = async () => {
     setPublishErrors([]);
     await flushSaves();
+    const publishing = exam?.status !== "published";
     const res = await fetch(`/api/admin/exams/${examId}/publish`, {
       method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
-      body: JSON.stringify({ publish: exam?.status !== "published" }),
+      body: JSON.stringify({ publish: publishing }),
     });
     const data = await res.json().catch(() => null);
-    if (res.ok && data?.exam) setExam(data.exam);
+    if (res.ok && data?.exam) {
+      setExam(data.exam);
+      // Publishing (not unpublishing) heads straight to the Scheduler so the
+      // admin sets the start/close window right after the exam goes live.
+      if (publishing) navigate("/admin/scheduler");
+    }
     else if (data?.errors) setPublishErrors(data.errors);
     else setPublishErrors([data?.error ?? "Could not publish."]);
   };
@@ -898,6 +904,22 @@ function SettingsPanel({
           </Field>
         </div>
         <CoverImageField exam={exam} patch={patchExam} />
+      </div>
+
+      {/* Scheduling — same availableFrom/availableUntil fields the Scheduler page reads/writes, so either place stays in sync */}
+      <div className="card rounded-2xl p-6">
+        <div className="flex items-center gap-2 text-sm font-bold"><CalendarClock className="h-4 w-4 text-[#c6ff34]" /> {t("eb.schedulingWindow")}</div>
+        <p className="mt-0.5 text-xs text-[var(--muted)]">{t("eb.schedulingWindowHint")}</p>
+        <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Field label={t("eb.startTime")}>
+            <input type="datetime-local" className="input h-9" value={toLocalInput(exam.availableFrom)}
+              onChange={(e) => patchExam({ availableFrom: e.target.value ? new Date(e.target.value).toISOString() : null })} />
+          </Field>
+          <Field label={t("eb.closingTime")}>
+            <input type="datetime-local" className="input h-9" value={toLocalInput(exam.availableUntil)}
+              onChange={(e) => patchExam({ availableUntil: e.target.value ? new Date(e.target.value).toISOString() : null })} />
+          </Field>
+        </div>
       </div>
 
       {/* Audience */}

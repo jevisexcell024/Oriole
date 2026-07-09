@@ -163,10 +163,17 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 3. Set all prod env vars (§6) in the host. `assertProductionEnv()` will refuse to start if
    `JWT_SECRET`, a database choice, or `DATA_ENCRYPTION_KEY` are missing.
 
-**Deploy package:** the live site is updated by rebuilding and repackaging
-`Desktop\orcalis-v2-deploy.zip`. The zip must contain **zero** `node_modules` / `.pgdata`
-segments (those are built/created at runtime on the host). Verify ENTRIES / SIZE_MB / LEAKS
-after packaging.
+**Deploy package:** run `npm run deploy:zip` — builds (`build:cpanel`) then packages
+`Desktop\orcalis-v2-deploy.zip` via `scripts/package-deploy.ps1`. The zip contains
+`dist/`, `dist-server/server.mjs`, `package.json`, and `package-lock.json` — **zero**
+`node_modules` / `.pgdata` segments (those are built/created at runtime on the host).
+The script self-verifies entry count, size, and the no-`node_modules`/no-`.pgdata` rule,
+and fails loudly if `package.json`/`package-lock.json` didn't make it in.
+
+**On the host after unzipping:** `npm install` (or the cPanel Node.js Selector's "Run NPM
+Install") always picks up whatever dependencies were current at build time, because
+`package.json`/`package-lock.json` now travel with every deploy — no more manually editing
+the host's `package.json` when a new dependency is added.
 
 **Live deployment:** `lockdown.jevislab.com`. Includes Safe Exam Browser hard-lockdown
 (per-exam Config Key, server-side hash verification) — see `server/seb.ts` / `src/lib/seb.ts`.

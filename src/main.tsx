@@ -58,6 +58,7 @@ import { AdminAccount } from "@/pages/AdminAccount";
 // admin opens the dashboard — keeps it out of the main bundle.
 const AdminDashboard = lazy(() => import("@/pages/AdminDashboard").then((m) => ({ default: m.AdminDashboard })));
 import { AdminClasses, ClassDetail } from "@/pages/AdminClasses";
+import { AdminLibrary } from "@/pages/AdminLibrary";
 import { AdminTeam } from "@/pages/AdminTeam";
 import { can, isStaff, landingFor, type Cap } from "@/lib/roles";
 
@@ -114,6 +115,7 @@ function App() {
         <Route path="/certificates" element={<Protected><Certificates /></Protected>} />
         <Route path="/admin/dashboard" element={<Protected cap="dashboard"><AdminDashboard /></Protected>} />
         <Route path="/admin/classes" element={<Protected cap="exams"><AdminClasses /></Protected>} />
+        <Route path="/admin/library" element={<Protected cap="org"><AdminLibrary /></Protected>} />
         <Route path="/admin/classes/:id" element={<Protected cap="exams"><ClassDetail /></Protected>} />
         <Route path="/admin/exams" element={<Protected cap="exams"><AdminExams /></Protected>} />
         <Route path="/admin/exams-library" element={<Protected cap="exams"><AdminExamLibrary /></Protected>} />

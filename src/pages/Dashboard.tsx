@@ -1,63 +1,77 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import {
-  BookOpen, CalendarCheck, FileClock, TrendingUp, Flame, ChevronRight, ChevronLeft,
-  Clock, MonitorCheck, CalendarDays, Bell, CheckCircle2, Megaphone, ClipboardCheck, FileText,
-  Dumbbell, History, Library, MessageCircle, BarChart3,
+  BookOpen, Calendar as CalendarIcon, Clock, TrendingUp, TrendingDown, ChevronRight, ChevronLeft, CheckCircle2, Circle, Search,
 } from "lucide-react";
+import { ResponsiveContainer, AreaChart, Area, CartesianGrid, XAxis, Tooltip } from "recharts";
 import { Shell } from "@/components/Shell";
 import { Skeleton } from "@/components/ui";
-import { SegmentDonut } from "@/components/Charts";
-import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import type { ExamListItem } from "@shared/types";
 import { clsx } from "clsx";
 
-const LIME = "#c6ff34";
-const PINK = "#fe3bed";
-const BLUE = "#0EA5E9";
-const AMBER = "#E9B949";
+// ── Design tokens ── theme-aware: these track the app's light/dark CSS
+// variables (src/index.css) instead of a fixed dark palette, so the toggle
+// in the header actually changes this page. Accent colors stay fixed. ──
+const BG = "var(--bg)";
+const CARD = "var(--card)";
+const SURFACE = "var(--card-2)";
+const DEEP = "var(--border-strong)";
+const LIME = "#c8f000";
+const CYAN = "#22d3ee";
+const PURPLE = "#c084fc";
+const AMBER = "#f59e0b";
+const BLUE = "#3b82f6";
+const FG = "var(--fg)";
+const DIM = "var(--muted)";
+const DESTRUCTIVE = "#ef4444";
+const BORDER = "var(--border)";
+const FONT = "'Inter', sans-serif";
+const BARLOW = "'Barlow Condensed', sans-serif";
+const MONO = "'DM Mono', monospace";
+const SUBJECT_COLORS = [LIME, CYAN, PURPLE, AMBER];
 
 interface Summary { enrolled: number; completed: number; pending: number; awaitingApproval: number; avgScore: number | null; passed: number; streak: number; }
-interface Notif { id: string; type: string; title: string; body: string; at: string; link: string; }
 
 function startIso(it: ExamListItem): string | null {
   return it.registration.scheduledStart || it.exam.availableFrom || null;
 }
-function fmtDate(iso: string | null) {
-  if (!iso) return "TBD";
-  return new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
-}
-function daysLeft(iso: string, now: number) {
-  return Math.max(0, Math.ceil((new Date(iso).getTime() - now) / 86_400_000));
-}
+function sameCalendarDay(a: Date, b: Date) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); }
+function greetingFor(d: Date) { const h = d.getHours(); return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening"; }
 function ago(iso: string) {
-  if (!iso) return "";
   const s = (Date.now() - new Date(iso).getTime()) / 1000;
   if (s < 60) return "just now";
   const m = s / 60; if (m < 60) return `${Math.floor(m)}m ago`;
   const h = m / 60; if (h < 24) return `${Math.floor(h)}h ago`;
-  const d = h / 24; if (d < 7) return `${Math.floor(d)}d ago`;
-  return new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short" });
-}
-function initials(name: string) {
-  return name.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
+  const d = h / 24; return `${Math.floor(d)}d ago`;
 }
 
-const NOTIF_ICON: Record<string, typeof Bell> = { result: CheckCircle2, reminder: Clock, announcement: Megaphone, grading: ClipboardCheck, submission: FileText };
-const NOTIF_TINT: Record<string, string> = { result: "#16A34A", reminder: LIME, announcement: BLUE, grading: AMBER, submission: LIME };
+// Cards-per-page for the New Courses carousel: 1 below 640px, 3 at/above (matches the spec's mobile breakpoint).
+function useCardsPerPage() {
+  const [n, setN] = useState(() => (typeof window !== "undefined" && window.innerWidth < 640 ? 1 : 3));
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 640px)");
+    const onChange = () => setN(mq.matches ? 3 : 1);
+    onChange();
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+  return n;
+}
 
 export function Dashboard() {
   const { user } = useAuth();
   const [summary, setSummary] = useState<Summary | null>(null);
   const [exams, setExams] = useState<ExamListItem[] | null>(null);
-  const [notifs, setNotifs] = useState<Notif[]>([]);
   const [now, setNow] = useState(() => Date.now());
+  const [search, setSearch] = useState("");
+  const [coursePage, setCoursePage] = useState(0);
+  const [activeOnly, setActiveOnly] = useState(true);
 
   useEffect(() => {
     api.get<Summary>("/my/summary").then(setSummary).catch(() => {});
     api.get<{ items: ExamListItem[] }>("/exams").then((d) => setExams(d.items)).catch(() => setExams([]));
-    api.get<{ notifications: Notif[] }>("/notifications").then((d) => setNotifs(d.notifications)).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -65,185 +79,285 @@ export function Dashboard() {
     return () => clearInterval(id);
   }, []);
 
-  const upcoming = useMemo(() => {
-    if (!exams) return [];
-    return exams
-      .filter((it) => it.attempt?.status !== "submitted" && startIso(it) && new Date(startIso(it)!).getTime() > now)
+  const loading = !summary || !exams;
+
+  // ── New Courses: search + paginate over every published exam ──
+  const courses = useMemo(() => {
+    const list = exams ?? [];
+    const q = search.trim().toLowerCase();
+    if (!q) return list;
+    return list.filter((it) => it.exam.title.toLowerCase().includes(q) || it.exam.code.toLowerCase().includes(q) || (it.exam.subject ?? "").toLowerCase().includes(q));
+  }, [exams, search]);
+  useEffect(() => { setCoursePage(0); }, [search]);
+  const cardsPerPage = useCardsPerPage();
+  const coursePageCount = Math.max(1, Math.ceil(courses.length / cardsPerPage));
+  const clampedCoursePage = Math.min(coursePage, coursePageCount - 1);
+  const visibleCourses = courses.slice(clampedCoursePage * cardsPerPage, clampedCoursePage * cardsPerPage + cardsPerPage);
+
+  // ── Today's sessions (real: exams scheduled/available today) ──
+  const todaysSessions = useMemo(() => {
+    const today = new Date();
+    return (exams ?? [])
+      .filter((it) => { const s = startIso(it); return s && sameCalendarDay(new Date(s), today); })
       .sort((a, b) => startIso(a)!.localeCompare(startIso(b)!));
+  }, [exams]);
+
+  // ── Hours Activity: real hours spent per day, derived from attempt timestamps ──
+  const hoursActivity = useMemo(() => {
+    const days: { day: string; hours: number; ts: number }[] = [];
+    const today = new Date();
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(today); d.setDate(today.getDate() - i); d.setHours(0, 0, 0, 0);
+      days.push({ day: d.toLocaleDateString(undefined, { weekday: "short" }), hours: 0, ts: d.getTime() });
+    }
+    for (const it of exams ?? []) {
+      const a = it.attempt;
+      if (!a) continue;
+      const start = new Date(a.startedAt).getTime();
+      const end = a.submittedAt ? new Date(a.submittedAt).getTime() : now;
+      const startDay = new Date(a.startedAt); startDay.setHours(0, 0, 0, 0);
+      const bucket = days.find((d) => d.ts === startDay.getTime());
+      if (bucket) bucket.hours += Math.max(0, (end - start) / 3_600_000);
+    }
+    return days.map((d) => ({ ...d, hours: Math.round(d.hours * 10) / 10 }));
+  }, [exams, now]);
+  const weekTotalHours = useMemo(() => Math.round(hoursActivity.reduce((s, d) => s + d.hours, 0) * 10) / 10, [hoursActivity]);
+  // Real week-over-week comparison — omitted (no pill) when there's no prior-week baseline to compare against.
+  const weekOverWeekPct = useMemo(() => {
+    if (!exams) return null;
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const thisWeekStart = today.getTime() - 6 * 86_400_000;
+    const lastWeekStart = thisWeekStart - 7 * 86_400_000;
+    let thisWeek = 0, lastWeek = 0;
+    for (const it of exams) {
+      const a = it.attempt; if (!a) continue;
+      const start = new Date(a.startedAt).getTime();
+      const end = a.submittedAt ? new Date(a.submittedAt).getTime() : now;
+      const hrs = Math.max(0, (end - start) / 3_600_000);
+      if (start >= thisWeekStart) thisWeek += hrs;
+      else if (start >= lastWeekStart) lastWeek += hrs;
+    }
+    if (lastWeek <= 0) return null;
+    return Math.round(((thisWeek - lastWeek) / lastWeek) * 100);
   }, [exams, now]);
 
-  const upcomingWithin7d = useMemo(() => upcoming.filter((it) => daysLeft(startIso(it)!, now) <= 7).length, [upcoming, now]);
+  // ── In Progress list ──
+  const inProgressRows = useMemo(() => {
+    const list = exams ?? [];
+    return activeOnly ? list.filter((it) => it.attempt?.status === "in_progress") : list.slice(0, 8);
+  }, [exams, activeOnly]);
 
-  const myExams = useMemo(() => {
-    if (!exams) return [];
-    return [...exams].sort((a, b) => (startIso(a) ?? "9999").localeCompare(startIso(b) ?? "9999")).slice(0, 5);
+  // ── Assignments checklist — every enrolled exam, nearest deadline first ──
+  const checklist = useMemo(() => {
+    return (exams ?? [])
+      .map((it) => {
+        const done = it.attempt?.status === "submitted";
+        const started = it.attempt?.status === "in_progress";
+        const status: "completed" | "in_progress" | "upcoming" = done ? "completed" : started ? "in_progress" : "upcoming";
+        const due = it.exam.availableUntil || startIso(it);
+        return { it, status, due };
+      })
+      .sort((a, b) => (a.due ?? "9999").localeCompare(b.due ?? "9999"))
+      .slice(0, 6);
   }, [exams]);
 
-  const progress = useMemo(() => {
-    if (!exams) return { completed: 0, inProgress: 0, notStarted: 0, total: 0 };
-    const completed = exams.filter((it) => it.attempt?.status === "submitted").length;
-    const inProgress = exams.filter((it) => it.attempt?.status === "in_progress").length;
-    const notStarted = exams.length - completed - inProgress;
-    return { completed, inProgress, notStarted, total: exams.length };
-  }, [exams]);
-
-  const isReady = (it: ExamListItem) => it.registration.approval === "confirmed" && it.registration.systemCheckPassed;
-  const setupNeeded = upcoming.find((it) => !isReady(it));
-
-  const firstName = user?.name?.split(" ")[0] ?? "Student";
-  const greeting = now < 0 ? "" : new Date().getHours() < 12 ? "Good morning" : new Date().getHours() < 18 ? "Good afternoon" : "Good evening";
-
-  const loading = !summary || !exams;
+  const today = new Date();
+  const firstName = user?.name?.split(" ")[0] ?? "";
 
   return (
     <Shell>
-      <div className="fade-in">
+      <div className="fade-in -m-4 sm:-m-6 px-6 py-6 lg:px-10 lg:py-8" style={{ background: BG, fontFamily: FONT, minHeight: "calc(100vh - 69px)" }}>
         {loading ? (
-          <div className="space-y-5">
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-              {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-28 rounded-2xl" />)}
-            </div>
-            <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-              {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-80 rounded-2xl" />)}
-            </div>
+          <div className="space-y-4">
+            <Skeleton className="h-24 rounded-2xl" />
+            <Skeleton className="h-56 rounded-2xl" />
+            <Skeleton className="h-72 rounded-2xl" />
+            <Skeleton className="h-72 rounded-2xl" />
           </div>
         ) : (
-          <div className="flex flex-col gap-5">
-
-            {/* Header */}
-            <div className="flex flex-wrap items-end justify-between gap-3">
+          <div className="space-y-6">
+            {/* ── Section 1: Greeting + Quick Stats ── */}
+            <div className="flex flex-wrap items-end justify-between gap-4">
               <div>
-                <h1 className="text-2xl font-bold tracking-tight text-[var(--fg)] sm:text-3xl">{greeting}, {firstName}! 👋</h1>
-                <p className="mt-1 text-sm text-[var(--muted)]">Here's what's happening with your exams today.</p>
+                <h1 className="uppercase" style={{ fontFamily: BARLOW, fontWeight: 700, fontSize: 34, lineHeight: 1.05, color: FG, letterSpacing: "0.01em" }}>
+                  {greetingFor(today)}, {firstName}
+                </h1>
+                <p className="mt-1.5" style={{ fontSize: 13, color: DIM }}>
+                  {today.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })} · {todaysSessions.length} session{todaysSessions.length === 1 ? "" : "s"} today
+                </p>
               </div>
-              <div className="flex h-10 w-10 items-center justify-center rounded-full text-sm font-bold text-[#111110]" style={{ background: LIME }}>
-                {initials(user?.name ?? "S")}
+              <div className="flex flex-wrap items-center gap-2">
+                <StatPill label="Enrolled" value={summary!.enrolled} />
+                <StatPill label="Completed" value={summary!.completed} />
+                <StatPill label="Avg Score" value={summary!.avgScore !== null ? `${summary!.avgScore}%` : "—"} />
               </div>
             </div>
 
-            {/* Action-required banner */}
-            {setupNeeded && (
-              <Link to={`/exams/${setupNeeded.registration.id}/checkin`}
-                className="flex flex-wrap items-center gap-4 rounded-2xl border-2 p-4 transition hover:opacity-90"
-                style={{ borderColor: PINK, background: `${PINK}12` }}>
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full" style={{ background: PINK }}>
-                  <Clock className="h-5 w-5 text-black" />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-bold text-[var(--fg)]">System check required — {setupNeeded.exam.title}</p>
-                  <p className="text-xs text-[var(--muted)]">Complete your browser & webcam check before {fmtDate(startIso(setupNeeded))}.</p>
+            {/* ── Section 2: New Courses ── */}
+            <Panel>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <PanelTitle title="New Courses" />
+                <div className="flex items-center gap-3">
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2" style={{ color: DIM }} />
+                    <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search exams…"
+                      className="rounded-lg py-1.5 pl-8 pr-3 text-xs outline-none"
+                      style={{ background: SURFACE, border: `1px solid ${BORDER}`, color: FG, width: 180 }} />
+                  </div>
+                  <Link to="/exams" style={{ color: LIME, fontSize: 12 }} className="whitespace-nowrap hover:opacity-70">View all →</Link>
                 </div>
-                <span className="flex shrink-0 items-center gap-1.5 rounded-xl px-4 py-2 text-sm font-bold" style={{ background: PINK, color: "#000" }}>
-                  <MonitorCheck className="h-4 w-4" /> Run check
-                </span>
-              </Link>
-            )}
+              </div>
 
-            {/* Stat row */}
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-              <StatTile icon={BookOpen} color={LIME} label="Enrolled Exams" value={summary!.enrolled} sub="Active exams" linkTo="/exams" linkLabel="View all exams" />
-              <StatTile icon={CalendarCheck} color={BLUE} label="Upcoming" value={upcomingWithin7d} sub="In the next 7 days" linkTo="/timetable" linkLabel="View schedule" />
-              <StatTile icon={FileClock} color={AMBER} label="Pending" value={summary!.pending} sub="Awaiting completion" linkTo="/exams" linkLabel="View exams" />
-              <StatTile icon={TrendingUp} color={LIME} label="Average Score" value={summary!.avgScore !== null ? `${summary!.avgScore}%` : "—"} sub="Across all exams" linkTo="/results" linkLabel="View results" />
-              <StatTile icon={Flame} color={PINK} label="Day Streak" value={summary!.streak} sub="Keep it going" linkTo="/results" linkLabel="View badges" />
-            </div>
-
-            {/* Row 2: My Exams / Upcoming Exams / Calendar */}
-            <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-3">
-              <Panel title="My Exams" linkTo="/exams" linkLabel="View all">
-                {myExams.length === 0 ? (
-                  <EmptyRow icon={BookOpen} text="No exams yet." />
-                ) : (
-                  <div className="space-y-1">
-                    {myExams.map((it) => <MyExamRow key={it.registration.id} it={it} />)}
+              {courses.length === 0 ? (
+                <p className="mt-6" style={{ color: DIM, fontSize: 12 }}>No exams match your search.</p>
+              ) : (
+                <>
+                  <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    {visibleCourses.map((it, i) => <CourseCard key={it.registration.id} it={it} color={SUBJECT_COLORS[i % SUBJECT_COLORS.length]} />)}
                   </div>
-                )}
+                  {coursePageCount > 1 && (
+                    <div className="mt-4 flex items-center justify-center gap-3">
+                      <button onClick={() => setCoursePage((p) => Math.max(0, p - 1))} disabled={clampedCoursePage === 0}
+                        className="flex h-7 w-7 items-center justify-center rounded-full transition disabled:opacity-30" style={{ border: `1px solid ${BORDER}`, color: FG }}>
+                        <ChevronLeft className="h-3.5 w-3.5" />
+                      </button>
+                      <span style={{ fontFamily: MONO, fontSize: 11, color: DIM }}>{clampedCoursePage + 1} / {coursePageCount}</span>
+                      <button onClick={() => setCoursePage((p) => Math.min(coursePageCount - 1, p + 1))} disabled={clampedCoursePage >= coursePageCount - 1}
+                        className="flex h-7 w-7 items-center justify-center rounded-full transition disabled:opacity-30" style={{ border: `1px solid ${BORDER}`, color: FG }}>
+                        <ChevronRight className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+            </Panel>
+
+            {/* ── Section 3: Hours Activity + Today's Schedule ── */}
+            <div className="grid grid-cols-1 gap-4 min-[1024px]:grid-cols-[1.6fr_1fr]">
+              <Panel>
+                <div className="flex items-start justify-between">
+                  <PanelTitle title="Hours Activity" sub="Time spent in exams · last 7 days" />
+                  {weekOverWeekPct !== null && (
+                    <span className="flex items-center gap-1 rounded-md" style={{ fontSize: 10, fontWeight: 600, color: weekOverWeekPct >= 0 ? LIME : DESTRUCTIVE, background: `${weekOverWeekPct >= 0 ? LIME : DESTRUCTIVE}18`, padding: "3px 8px" }}>
+                      {weekOverWeekPct >= 0 ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />} {weekOverWeekPct >= 0 ? "+" : ""}{weekOverWeekPct}% vs last week
+                    </span>
+                  )}
+                </div>
+                <p className="mt-3" style={{ fontFamily: BARLOW, fontWeight: 700, fontSize: 40, color: FG, lineHeight: 1 }}>
+                  {weekTotalHours}<span style={{ fontSize: 16, color: DIM, fontFamily: FONT, fontWeight: 400 }}> hrs</span>
+                </p>
+                <div style={{ height: 140, marginTop: 10 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={hoursActivity} margin={{ left: -20, top: 6 }}>
+                      <defs>
+                        <linearGradient id="hoursGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor={LIME} stopOpacity={0.35} /><stop offset="100%" stopColor={LIME} stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid stroke={BORDER} strokeDasharray="3 3" vertical={false} />
+                      <XAxis dataKey="day" tick={{ fill: DIM, fontSize: 11, fontFamily: MONO }} axisLine={false} tickLine={false} />
+                      <Tooltip contentStyle={{ background: SURFACE, border: `1px solid ${LIME}`, borderRadius: 8, fontFamily: MONO, fontSize: 12 }} labelStyle={{ color: FG }}
+                        formatter={(v) => [`${v} hrs`, "Time"]} />
+                      <Area type="monotone" dataKey="hours" stroke={LIME} strokeWidth={2} fill="url(#hoursGrad)" dot={{ r: 3, fill: LIME }} activeDot={{ r: 5 }} />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
               </Panel>
 
-              <Panel title="Upcoming Exams" linkTo="/timetable" linkLabel="View all">
-                {upcoming.length === 0 ? (
-                  <EmptyRow icon={CalendarDays} text="Nothing scheduled." />
-                ) : (
-                  <div className="space-y-2.5">
-                    {upcoming.slice(0, 3).map((it) => <UpcomingRow key={it.registration.id} it={it} now={now} />)}
-                  </div>
-                )}
+              <Panel>
+                <PanelTitle title="Today's Schedule" />
+                <div className="mt-4 space-y-2">
+                  {todaysSessions.length === 0 && <p style={{ color: DIM, fontSize: 12 }}>Nothing scheduled today.</p>}
+                  {todaysSessions.slice(0, 4).map((it, i) => {
+                    const color = SUBJECT_COLORS[i % SUBJECT_COLORS.length];
+                    const d = new Date(startIso(it)!);
+                    return (
+                      <Link key={it.registration.id} to={`/exams/${it.registration.id}/checkin`}
+                        className="group flex items-center gap-3 rounded-xl p-3 transition hover:bg-[var(--card-2)]" style={{ border: `1px solid ${BORDER}` }}>
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg" style={{ background: `${color}18` }}>
+                          <BookOpen className="h-4 w-4" style={{ color }} />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate transition group-hover:text-[#c8f000]" style={{ fontSize: 12.5, fontWeight: 500, color: FG }}>{it.exam.title}</p>
+                          <p className="mt-0.5 truncate" style={{ fontFamily: MONO, fontSize: 10.5, color: DIM }}>{it.exam.subject ?? "General"}</p>
+                        </div>
+                        <span className="shrink-0" style={{ fontFamily: MONO, fontSize: 11, color: DIM }}>
+                          {d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
+                        </span>
+                        <ChevronRight className="h-4 w-4 shrink-0" style={{ color: DIM }} />
+                      </Link>
+                    );
+                  })}
+                </div>
               </Panel>
-
-              <MiniCalendar exams={exams ?? []} />
             </div>
 
-            {/* Row 3: Recent Activity / Study Progress / Quick Actions */}
-            <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-3">
-              <Panel title="Recent Activity" linkTo="/inbox" linkLabel="View all">
-                {notifs.length === 0 ? (
-                  <EmptyRow icon={Bell} text="Nothing new." />
-                ) : (
-                  <div className="space-y-3">
-                    {notifs.slice(0, 4).map((n) => {
-                      const Icon = NOTIF_ICON[n.type] ?? Bell;
-                      const tint = NOTIF_TINT[n.type] ?? LIME;
-                      return (
-                        <Link key={n.id} to={n.link} className="flex items-start gap-2.5 rounded-xl p-1.5 transition hover:bg-[var(--card-2)]">
-                          <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg" style={{ background: `${tint}20` }}>
-                            <Icon className="h-3.5 w-3.5" style={{ color: tint }} />
-                          </span>
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-xs font-semibold text-[var(--fg)]">{n.title}</p>
-                            <p className="text-[10px] text-[var(--muted)]">{ago(n.at)}</p>
+            {/* ── Section 4: In Progress + Assignments + Mini Calendar ── */}
+            <div className="grid grid-cols-1 gap-4 min-[1024px]:grid-cols-3">
+              <Panel>
+                <div className="flex items-center justify-between">
+                  <PanelTitle title="In Progress" />
+                  <div className="flex" style={{ gap: 2 }}>
+                    {([["active", "Active"], ["all", "All"]] as const).map(([key, label]) => (
+                      <button key={key} onClick={() => setActiveOnly(key === "active")} className="transition"
+                        style={{ padding: "4px 10px", borderRadius: 999, fontSize: 11, background: (activeOnly ? "active" : "all") === key ? "rgba(200,240,0,0.12)" : "transparent", color: (activeOnly ? "active" : "all") === key ? LIME : DIM }}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="mt-4 space-y-2.5">
+                  {inProgressRows.length === 0 && <p style={{ color: DIM, fontSize: 12 }}>{activeOnly ? "Nothing in progress right now." : "No exams yet."}</p>}
+                  {inProgressRows.map((it, i) => {
+                    const color = SUBJECT_COLORS[i % SUBJECT_COLORS.length];
+                    const a = it.attempt;
+                    const done = a?.status === "submitted";
+                    const active = a?.status === "in_progress";
+                    const pct = done ? 100 : active ? Math.min(100, Math.round(((now - new Date(a!.startedAt).getTime()) / 60000 / a!.durationMinutes) * 100)) : 0;
+                    const subLabel = done ? `Completed ${ago(a!.submittedAt!)}` : active ? `Started ${ago(a!.startedAt)}` : "Not started";
+                    return (
+                      <Link key={it.registration.id} to={done && a ? `/attempts/${a.id}/result` : `/exams/${it.registration.id}/checkin`}
+                        className="group flex items-center gap-3 rounded-xl p-3 transition hover:bg-[var(--card-2)]" style={{ border: `1px solid ${BORDER}` }}>
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg" style={{ background: `${color}18` }}>
+                          <BookOpen className="h-4 w-4" style={{ color }} />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate transition group-hover:text-[#c8f000]" style={{ fontSize: 12.5, fontWeight: 500, color: FG }}>{it.exam.title}</p>
+                          <p className="mt-0.5 truncate" style={{ fontFamily: MONO, fontSize: 10.5, color: DIM }}>{it.exam.subject ?? "General"} · {subLabel}</p>
+                          <div className="mt-1.5 h-1 w-full" style={{ background: DEEP, borderRadius: 2 }}>
+                            <div className="h-full transition-[width] duration-500" style={{ width: `${pct}%`, background: color, borderRadius: 2 }} />
                           </div>
-                        </Link>
-                      );
-                    })}
-                  </div>
-                )}
-              </Panel>
-
-              <Panel title="Study Progress" linkTo="/results" linkLabel="View analytics">
-                <div className="flex items-center gap-5">
-                  <SegmentDonut
-                    size={110} thickness={12}
-                    segments={[
-                      { value: progress.completed, color: LIME },
-                      { value: progress.inProgress, color: BLUE },
-                      { value: progress.notStarted, color: "var(--card-2)" },
-                    ]}
-                    centerTop="Overall"
-                    centerMain={progress.total ? `${Math.round((progress.completed / progress.total) * 100)}%` : "—"}
-                  />
-                  <div className="space-y-2 text-xs">
-                    <LegendRow color={LIME} label="Completed" value={progress.completed} />
-                    <LegendRow color={BLUE} label="In Progress" value={progress.inProgress} />
-                    <LegendRow color="var(--muted)" label="Not Started" value={progress.notStarted} />
-                  </div>
-                </div>
-                {summary!.streak > 0 && (
-                  <div className="mt-4 flex items-center gap-2 rounded-xl p-3" style={{ background: `${LIME}15` }}>
-                    <Flame className="h-4 w-4 shrink-0" style={{ color: LIME }} />
-                    <p className="text-xs font-bold" style={{ color: LIME }}>{summary!.streak}-day streak — keep it up!</p>
-                  </div>
-                )}
-              </Panel>
-
-              <Panel title="Quick Actions">
-                <div className="grid grid-cols-3 gap-2">
-                  {[
-                    { label: "Take an Exam", icon: BookOpen, to: "/exams", color: LIME },
-                    { label: "View Results", icon: BarChart3, to: "/results", color: BLUE },
-                    { label: "Practice Test", icon: Dumbbell, to: "/practice", color: PINK },
-                    { label: "Visit Library", icon: Library, to: "/library", color: LIME },
-                    { label: "Chat", icon: MessageCircle, to: "/chat", color: BLUE },
-                    { label: "Timetable", icon: History, to: "/timetable", color: PINK },
-                  ].map((q) => (
-                    <Link key={q.label} to={q.to}
-                      className="flex flex-col items-center gap-2 rounded-xl border border-[var(--border)] p-3 text-center text-[11px] font-semibold text-[var(--fg)] transition hover:-translate-y-0.5 hover:border-[var(--border-strong)]"
-                      style={{ background: `${q.color}0f` }}>
-                      <q.icon className="h-5 w-5" style={{ color: q.color }} />
-                      {q.label}
-                    </Link>
-                  ))}
+                        </div>
+                        <span className="shrink-0" style={{ fontFamily: MONO, fontSize: 11, fontWeight: 600, color }}>{pct}%</span>
+                      </Link>
+                    );
+                  })}
                 </div>
               </Panel>
+
+              <Panel>
+                <PanelTitle title="Assignments" />
+                <div className="mt-4 space-y-2.5">
+                  {checklist.length === 0 && <p style={{ color: DIM, fontSize: 12 }}>Nothing due.</p>}
+                  {checklist.map(({ it, status, due }) => {
+                    const meta = CHECKLIST_META[status];
+                    const StatusIcon = meta.icon;
+                    return (
+                      <Link key={it.registration.id} to={status === "completed" && it.attempt ? `/attempts/${it.attempt.id}/result` : `/exams/${it.registration.id}/checkin`}
+                        className="flex items-center gap-3 rounded-xl p-3 transition hover:bg-[var(--card-2)]" style={{ border: `1px solid ${BORDER}` }}>
+                        <StatusIcon className="h-4 w-4 shrink-0" style={{ color: meta.color }} />
+                        <div className="min-w-0 flex-1">
+                          <p className={clsx("truncate", status === "completed" && "line-through")} style={{ fontSize: 12.5, fontWeight: 500, color: status === "completed" ? DIM : FG }}>{it.exam.title}</p>
+                          {due && <p className="mt-0.5" style={{ fontFamily: MONO, fontSize: 10.5, color: DIM }}>{new Date(due).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</p>}
+                        </div>
+                        <span className="shrink-0 px-2 py-1" style={{ fontSize: 10, fontWeight: 600, borderRadius: 999, background: `${meta.color}18`, color: meta.color }}>{meta.label}</span>
+                      </Link>
+                    );
+                  })}
+                </div>
+              </Panel>
+
+              <MiniCalendar exams={exams!} />
             </div>
           </div>
         )}
@@ -252,117 +366,63 @@ export function Dashboard() {
   );
 }
 
-// ── Stat tile ──────────────────────────────────────────────────────────────
-function StatTile({ icon: Icon, color, label, value, sub, linkTo, linkLabel }: {
-  icon: typeof BookOpen; color: string; label: string; value: string | number; sub: string; linkTo: string; linkLabel: string;
-}) {
+const CHECKLIST_META: Record<"completed" | "in_progress" | "upcoming", { label: string; color: string; icon: typeof CheckCircle2 }> = {
+  completed: { label: "Completed", color: LIME, icon: CheckCircle2 },
+  in_progress: { label: "In progress", color: AMBER, icon: Clock },
+  upcoming: { label: "Upcoming", color: BLUE, icon: Circle },
+};
+
+// ── Shared panel shell ──────────────────────────────────────────────────
+function Panel({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
+  return <div className="rounded-2xl p-5" style={{ background: CARD, border: `1px solid ${BORDER}`, ...style }}>{children}</div>;
+}
+function PanelTitle({ title, sub }: { title: string; sub?: string }) {
   return (
-    <div className="card flex flex-col gap-3 rounded-2xl p-4">
-      <span className="flex h-9 w-9 items-center justify-center rounded-xl" style={{ background: `${color}20` }}>
-        <Icon className="h-[18px] w-[18px]" style={{ color }} />
-      </span>
-      <div>
-        <p className="text-[11px] font-medium text-[var(--muted)]">{label}</p>
-        <p className="text-2xl font-bold leading-tight text-[var(--fg)]">{value}</p>
-        <p className="text-[10px] text-[var(--muted)]">{sub}</p>
-      </div>
-      <Link to={linkTo} className="mt-auto flex items-center gap-1 text-[11px] font-semibold hover:underline" style={{ color }}>
-        {linkLabel} <ChevronRight className="h-3 w-3" />
-      </Link>
+    <div>
+      <h2 style={{ color: FG, fontSize: 14, fontWeight: 600 }}>{title}</h2>
+      {sub && <p className="mt-0.5" style={{ color: DIM, fontSize: 11 }}>{sub}</p>}
+    </div>
+  );
+}
+function StatPill({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="rounded-xl px-4 py-2.5" style={{ background: CARD, border: `1px solid ${BORDER}` }}>
+      <p style={{ fontSize: 10, color: DIM, textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</p>
+      <p style={{ fontFamily: BARLOW, fontWeight: 700, fontSize: 22, color: FG, lineHeight: 1.2 }}>{value}</p>
     </div>
   );
 }
 
-// ── Panel wrapper ─────────────────────────────────────────────────────────
-function Panel({ title, linkTo, linkLabel, children }: { title: string; linkTo?: string; linkLabel?: string; children: ReactNode }) {
-  return (
-    <div className="card rounded-2xl p-5">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-bold text-[var(--fg)]">{title}</h2>
-        {linkTo && (
-          <Link to={linkTo} className="flex items-center gap-1 text-xs font-semibold hover:underline" style={{ color: LIME }}>
-            {linkLabel} <ChevronRight className="h-3.5 w-3.5" />
-          </Link>
-        )}
-      </div>
-      <div className="mt-3">{children}</div>
-    </div>
-  );
-}
-
-function EmptyRow({ icon: Icon, text }: { icon: typeof BookOpen; text: string }) {
-  return (
-    <div className="flex flex-col items-center gap-2 py-8 text-center">
-      <Icon className="h-6 w-6 text-[var(--muted)]" />
-      <p className="text-xs text-[var(--muted)]">{text}</p>
-    </div>
-  );
-}
-
-function LegendRow({ color, label, value }: { color: string; label: string; value: number }) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: color }} />
-      <span className="text-[var(--muted)]">{label}</span>
-      <span className="font-bold text-[var(--fg)]">{value}</span>
-    </div>
-  );
-}
-
-// ── My Exams row (status-accurate: score / progress / not started) ────────
-function MyExamRow({ it }: { it: ExamListItem }) {
+// ── New Courses card ─────────────────────────────────────────────────────
+function CourseCard({ it, color }: { it: ExamListItem; color: string }) {
   const done = it.attempt?.status === "submitted";
   const active = it.attempt?.status === "in_progress";
-  const pct = done ? (it.attempt?.score ?? 0) : active ? 50 : 0;
-  const barColor = done ? LIME : active ? BLUE : "var(--card-2)";
+  const statusMeta = done ? { label: "Completed", color: LIME } : active ? { label: "In progress", color: AMBER } : { label: "Not started", color: DIM };
   return (
     <Link to={done && it.attempt ? `/attempts/${it.attempt.id}/result` : `/exams/${it.registration.id}/checkin`}
-      className="flex items-center gap-3 rounded-xl p-2 transition hover:bg-[var(--card-2)]">
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg" style={{ background: "rgba(198,255,52,0.14)" }}>
-        <BookOpen className="h-4 w-4" style={{ color: LIME }} />
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-xs font-bold text-[var(--fg)]">{it.exam.title}</p>
-        <p className="truncate text-[10px] text-[var(--muted)]">{it.exam.code}</p>
-        <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-[var(--card-2)]">
-          <div className="h-full rounded-full" style={{ width: `${pct}%`, background: barColor }} />
-        </div>
+      className="group flex h-[188px] flex-col justify-between rounded-xl p-4 transition hover:-translate-y-0.5"
+      style={{ background: SURFACE, border: `1px solid ${BORDER}` }}>
+      <div>
+        <span className="flex h-9 w-9 items-center justify-center rounded-lg" style={{ background: `${color}18` }}>
+          <BookOpen className="h-4 w-4" style={{ color }} />
+        </span>
+        <p className="mt-3 line-clamp-2 transition group-hover:text-[#c8f000]" style={{ fontSize: 13.5, fontWeight: 600, color: FG, lineHeight: 1.3 }}>{it.exam.title}</p>
+        <p className="mt-1" style={{ fontFamily: MONO, fontSize: 10.5, color: DIM }}>{it.exam.subject ?? "General"}</p>
       </div>
-      <span className="shrink-0 text-[11px] font-bold text-[var(--muted)]">
-        {done ? `${it.attempt?.score ?? 0}%` : active ? "In progress" : "Not started"}
-      </span>
+      <div className="flex items-center justify-between">
+        <span style={{ fontFamily: MONO, fontSize: 10.5, color: DIM }}>
+          {it.questionCount ?? "—"} Qs · {it.exam.durationMinutes} min
+        </span>
+        <span className="px-2 py-0.5" style={{ fontSize: 9.5, fontWeight: 600, borderRadius: 999, background: `${statusMeta.color}18`, color: statusMeta.color }}>{statusMeta.label}</span>
+      </div>
     </Link>
   );
 }
 
-// ── Upcoming exam row ───────────────────────────────────────────────────────
-function UpcomingRow({ it, now }: { it: ExamListItem; now: number }) {
-  const iso = startIso(it)!;
-  const d = new Date(iso);
-  const left = daysLeft(iso, now);
-  return (
-    <Link to={`/exams/${it.registration.id}/checkin`} className="flex items-center gap-3 rounded-xl p-2 transition hover:bg-[var(--card-2)]">
-      <div className="flex h-11 w-11 shrink-0 flex-col items-center justify-center rounded-lg border border-[var(--border)]">
-        <span className="text-[9px] font-bold uppercase text-[var(--muted)]">{d.toLocaleDateString(undefined, { month: "short" })}</span>
-        <span className="text-sm font-bold text-[var(--fg)]">{d.getDate()}</span>
-      </div>
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-xs font-bold text-[var(--fg)]">{it.exam.title}</p>
-        <p className="truncate text-[10px] text-[var(--muted)]">{it.exam.code} · {fmtDate(iso)}</p>
-      </div>
-      <span className="shrink-0 rounded-full px-2.5 py-1 text-[10px] font-bold" style={{ background: `${LIME}20`, color: LIME }}>
-        {left === 0 ? "Today" : `${left}d left`}
-      </span>
-    </Link>
-  );
-}
-
-// ── Compact mini calendar (dashboard widget — not the full Calendar page) ──
+// ── Mini Calendar ────────────────────────────────────────────────────────
 function MiniCalendar({ exams }: { exams: ExamListItem[] }) {
-  const navigate = useNavigate();
   const today = new Date();
   const [cursor, setCursor] = useState(() => new Date(today.getFullYear(), today.getMonth(), 1));
-  const [selected, setSelected] = useState<Date | null>(today);
 
   const byDay = useMemo(() => {
     const map = new Map<string, ExamListItem[]>();
@@ -380,67 +440,47 @@ function MiniCalendar({ exams }: { exams: ExamListItem[] }) {
     const first = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
     const gridStart = new Date(first);
     gridStart.setDate(1 - first.getDay());
-    return Array.from({ length: 35 }, (_, i) => {
-      const d = new Date(gridStart);
-      d.setDate(gridStart.getDate() + i);
-      return d;
-    });
+    return Array.from({ length: 35 }, (_, i) => { const d = new Date(gridStart); d.setDate(gridStart.getDate() + i); return d; });
   }, [cursor]);
 
   const key = (d: Date) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
   const sameDay = (a: Date, b: Date) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-  const selectedItems = selected ? byDay.get(key(selected)) ?? [] : [];
 
   return (
-    <div className="card rounded-2xl p-5">
+    <Panel>
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-bold text-[var(--fg)]">{cursor.toLocaleDateString(undefined, { month: "long", year: "numeric" })}</h2>
+        <h2 style={{ color: FG, fontSize: 14, fontWeight: 600 }}>{cursor.toLocaleDateString(undefined, { month: "long", year: "numeric" })}</h2>
         <div className="flex items-center gap-1">
-          <button onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))} className="flex h-6 w-6 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card-2)]"><ChevronLeft className="h-3.5 w-3.5" /></button>
-          <button onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))} className="flex h-6 w-6 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--card-2)]"><ChevronRight className="h-3.5 w-3.5" /></button>
+          <button onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))}
+            className="flex items-center justify-center transition hover:opacity-70" style={{ width: 24, height: 24, color: DIM }}><ChevronLeft className="h-3.5 w-3.5" /></button>
+          <button onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))}
+            className="flex items-center justify-center transition hover:opacity-70" style={{ width: 24, height: 24, color: DIM }}><ChevronRight className="h-3.5 w-3.5" /></button>
         </div>
       </div>
-      <div className="mt-3 grid grid-cols-7 gap-1 text-center text-[9px] font-semibold uppercase text-[var(--muted)]">
+      <div className="mt-3 grid grid-cols-7 text-center" style={{ fontFamily: MONO, fontSize: 10.5, color: DIM }}>
         {["S", "M", "T", "W", "T", "F", "S"].map((w, i) => <div key={i}>{w}</div>)}
       </div>
-      <div className="mt-1 grid grid-cols-7 gap-1">
+      <div className="mt-1.5 grid grid-cols-7 gap-y-1.5">
         {cells.map((d, i) => {
           const inMonth = d.getMonth() === cursor.getMonth();
           const isToday = sameDay(d, today);
-          const isSel = selected && sameDay(d, selected);
           const has = (byDay.get(key(d))?.length ?? 0) > 0;
           return (
-            <button key={i} onClick={() => setSelected(d)}
-              className={clsx("flex h-7 flex-col items-center justify-center gap-0.5 rounded-md text-[10px] transition",
-                isSel ? "bg-[var(--card-2)]" : "hover:bg-[var(--card-2)]",
-                !inMonth && "opacity-30")}>
-              <span className={clsx("flex h-5 w-5 items-center justify-center rounded-full font-semibold", isToday ? "text-[#111110]" : "text-[var(--fg)]")}
-                style={isToday ? { background: LIME } : undefined}>
+            <Link key={i} to={byDay.get(key(d))?.[0] ? `/exams/${byDay.get(key(d))![0].registration.id}/checkin` : "/calendar"}
+              className="flex flex-col items-center justify-center gap-1 transition hover:opacity-80">
+              <span className="flex items-center justify-center font-medium transition" style={{ fontFamily: MONO, width: 26, height: 26, borderRadius: "50%", fontSize: 11, background: isToday ? LIME : "transparent", color: isToday ? "#0c0c0c" : has ? LIME : inMonth ? FG : "color-mix(in oklch, var(--muted) 55%, transparent)", fontWeight: isToday ? 700 : 400 }}>
                 {d.getDate()}
               </span>
-              {has && <span className="h-1 w-1 rounded-full" style={{ background: isToday ? LIME : PINK }} />}
-            </button>
+            </Link>
           );
         })}
       </div>
-      <div className="mt-3 border-t border-[var(--border)] pt-3">
-        {selectedItems.length === 0 ? (
-          <p className="text-xs text-[var(--muted)]">{selected ? "Nothing scheduled." : "Select a day."}</p>
-        ) : (
-          <div className="space-y-1.5">
-            {selectedItems.map((it) => (
-              <button key={it.registration.id} onClick={() => navigate(`/exams/${it.registration.id}/checkin`)}
-                className="flex w-full items-center gap-2 rounded-lg p-1.5 text-left transition hover:bg-[var(--card-2)]">
-                <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: LIME }} />
-                <span className="truncate text-xs font-medium text-[var(--fg)]">{it.exam.title}</span>
-              </button>
-            ))}
-          </div>
-        )}
+      <div className="mt-3 flex items-center justify-between pt-3" style={{ borderTop: `1px solid ${BORDER}` }}>
+        <span className="flex items-center gap-1.5" style={{ fontSize: 11, color: DIM }}>
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: LIME }} /> {[...byDay.values()].reduce((s, v) => s + v.length, 0)} exam day{[...byDay.values()].length === 1 ? "" : "s"}
+        </span>
+        <Link to="/calendar" style={{ color: LIME, fontSize: 11 }} className="hover:opacity-70">Full calendar →</Link>
       </div>
-      <Link to="/calendar" className="mt-3 flex items-center gap-1 text-xs font-semibold hover:underline" style={{ color: LIME }}>
-        View full calendar <ChevronRight className="h-3.5 w-3.5" />
-      </Link>
-    </div>
+    </Panel>
   );
 }

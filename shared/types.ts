@@ -413,6 +413,20 @@ export interface Announcement {
   sentAt?: string | null;
   emailedCount?: number; // recipients actually emailed (when the email channel is on)
   createdBy?: string;
+  /** Pinned announcements float to the top of the recipient's feed. */
+  pinned?: boolean;
+  /** Free-text sender department/office (e.g. "IT Services", "Registrar") — displayed as a tag, not tied to the Faculty/Department org entities. */
+  department?: string;
+}
+
+/** Per-student read receipt for an announcement — drives unread badges/dots
+ *  and the "mark as read" affordance. Only candidates read via this feed
+ *  today, so this is candidate-scoped. */
+export interface AnnouncementRead {
+  id: string;
+  announcementId: string;
+  candidateId: string;
+  readAt: string;
 }
 
 /** Institution-wide settings (a single record). Some fields drive real behavior. */
@@ -446,7 +460,43 @@ export interface OrgSettings {
   apiKeys?: ApiKeyRecord[];
   /** Scheduled report exports emailed on a cadence. */
   scheduledReports?: ScheduledReport[];
+  /** How this institution organizes learning — see LearningStructureConfig.
+   *  Always present after initDb's backfill; optional in the type only
+   *  because older in-memory records predate this field. */
+  learningStructure?: LearningStructureConfig;
 }
+
+// ---- Learning structure (foundational config layer — see the "Learning
+// structure abstraction" project note) ----
+export const LEARNING_STRUCTURE_MODES = ["academic", "cohort", "hybrid"] as const;
+export type LearningStructureMode = (typeof LEARNING_STRUCTURE_MODES)[number];
+
+/** Drives which structural concepts (academic years/semesters/levels vs.
+ *  cohorts) are active for this institution, and what to call them in the UI.
+ *  This is the foundational config layer for Oriole's main driving
+ *  architecture goal: every module that touches terms/levels/cohorts should
+ *  read this instead of hardcoding one structure. Not yet consumed by any
+ *  existing module — those are migrated to it incrementally, module by
+ *  module, rather than all at once. */
+export interface LearningStructureConfig {
+  mode: LearningStructureMode;
+  useAcademicYears: boolean;
+  useSemesters: boolean;
+  useLevels: boolean;
+  useCohorts: boolean;
+  /** UI terminology overrides, since institutions name these differently
+   *  (a university says "Semester", a bootcamp might say "Sprint"). */
+  academicYearLabel: string;
+  semesterLabel: string;
+  levelLabel: string;
+  cohortLabel: string;
+}
+
+export const DEFAULT_LEARNING_STRUCTURE: LearningStructureConfig = {
+  mode: "academic",
+  useAcademicYears: true, useSemesters: true, useLevels: true, useCohorts: true,
+  academicYearLabel: "Academic Year", semesterLabel: "Semester", levelLabel: "Level", cohortLabel: "Class",
+};
 
 /** An outbound webhook subscription. */
 export interface Webhook {
@@ -492,6 +542,153 @@ export interface ClassGroup {
   memberIds: string[];
   assignments: { examId: string; scheduledStart: string | null; assignedAt: string }[];
   createdAt: string;
+}
+
+// ---- Digital library (Digital Learning Resource Management) ----
+export const BOOK_GENRES = ["Novel", "Fiction", "Science fiction", "Fantasy", "Historical fiction", "Mystery", "Thriller", "Horror"] as const;
+export type BookGenre = (typeof BOOK_GENRES)[number];
+
+/** What kind of academic resource this is. "eBook" covers the original
+ *  recreational-reading use case (genre applies only to this type). */
+export const RESOURCE_TYPES = [
+  "Textbook", "Lecture Notes", "Past Questions", "Video", "Audio", "Assignment Guide", "Lab Manual",
+  "Research Paper", "Journal", "Presentation", "Source Code", "ZIP Resources", "External Link", "eBook",
+  "Policy Document", "Course Outline", "Other",
+] as const;
+export type ResourceType = (typeof RESOURCE_TYPES)[number];
+
+export const RESOURCE_DIFFICULTIES = ["Beginner", "Intermediate", "Advanced"] as const;
+export type ResourceDifficulty = (typeof RESOURCE_DIFFICULTIES)[number];
+
+/** Who can see a resource. "institution" = every student; "scoped" = only
+ *  students in `classIds` (via ClassGroup.memberIds) or listed directly in
+ *  `studentIds` — the only real enrollment primitive this app has. Faculty/
+ *  department/programme/course/level are descriptive metadata on the resource
+ *  itself (for search & browsing), not access-control gates, since User has
+ *  no faculty/department/programme fields to check against. */
+export interface ResourceVisibility {
+  scope: "institution" | "scoped";
+  classIds: string[];
+  studentIds: string[];
+}
+
+/** A learning resource (book, lecture notes, past questions, video link, etc.)
+ *  an admin/facilitator has added to the library. `coverImage` follows the
+ *  same convention as Exam.coverImage (a validated data: URL, no separate
+ *  file storage). `fileData` is the uploaded document itself (also a data:
+ *  URL, same no-separate-storage convention, just a higher size cap) — when
+ *  it's a PDF, totalPages is auto-detected from it server-side. `externalUrl`
+ *  is an optional link instead of/alongside an upload (the recommended way to
+ *  reference full lecture-length video, since direct upload is capped by the
+ *  data-URL storage model). There is no in-app reader/viewer — "Read" opens
+ *  fileData or externalUrl in a new tab. `checksum` (SHA-256 of fileData) is
+ *  used for duplicate-upload detection. Faculty/department/programme names are
+ *  denormalized from the org entities at save time so students never need a
+ *  join. `version` increments on every file replacement; prior versions are
+ *  kept in the resourceVersions table. */
+export interface Book {
+  id: string;
+  title: string;
+  author: string;
+  genre: BookGenre;
+  resourceType: ResourceType;
+  coverImage?: string | null;
+  fileData?: string | null;
+  fileName?: string | null;
+  fileMime?: string | null;
+  fileSize?: number | null;
+  checksum?: string | null;
+  externalUrl?: string | null;
+  totalPages: number;
+  pagesAutoDetected?: boolean;
+  description?: string;
+  summary?: string;
+  tags?: string[];
+  academicYearId?: string | null;
+  academicYearName?: string | null;
+  semester?: string;
+  facultyId?: string | null;
+  facultyName?: string | null;
+  departmentId?: string | null;
+  departmentName?: string | null;
+  programId?: string | null;
+  programName?: string | null;
+  course?: string;
+  courseCode?: string;
+  level?: string;
+  instructor?: string;
+  publisher?: string;
+  edition?: string;
+  isbn?: string;
+  language?: string;
+  difficulty?: ResourceDifficulty | null;
+  estimatedReadingTime?: number | null;
+  visibility: ResourceVisibility;
+  status: "draft" | "published";
+  availableFrom?: string | null;
+  availableUntil?: string | null;
+  canDownload: boolean;
+  canPreview: boolean;
+  downloadLimit?: number | null;
+  watermarkPdf?: boolean;
+  version: number;
+  viewCount: number;
+  downloadCount: number;
+  uploadedBy: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+/** A prior file snapshot of a Book, kept whenever the file is replaced so
+ *  admins can view history / restore, while students always see the latest. */
+export interface ResourceVersion {
+  id: string;
+  bookId: string;
+  version: number;
+  fileData?: string | null;
+  fileName?: string | null;
+  fileMime?: string | null;
+  fileSize?: number | null;
+  checksum?: string | null;
+  changeLog?: string;
+  uploadedBy: string;
+  createdAt: string;
+}
+
+export interface ResourceBookmark {
+  id: string;
+  bookId: string;
+  candidateId: string;
+  createdAt: string;
+}
+
+export interface ResourceRating {
+  id: string;
+  bookId: string;
+  candidateId: string;
+  score: number; // 1-5
+  comment?: string;
+  createdAt: string;
+}
+
+/** One row per successful download, used only to enforce per-student
+ *  downloadLimit — not a full audit entry (too high-volume for the
+ *  tamper-evident audit_logs chain). */
+export interface ResourceDownloadLog {
+  id: string;
+  bookId: string;
+  candidateId: string;
+  at: string;
+}
+
+/** One student's reading position in one book. currentPage/percentage are
+ *  set by the student directly (there's no reader to auto-track pages). */
+export interface ReadingProgress {
+  id: string;
+  bookId: string;
+  candidateId: string;
+  currentPage: number;
+  updatedAt: string;
 }
 
 // ---- Institution structure ----
@@ -594,4 +791,6 @@ export interface ExamListItem {
   registration: Registration;
   exam: Exam;
   attempt: Attempt | null;
+  /** Question count for this exam — only populated by list endpoints that compute it cheaply (e.g. GET /api/exams). */
+  questionCount?: number;
 }
