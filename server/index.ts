@@ -8,7 +8,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createHmac, createHash, randomBytes } from "node:crypto";
-import { db, initDb, snapshotStore, proctorStore, answerStore, auditStore, emailStore } from "./db.ts";
+import { db, initDb, snapshotStore, proctorStore, answerStore, auditStore, emailStore, geofenceStore } from "./db.ts";
 import { sendMail, mailerStatus, verifySmtp, buildHtml, ctaButton, esc } from "./mailer.ts";
 import { sendSms, smsEnabled, smsStatus, recentSms } from "./sms.ts";
 import {
@@ -18,8 +18,8 @@ import {
 import { generateSecret, verifyTotp, verifyTotpStep, otpauthUrl, generateBackupCodes } from "./totp.ts";
 import { microsoftEnabled, authorizeUrl, exchangeCode } from "./sso.ts";
 import { tryEvalExpr } from "../shared/expr.ts";
-import { env, assertProductionEnv } from "./env.ts";
-import { securityHeaders, authLimiter, apiLimiter, twoFaLimiter, assertSafeWebhookUrl } from "./security.ts";
+import { env, assertProductionEnv, BCRYPT_COST } from "./env.ts";
+import { securityHeaders, permissionsPolicy, authLimiter, apiLimiter, twoFaLimiter, assertSafeWebhookUrl } from "./security.ts";
 import { logger, httpLogger } from "./logger.ts";
 import { encryptString, decryptString, encryptionEnabled } from "./crypto.ts";
 import { scheduleRetention, stopRetention } from "./retention.ts";
@@ -28,10 +28,14 @@ import { validate } from "./validate.ts";
 import { loginSchema, teamCreateSchema, passwordChangeSchema, passwordResetSchema, twoFaCodeSchema, twoFaDisableSchema } from "./schemas.ts";
 import { verifySeb } from "./seb.ts";
 import { nextStreak, displayStreak } from "./streak.ts";
+import { studentCanSeeBook, studentsInScope, ratingSummary, audiencesFor } from "./library.ts";
+import { looksLikeMarkupOrScript } from "./uploads.ts";
 import { shuffle, chooseQuestionIds, deadlineMs } from "./exam-delivery.ts";
 import { runCode, CODE_LANGUAGES } from "./code-runner.ts";
 import { gradeOne, parseMultiValue, rubricTotal } from "./grading.ts";
 import { applyCurve, letterFor, cleanBands } from "../shared/grades.ts";
+import { nearestGeofence, graceExpired, graceSecondsRemaining } from "../shared/geo.ts";
+import type { GeofenceLog } from "../shared/types.ts";
 import { aiEnabled, assessDifficulty, narrateTrend } from "./ai.ts";
 
 // Role groups for endpoint access. Staff = all back-office roles; graders = admin + facilitator.
@@ -118,6 +122,60 @@ async function recordAudit(req: Request, action: string, target: string) {
   await auditStore.add(log);
 }
 
+/** Record an authentication event (failed login / failed 2FA) where there's no
+ *  session yet — the "actor" is the claimed email itself, not currentUser(req). */
+async function recordAuthAudit(req: Request, action: string, email: string) {
+  const log = {
+    id: nanoid(10), at: now(), actorId: email.toLowerCase(), actorName: email,
+    action, target: `from ${req.ip ?? "unknown IP"}`,
+  };
+  await auditStore.add(log);
+}
+
+/** Fingerprint a device from IP + user agent — coarse but sufficient to notice
+ *  "this account just signed in somewhere it hasn't before". Never the raw IP
+ *  itself (minimizes what's persisted), and no third-party geolocation lookup
+ *  is involved, so no user IP is ever shared outside this server. */
+function deviceFingerprint(req: Request): string {
+  return createHash("sha256").update(`${req.ip ?? ""}|${req.get("user-agent") ?? ""}`).digest("hex").slice(0, 24);
+}
+
+/** After a successful login, email the account holder if this device/IP combo
+ *  hasn't signed in before. Always sent (not gated by notificationPrefs) —
+ *  security alerts aren't a routine content preference. Best-effort: a mail
+ *  failure never blocks or fails the login itself. */
+async function checkNewDeviceAndAlert(req: Request, user: User) {
+  const fp = deviceFingerprint(req);
+  const known = user.knownDevices ?? [];
+  if (known.some((d) => d.fingerprint === fp)) {
+    const entry = known.find((d) => d.fingerprint === fp)!;
+    entry.lastSeenAt = now();
+    await db.upsert("users", user);
+    return;
+  }
+  user.knownDevices = [{ fingerprint: fp, lastSeenAt: now() }, ...known].slice(0, 10);
+  await db.upsert("users", user);
+  const when = new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
+  const ip = req.ip ?? "an unknown address";
+  const ua = req.get("user-agent") ?? "an unrecognized browser";
+  const text = `Hi ${user.name},\n\nYour Oriole account was just signed in to from a new device or location.\n\nWhen: ${when}\nIP address: ${ip}\nDevice: ${ua}\n\nIf this was you, no action is needed. If you don't recognize this sign-in, change your password immediately and contact your administrator.\n\n— Oriole`;
+  const html = buildHtml(
+    `<p style="margin:0 0 12px;font-size:15px;color:#111827"><strong>Hi ${esc(user.name)},</strong></p>
+     <p style="margin:0 0 16px">Your Oriole account was just signed in to from a new device or location.</p>
+     <table role="presentation" cellpadding="0" cellspacing="0" style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:14px 18px;margin:0 0 20px;width:100%">
+       <tr><td style="font-size:13px;color:#6b7280;padding-bottom:4px">When</td></tr>
+       <tr><td style="font-size:15px;font-weight:700;color:#111827;padding-bottom:12px">${esc(when)}</td></tr>
+       <tr><td style="font-size:13px;color:#6b7280;padding-bottom:4px">IP address</td></tr>
+       <tr><td style="font-size:15px;font-weight:700;color:#111827;padding-bottom:12px">${esc(ip)}</td></tr>
+       <tr><td style="font-size:13px;color:#6b7280;padding-bottom:4px">Device</td></tr>
+       <tr><td style="font-size:14px;color:#111827">${esc(ua)}</td></tr>
+     </table>
+     <p style="margin:0;font-size:13px;color:#6b7280">If this was you, no action is needed. If you don't recognize this sign-in, change your password immediately and contact your administrator.</p>`,
+    user.email,
+  );
+  try { await sendMail(user.email, "New sign-in to your Oriole account", text, html); } catch { /* best-effort */ }
+}
+
 function invitationEmail(name: string, email: string, password: string) {
   const loginUrl = `${env.appUrl}/login`;
   const text =
@@ -156,6 +214,7 @@ app.use((req, res, next) => {
 
 app.use(httpLogger); // structured request/response logging
 app.use(securityHeaders); // helmet security headers
+app.use(permissionsPolicy); // explicitly allow geolocation/camera/microphone for our own origin
 // Library book uploads (PDF documents) need more headroom than the global
 // 2mb cap. Mounted BEFORE the global parser so it wins for this one path —
 // body-parser is a no-op on a second pass once the body is already parsed.
@@ -197,7 +256,17 @@ if (servingSpa) {
 // Constant-time filler for a bcrypt.compare when no matching account exists — its
 // hash is fixed and unrelated to any real user, so it's never actually satisfied,
 // only used to burn the same CPU time a real comparison would.
-const DUMMY_BCRYPT_HASH = bcrypt.hashSync("orcalis-timing-guard", 10);
+const DUMMY_BCRYPT_HASH = bcrypt.hashSync("orcalis-timing-guard", BCRYPT_COST);
+
+/** Transparently upgrade an existing account's hash to the current BCRYPT_COST
+ *  once we have the plaintext in hand (right after a successful compare) — a
+ *  hash's cost is baked into the hash string itself, so lowering BCRYPT_COST
+ *  only speeds up brand-new hashes unless old ones get re-hashed like this. */
+async function rehashIfNeeded(user: User, plaintext: string): Promise<void> {
+  if (bcrypt.getRounds(user.passwordHash) === BCRYPT_COST) return;
+  user.passwordHash = await bcrypt.hash(plaintext, BCRYPT_COST);
+  await db.upsert("users", user);
+}
 
 app.post("/api/auth/login", validate(loginSchema), async (req, res) => {
   const { email, password } = req.body as { email: string; password: string };
@@ -211,8 +280,12 @@ app.post("/api/auth/login", validate(loginSchema), async (req, res) => {
   // time to enumerate which emails have accounts (CWE-208 timing side-channel).
   const passwordOk = await bcrypt.compare(String(password), user?.passwordHash ?? DUMMY_BCRYPT_HASH);
   if (!user || !passwordOk) {
+    await recordAuthAudit(req, "auth.login_failed", String(email));
     return res.status(401).json({ error: "Invalid email or password." });
   }
+  // Fire-and-forget: don't add hashing latency to this response, especially
+  // under a login-storm where speed matters most.
+  rehashIfNeeded(user, String(password)).catch(() => { /* best-effort */ });
   // If 2FA is on, don't issue the session yet — set a short-lived challenge cookie
   // and ask the client for the authenticator code.
   if (user.twoFactorEnabled && user.twoFactorSecret) {
@@ -220,6 +293,7 @@ app.post("/api/auth/login", validate(loginSchema), async (req, res) => {
     return res.json({ twoFactorRequired: true });
   }
   issueSession(res, user);
+  await checkNewDeviceAndAlert(req, user);
   res.json({ user: toSafeUser(user) });
 });
 
@@ -256,9 +330,13 @@ app.post("/api/auth/2fa/verify", validate(twoFaCodeSchema), async (req, res) => 
       }
     }
   }
-  if (!ok) return res.status(401).json({ error: "Invalid code. Try again." });
+  if (!ok) {
+    await recordAuthAudit(req, "auth.2fa_failed", user.email);
+    return res.status(401).json({ error: "Invalid code. Try again." });
+  }
   clearPending2fa(res);
   issueSession(res, user);
+  await checkNewDeviceAndAlert(req, user);
   res.json({ user: toSafeUser(user) });
 });
 
@@ -294,7 +372,7 @@ app.post("/api/auth/2fa/enable", requireAuth, validate(twoFaCodeSchema), async (
   user.twoFactorPending = null;
   user.twoFactorEnabled = true;
   user.twoFactorLastStep = null;
-  user.twoFactorBackupCodes = await Promise.all(backupCodes.map((c) => bcrypt.hash(c.toLowerCase(), 10)));
+  user.twoFactorBackupCodes = await Promise.all(backupCodes.map((c) => bcrypt.hash(c.toLowerCase(), BCRYPT_COST)));
   await db.upsert("users", user);
   await recordAudit(req, "2fa.enabled", `${user.name} <${user.email}>`);
   res.json({ ok: true, backupCodes }); // plaintext shown exactly once
@@ -441,6 +519,169 @@ app.post("/api/registrations/:id/checkin", requireAuth, async (req, res) => {
   if (!reg.checkedInAt) reg.checkedInAt = now();
   await db.upsert("registrations", reg);
   res.json({ registration: reg });
+});
+
+function classifyUserAgent(ua: string | undefined): { browser: string | null; os: string | null } {
+  if (!ua) return { browser: null, os: null };
+  let browser: string | null = null;
+  if (/Edg\//.test(ua)) browser = "Edge";
+  else if (/OPR\//.test(ua)) browser = "Opera";
+  else if (/Chrome\//.test(ua)) browser = "Chrome";
+  else if (/Firefox\//.test(ua)) browser = "Firefox";
+  else if (/Safari\//.test(ua) && /Version\//.test(ua)) browser = "Safari";
+  let os: string | null = null;
+  if (/Windows/.test(ua)) os = "Windows";
+  else if (/Android/.test(ua)) os = "Android";
+  else if (/iPhone|iPad|iOS/.test(ua)) os = "iOS";
+  else if (/Mac OS X/.test(ua)) os = "macOS";
+  else if (/Linux/.test(ua)) os = "Linux";
+  return { browser, os };
+}
+
+/** Entry-verification GPS check, run once at check-in before an attempt exists.
+ *  Approved locations live on exam.lockdown.geofenceCenters — inside ANY one passes.
+ *  Continuous (post-start) monitoring is a later phase; this only gates "Start Exam". */
+app.post("/api/registrations/:id/geofence-check", requireAuth, async (req, res) => {
+  const user = currentUser(req)!;
+  const reg = db.data!.registrations.find((r) => r.id === req.params.id && r.candidateId === user.id);
+  if (!reg) return res.status(404).json({ error: "Registration not found." });
+  const exam = db.data!.exams.find((e) => e.id === reg.examId);
+  if (!exam) return res.status(404).json({ error: "Exam not found." });
+  const ld = exam.lockdown;
+  if (!ld?.requireGeofence) return res.status(400).json({ error: "This exam does not require location verification." });
+
+  const { browser, os } = classifyUserAgent(req.get("user-agent"));
+  const deviceId = typeof req.body?.deviceId === "string" ? req.body.deviceId.slice(0, 100) : null;
+  const base = {
+    id: nanoid(), registrationId: reg.id, attemptId: null, examId: exam.id, candidateId: user.id,
+    ipAddress: req.ip ?? null, deviceId, browser, operatingSystem: os, at: now(),
+  } as const;
+
+  // The browser couldn't get a GPS fix at all — no coordinates to check.
+  const clientError = req.body?.clientError;
+  if (clientError === "GPS_DISABLED" || clientError === "GPS_PERMISSION_DENIED") {
+    const log: GeofenceLog = { ...base, lat: null, lng: null, accuracy: null, distanceMeters: null, nearestCenterLabel: null, insideGeofence: false, eventType: clientError };
+    await geofenceStore.add(log);
+    return res.json({
+      allowed: false, distanceMeters: null, nearestCenter: null,
+      reason: clientError === "GPS_DISABLED"
+        ? "Location services are turned off. Please enable GPS before continuing."
+        : "Location permission is required to take this examination. Please enable location services.",
+    });
+  }
+
+  const lat = Number(req.body?.lat);
+  const lng = Number(req.body?.lng);
+  const accuracy = req.body?.accuracy == null ? null : Number(req.body.accuracy);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+    return res.status(400).json({ error: "Invalid coordinates." });
+  }
+
+  const centers = ld.geofenceCenters ?? [];
+  const minAccuracy = ld.geofenceMinAccuracyM ?? 20;
+  const result = nearestGeofence(lat, lng, centers);
+
+  let eventType: GeofenceLog["eventType"] = "ENTRY";
+  let allowed = true;
+  let reason: string | null = null;
+  if (centers.length === 0) {
+    allowed = false; eventType = "DENIED"; reason = "No approved locations are configured for this exam yet. Contact your administrator.";
+  } else if (accuracy != null && accuracy > minAccuracy) {
+    allowed = false; eventType = "LOW_ACCURACY"; reason = "Unable to verify your exact location. Please move to an open area and try again.";
+  } else if (!result.inside) {
+    allowed = false; eventType = "DENIED"; reason = "You're outside every approved examination area for this exam.";
+  }
+
+  const log: GeofenceLog = {
+    ...base, lat, lng, accuracy, distanceMeters: result.distanceMeters,
+    nearestCenterLabel: result.center?.label ?? null, insideGeofence: allowed, eventType,
+  };
+  await geofenceStore.add(log);
+
+  res.json({ allowed, distanceMeters: result.distanceMeters, nearestCenter: result.center?.label ?? null, reason });
+});
+
+/** Continuous-monitoring GPS checkpoint reported by the candidate's browser DURING a
+ *  proctored, geofenced exam (Phase 2 — vs. the one-time entry check above). Tracks
+ *  how long the candidate has been outside every approved area and, once the exam's
+ *  configured grace period elapses, applies its exit policy (see applyGeofencePolicy). */
+app.post("/api/attempts/:id/geofence-ping", requireAuth, async (req, res) => {
+  const user = currentUser(req)!;
+  const attempt = db.data!.attempts.find((a) => a.id === req.params.id && a.candidateId === user.id);
+  if (!attempt) return res.status(404).json({ error: "Attempt not found." });
+  if (attempt.status === "submitted") return res.json({ ok: true, ignored: "submitted" });
+  const exam = db.data!.exams.find((e) => e.id === attempt.examId);
+  const ld = exam?.lockdown;
+  if (!exam || !ld?.requireGeofence || !ld.geofenceContinuousMonitoring) {
+    return res.status(400).json({ error: "Continuous location monitoring is not enabled for this exam." });
+  }
+
+  const { browser, os } = classifyUserAgent(req.get("user-agent"));
+  const deviceId = typeof req.body?.deviceId === "string" ? req.body.deviceId.slice(0, 100) : null;
+  const base = {
+    id: nanoid(), registrationId: attempt.registrationId, attemptId: attempt.id, examId: exam.id, candidateId: user.id,
+    ipAddress: req.ip ?? null, deviceId, browser, operatingSystem: os, at: now(),
+  } as const;
+  const grace = ld.geofenceGraceSeconds ?? 120;
+  const policy = ld.geofenceExitPolicy ?? "warn";
+
+  let allowed: boolean;
+  let distanceMeters: number | null = null;
+  let nearestCenter: string | null = null;
+  let eventType: GeofenceLog["eventType"];
+  let lat: number | null = null, lng: number | null = null, accuracy: number | null = null;
+
+  const clientError = req.body?.clientError;
+  if (clientError === "GPS_DISABLED" || clientError === "GPS_PERMISSION_DENIED") {
+    allowed = false; eventType = clientError;
+  } else {
+    lat = Number(req.body?.lat);
+    lng = Number(req.body?.lng);
+    accuracy = req.body?.accuracy == null ? null : Number(req.body.accuracy);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+      return res.status(400).json({ error: "Invalid coordinates." });
+    }
+    const centers = ld.geofenceCenters ?? [];
+    const minAccuracy = ld.geofenceMinAccuracyM ?? 20;
+    const result = nearestGeofence(lat, lng, centers);
+    distanceMeters = result.distanceMeters;
+    nearestCenter = result.center?.label ?? null;
+    if (centers.length === 0) { allowed = false; eventType = "DENIED"; }
+    else if (accuracy != null && accuracy > minAccuracy) { allowed = false; eventType = "LOW_ACCURACY"; }
+    else { allowed = result.inside; eventType = result.inside ? "ENTRY" : "EXIT"; }
+  }
+
+  const log: GeofenceLog = { ...base, lat, lng, accuracy, distanceMeters, nearestCenterLabel: nearestCenter, insideGeofence: allowed, eventType };
+  await geofenceStore.add(log);
+
+  if (allowed) {
+    // Returning inside clears the outside-clock and reverses any auto-applied policy
+    // (auto-pause resumes and returns the elapsed time; a lock releases). A manual
+    // proctor pause is left untouched — only a geofence-triggered pause auto-resumes.
+    if (attempt.geofenceOutsideSince) {
+      attempt.geofenceOutsideSince = null;
+      attempt.geofenceLocked = false;
+      if (attempt.geofencePauseAuto && attempt.paused) {
+        attempt.pausedMs = (attempt.pausedMs ?? 0) + Math.max(0, Date.now() - new Date(attempt.pausedAt ?? now()).getTime());
+        attempt.paused = false; attempt.pausedAt = null; attempt.geofencePauseAuto = false;
+      }
+      await db.upsert("attempts", attempt);
+    }
+    return res.json({ allowed: true, distanceMeters, nearestCenter, reason: null, outsideSince: null, graceSeconds: grace, policy });
+  }
+
+  if (!attempt.geofenceOutsideSince) {
+    attempt.geofenceOutsideSince = now();
+    await proctorStore.add({ id: nanoid(10), attemptId: attempt.id, type: "geofence_exit", severity: "warning", message: "Left every approved examination area.", at: now() });
+  }
+  await db.upsert("attempts", attempt);
+  await applyGeofencePolicy(attempt, exam);
+
+  res.json({
+    allowed: false, distanceMeters, nearestCenter,
+    reason: "You're outside every approved examination area for this exam.",
+    outsideSince: attempt.geofenceOutsideSince, graceSeconds: grace, policy,
+  });
 });
 
 /** A proctor/facilitator confirms (or clears) that a candidate's photo-ID matches them. */
@@ -940,6 +1181,9 @@ app.get("/api/attempts/:id/control", requireAuth, (req, res) => {
     messages: attempt.proctorMessages ?? [],
     deadlineAt: new Date(attemptDeadlineMs(attempt)).toISOString(),
     serverNow: now(),
+    geofenceLocked: !!attempt.geofenceLocked,
+    geofenceOutsideSince: attempt.geofenceOutsideSince ?? null,
+    geofencePauseAuto: !!attempt.geofencePauseAuto,
   });
 });
 
@@ -990,10 +1234,7 @@ async function validateUploadAnswer(value: string): Promise<{ ok: boolean; reaso
   if (data.length > 2_500_000) return { ok: false, reason: "File is too large." };
   const type = String(meta.type ?? "").toLowerCase().split(";")[0].trim();
   if (!ALLOWED_UPLOAD_TYPES.has(type)) return { ok: false, reason: "That file type isn't allowed. Use PDF, an image (PNG/JPG/GIF/WebP), text/CSV, an Office document, or a ZIP." };
-  // Defence against a spoofed type: sniff the decoded head for markup/script.
-  let head = "";
-  try { head = Buffer.from(data.slice(data.indexOf(",") + 1, data.indexOf(",") + 200), "base64").toString("utf8").trim().toLowerCase(); } catch { /* binary — fine */ }
-  if (/^(<!doctype|<html|<svg|<\?xml|<script)/.test(head)) return { ok: false, reason: "That file looks like markup or a script and isn't allowed." };
+  if (looksLikeMarkupOrScript(data)) return { ok: false, reason: "That file looks like markup or a script and isn't allowed." };
   try {
     const raw = Buffer.from(data.slice(data.indexOf(",") + 1), "base64");
     const scan = await scanForMalware(raw);
@@ -1226,6 +1467,43 @@ async function forceSubmitAttempt(a: Attempt, reason: string): Promise<boolean> 
   if (certificate) await db.upsert("certificates", certificate);
   if (!needsReview) void notifyResultReleased(a);
   return true;
+}
+
+/**
+ * Apply the exam's geofence exit policy once a continuous-monitoring grace period has
+ * fully elapsed while a candidate remains outside every approved area. Shared by the
+ * geofence-ping handler (immediate, on the candidate's own request) and the periodic
+ * sweep (a client that simply stops pinging instead of returning can't dodge the
+ * policy that way — the sweep applies it independently). No-ops once already applied
+ * for the current outside-period, or once the attempt has returned/submitted.
+ */
+async function applyGeofencePolicy(a: Attempt, exam: Exam): Promise<void> {
+  if (a.status === "submitted" || !a.geofenceOutsideSince) return;
+  const ld = exam.lockdown;
+  const grace = ld.geofenceGraceSeconds ?? 120;
+  if (!graceExpired(a.geofenceOutsideSince, grace)) return;
+  const policy = ld.geofenceExitPolicy ?? "warn";
+  if (policy === "pause" && a.paused && a.geofencePauseAuto) return; // already paused for this outside-period
+  if (policy === "lock" && a.geofenceLocked) return; // already locked for this outside-period
+  if (policy === "warn") return; // logged at exit; nothing further to auto-apply
+
+  await proctorStore.add({
+    id: nanoid(10), attemptId: a.id, type: "geofence_exit", severity: "high",
+    message: `Grace period expired while outside every approved area (policy: ${policy}).`, at: now(),
+  });
+
+  if (policy === "pause") {
+    a.paused = true; a.pausedAt = now(); a.geofencePauseAuto = true;
+    await db.upsert("attempts", a);
+  } else if (policy === "lock") {
+    a.geofenceLocked = true;
+    await db.upsert("attempts", a);
+  } else {
+    const reason = policy === "terminate"
+      ? "Terminated: left the approved examination area and did not return within the grace period."
+      : "Auto-submitted: left the approved examination area and did not return within the grace period.";
+    await forceSubmitAttempt(a, reason);
+  }
 }
 
 app.post("/api/attempts/:id/submit", requireAuth, async (req, res) => {
@@ -1538,7 +1816,7 @@ app.post("/api/admin/candidates", requireRole("admin"), async (req, res) => {
   const user = {
     id: nanoid(10),
     email: String(email).trim(),
-    passwordHash: await bcrypt.hash(String(password), 10),
+    passwordHash: await bcrypt.hash(String(password), BCRYPT_COST),
     name: String(name).trim(),
     role: "candidate" as const,
     gender: typeof b.gender === "string" ? b.gender : undefined,
@@ -1574,7 +1852,7 @@ app.post("/api/admin/candidates/bulk", requireRole("admin"), async (req, res) =>
     const tempPassword = "dti-" + nanoid(6);
     const ageNum = Number(row?.age);
     db.data!.users.push({
-      id: nanoid(10), email, passwordHash: await bcrypt.hash(tempPassword, 10), name, role: "candidate",
+      id: nanoid(10), email, passwordHash: await bcrypt.hash(tempPassword, BCRYPT_COST), name, role: "candidate",
       gender: typeof row?.gender === "string" && row.gender.trim() ? row.gender.trim() : undefined,
       age: row?.age !== undefined && row?.age !== "" && Number.isFinite(ageNum) ? ageNum : undefined,
       studentClass: typeof row?.studentClass === "string" && row.studentClass.trim() ? row.studentClass.trim() : undefined,
@@ -1595,6 +1873,39 @@ app.get("/api/admin/emails", requireRoles(...GRADERS), async (_req, res) => {
   res.json({ emails: await emailStore.recent(100) });
 });
 
+/** Bulk-remove disposable data created by scripts/load-test.mjs (candidate
+ *  accounts with a @test.local email, and exams titled "Load Test Exam*") in a
+ *  single filter pass + single db.write(), instead of N one-by-one deletes
+ *  (each of which does its own full-mirror write — O(n²) for N accounts). */
+app.post("/api/admin/dev/purge-load-test-data", requireRole("admin"), async (_req, res) => {
+  const isLoadTestUser = (u: User) => u.role === "candidate" && u.email.endsWith("@test.local");
+  const removedUserIds = new Set(db.data!.users.filter(isLoadTestUser).map((u) => u.id));
+  const removedExamIds = new Set(db.data!.exams.filter((e) => e.title.startsWith("Load Test Exam")).map((e) => e.id));
+  const attemptIds = db.data!.attempts
+    .filter((a) => removedUserIds.has(a.candidateId) || removedExamIds.has(a.examId))
+    .map((a) => a.id);
+
+  const removedCounts = {
+    users: removedUserIds.size, exams: removedExamIds.size,
+    registrations: db.data!.registrations.filter((r) => removedUserIds.has(r.candidateId) || removedExamIds.has(r.examId)).length,
+    questions: db.data!.questions.filter((q) => removedExamIds.has(q.examId)).length,
+    attempts: attemptIds.length,
+  };
+
+  db.data!.users = db.data!.users.filter((u) => !removedUserIds.has(u.id));
+  db.data!.exams = db.data!.exams.filter((e) => !removedExamIds.has(e.id));
+  db.data!.questions = db.data!.questions.filter((q) => !removedExamIds.has(q.examId));
+  db.data!.registrations = db.data!.registrations.filter((r) => !removedUserIds.has(r.candidateId) && !removedExamIds.has(r.examId));
+  db.data!.attempts = db.data!.attempts.filter((a) => !removedUserIds.has(a.candidateId) && !removedExamIds.has(a.examId));
+  db.data!.certificates = db.data!.certificates.filter((c) => !removedUserIds.has(c.candidateId));
+  await answerStore.removeForAttempts(attemptIds);
+  await proctorStore.removeForAttempts(attemptIds);
+  await snapshotStore.removeForAttempts(attemptIds);
+  await db.write();
+  await recordAudit(_req, "dev.purge_load_test_data", JSON.stringify(removedCounts));
+  res.json({ ok: true, removed: removedCounts });
+});
+
 app.patch("/api/admin/candidates/:id/password", requireRole("admin"), validate(passwordResetSchema), async (req, res) => {
   const user = db.data!.users.find((u) => u.id === req.params.id && u.role === "candidate");
   if (!user) return res.status(404).json({ error: "Candidate not found." });
@@ -1602,7 +1913,7 @@ app.patch("/api/admin/candidates/:id/password", requireRole("admin"), validate(p
   if (!password || String(password).length < 12) {
     return res.status(400).json({ error: "Password must be at least 12 characters." });
   }
-  user.passwordHash = await bcrypt.hash(String(password), 10);
+  user.passwordHash = await bcrypt.hash(String(password), BCRYPT_COST);
   user.tokenVersion = (user.tokenVersion ?? 0) + 1; // revoke the candidate's existing sessions
   await db.write();
   res.json({ ok: true });
@@ -2376,27 +2687,40 @@ function buildStudentTrend(candidateId: string): import("../shared/types.ts").St
   return { points, overall, subjects, summary };
 }
 
-// Per-student progress report (aggregated; rendered as a printable PDF on the client).
-app.get("/api/admin/students/:id/report", requireRoles(...STAFF), (req, res) => {
+// Per-student progress report (aggregated; rendered as a printable PDF on the
+// client, and as the richer AdminStudentReport bento view on screen).
+app.get("/api/admin/students/:id/report", requireRoles(...STAFF), async (req, res) => {
   const student = db.data!.users.find((u) => u.id === req.params.id && u.role === "candidate");
   if (!student) return res.status(404).json({ error: "Student not found." });
   const examOf = (id: string) => db.data!.exams.find((e) => e.id === id);
   const attempts = db.data!.attempts
     .filter((a) => a.candidateId === student.id && a.status === "submitted" && !examOf(a.examId)?.practice)
     .sort((a, b) => (b.submittedAt ?? "").localeCompare(a.submittedAt ?? ""));
+
+  // Per-attempt integrity: same convention as the institution-wide health
+  // score (Analytics Overview) — 100 unless a non-"info" proctor event was
+  // logged against the attempt, in which case a fixed deduction per flagged
+  // event applies (floor 0). Real, derived from real proctor events.
+  const evMap = await proctorStore.forAttempts(attempts.map((a) => a.id));
+  const integrityFor = (attemptId: string): number => {
+    const flagged = (evMap.get(attemptId) ?? []).filter((e) => e.severity !== "info");
+    return flagged.length ? Math.max(0, 100 - flagged.length * 15) : 100;
+  };
+
   const exams = attempts.map((a) => {
     const exam = examOf(a.examId);
     return {
       examTitle: exam?.title ?? "Examination", examCode: exam?.code ?? "", subject: exam?.subject ?? null,
       score: a.score ?? 0, rawScore: a.rawScore ?? a.score ?? 0, letter: letterFor(a.score ?? 0, exam?.gradeBands),
       passed: a.passed ?? false, submittedAt: a.submittedAt, gradingStatus: a.gradingStatus ?? "auto_graded",
+      integrity: integrityFor(a.id),
     };
   });
   const scores = exams.map((e) => e.score);
   const certificates = db.data!.certificates
     .filter((c) => c.candidateId === student.id)
     .map((c) => ({ certNumber: c.certNumber, examTitle: examOf(c.examId)?.title ?? "Examination", score: c.score, issuedAt: c.issuedAt }));
-  // Attendance roll-up across this student's registrations.
+  // Attendance roll-up + raw registration list (includes not-yet-attempted registrations).
   const regs = db.data!.registrations.filter((r) => r.candidateId === student.id && !examOf(r.examId)?.practice);
   const attendance = {
     registered: regs.length,
@@ -2404,18 +2728,58 @@ app.get("/api/admin/students/:id/report", requireRoles(...STAFF), (req, res) => 
     checkedIn: regs.filter((r) => r.checkedInAt).length,
     late: regs.filter((r) => r.flaggedLate).length,
   };
+  const registrations = [...regs]
+    .sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""))
+    .map((r) => {
+      const exam = examOf(r.examId);
+      return {
+        examTitle: exam?.title ?? "Examination", examCode: exam?.code ?? "",
+        scheduledStart: r.scheduledStart, status: r.status, confirmed: r.approval === "confirmed",
+      };
+    });
+
+  // Overall per-student integrity score: same "1 - flagged/total" shape as the
+  // institution-wide health score, scoped to just this student's attempts.
+  const flaggedAttempts = attempts.filter((a) => (evMap.get(a.id) ?? []).some((e) => e.severity !== "info")).length;
+  const integrityScore = attempts.length ? Math.max(0, Math.round((1 - flaggedAttempts / attempts.length) * 100)) : 100;
+
+  // Subject-vs-class-average trend for the student's most-attempted subject
+  // (matches the single-line-vs-class-avg shape used on the candidate's own
+  // dashboard, /api/my/score-trend) — real monthly averages, 6-month window.
+  const subjectCounts = new Map<string, number>();
+  for (const e of exams) if (e.subject) subjectCounts.set(e.subject, (subjectCounts.get(e.subject) ?? 0) + 1);
+  const topSubject = [...subjectCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  let subjectTrend: { subject: string; points: { month: string; myScore: number | null; classAvg: number | null }[] } | null = null;
+  if (topSubject) {
+    const monthKey = (iso: string) => iso.slice(0, 7);
+    const inSubject = db.data!.attempts.filter((a) => a.status === "submitted" && a.submittedAt && typeof a.score === "number" && examOf(a.examId)?.subject === topSubject);
+    const months: string[] = [];
+    const cursor = new Date(); cursor.setDate(1);
+    for (let i = 5; i >= 0; i--) { const d = new Date(cursor.getFullYear(), cursor.getMonth() - i, 1); months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); }
+    const points = months.map((key) => {
+      const inMonth = inSubject.filter((a) => monthKey(a.submittedAt!) === key);
+      const mine = inMonth.filter((a) => a.candidateId === student.id);
+      const avg = (rows: typeof inMonth) => rows.length ? Math.round(rows.reduce((s, a) => s + (a.score ?? 0), 0) / rows.length) : null;
+      return { month: new Date(`${key}-01`).toLocaleDateString(undefined, { month: "short" }), myScore: avg(mine), classAvg: avg(inMonth) };
+    });
+    subjectTrend = { subject: topSubject, points };
+  }
+
   res.json({
-    student: { name: student.name, email: student.email, studentClass: student.studentClass ?? null, gender: student.gender ?? null, phone: student.phone ? (decryptString(student.phone) ?? null) : null },
+    student: { name: student.name, email: student.email, studentClass: student.studentClass ?? null, gender: student.gender ?? null, phone: student.phone ? (decryptString(student.phone) ?? null) : null, accommodationsExtraMinutes: student.accommodationsExtraMinutes ?? 0 },
     summary: {
       attempts: exams.length,
       avgScore: scores.length ? Math.round(scores.reduce((s, x) => s + x, 0) / scores.length) : null,
       best: scores.length ? Math.max(...scores) : null,
       passed: exams.filter((e) => e.passed).length,
       failed: exams.filter((e) => !e.passed).length,
+      passRate: exams.length ? Math.round((exams.filter((e) => e.passed).length / exams.length) * 100) : 0,
       certificates: certificates.length,
       gpa: cumulativeGpa(scores),
+      enrolled: regs.length,
+      integrityScore,
     },
-    exams, certificates, attendance,
+    exams, certificates, attendance, registrations, subjectTrend,
     trend: buildStudentTrend(student.id),
     generatedAt: now(),
     org: getSettings().name || "Oriole",
@@ -2693,13 +3057,17 @@ app.get("/api/admin/live", requireRoles(...STAFF), async (_req, res) => {
   const inProgress = db.data!.attempts.filter((a) => a.status === "in_progress");
   const evMap = await proctorStore.forAttempts(inProgress.map((a) => a.id));
   const ansMap = await answerStore.forAttempts(inProgress.map((a) => a.id));
+  const geoMap = await geofenceStore.forAttempts(inProgress.map((a) => a.id));
   const sessions = await Promise.all(inProgress.map(async (a) => {
     const exam = db.data!.exams.find((e) => e.id === a.examId);
     const events = evMap.get(a.id) ?? [];
     const questionCount = db.data!.questions.filter((q) => q.examId === a.examId).length;
     const answeredCount = (ansMap.get(a.id) ?? []).filter((an) => an.value).length;
+    const geoLogs = geoMap.get(a.id) ?? [];
+    const lastGeo = geoLogs[geoLogs.length - 1] ?? null;
     return {
       attemptId: a.id,
+      examId: a.examId,
       candidateName: userName(a.candidateId),
       examTitle: exam?.title ?? "Examination",
       startedAt: a.startedAt,
@@ -2711,6 +3079,19 @@ app.get("/api/admin/live", requireRoles(...STAFF), async (_req, res) => {
       recentEvents: events.slice(-4).reverse(),
       snapshot: await latestSnapshot(a.id),
       paused: !!a.paused,
+      geofence: exam?.lockdown?.requireGeofence ? {
+        continuousMonitoring: !!exam.lockdown.geofenceContinuousMonitoring,
+        centers: exam.lockdown.geofenceCenters ?? [],
+        graceSeconds: exam.lockdown.geofenceGraceSeconds ?? 120,
+        policy: exam.lockdown.geofenceExitPolicy ?? "warn",
+        lat: lastGeo?.lat ?? null,
+        lng: lastGeo?.lng ?? null,
+        distanceMeters: lastGeo?.distanceMeters ?? null,
+        inside: lastGeo?.insideGeofence ?? null,
+        lastCheckAt: lastGeo?.at ?? null,
+        outsideSince: a.geofenceOutsideSince ?? null,
+        locked: !!a.geofenceLocked,
+      } : null,
     };
   }));
   res.json({ sessions });
@@ -2726,6 +3107,8 @@ app.get("/api/admin/attempts/:id/live", requireRoles(...STAFF), async (req, res)
   const snaps = (await snapshotStore.forAttempt(a.id)).map((s) => ({ id: s.id, dataUrl: decryptString(s.dataUrl), at: s.at }));
   const questionCount = db.data!.questions.filter((q) => q.examId === a.examId).length;
   const answeredCount = (await answerStore.forAttempt(a.id)).filter((an) => an.value).length;
+  const geoLogs = await geofenceStore.forAttempt(a.id);
+  const lastGeo = geoLogs[geoLogs.length - 1] ?? null;
   res.json({
     attemptId: a.id,
     candidateName: candidate?.name ?? "Candidate",
@@ -2741,7 +3124,39 @@ app.get("/api/admin/attempts/:id/live", requireRoles(...STAFF), async (req, res)
     answeredCount, questionCount,
     deadlineAt: new Date(attemptDeadlineMs(a)).toISOString(),
     serverNow: now(),
+    geofence: exam?.lockdown?.requireGeofence ? {
+      continuousMonitoring: !!exam.lockdown.geofenceContinuousMonitoring,
+      centers: exam.lockdown.geofenceCenters ?? [],
+      graceSeconds: exam.lockdown.geofenceGraceSeconds ?? 120,
+      policy: exam.lockdown.geofenceExitPolicy ?? "warn",
+      lat: lastGeo?.lat ?? null,
+      lng: lastGeo?.lng ?? null,
+      distanceMeters: lastGeo?.distanceMeters ?? null,
+      inside: lastGeo?.insideGeofence ?? null,
+      lastCheckAt: lastGeo?.at ?? null,
+      outsideSince: a.geofenceOutsideSince ?? null,
+      locked: !!a.geofenceLocked,
+      history: geoLogs.slice(-20).reverse(),
+    } : null,
   });
+});
+
+// Proctor override: clear an auto-applied geofence pause/lock (e.g. a GPS glitch), letting
+// the candidate continue without needing to physically return first. Does not touch a
+// manual proctor pause, and cannot undo an auto-submit/terminate (the exam has already ended).
+app.post("/api/admin/attempts/:id/geofence-override", requireRoles(...STAFF), async (req, res) => {
+  const a = db.data!.attempts.find((x) => x.id === req.params.id);
+  if (!a) return res.status(404).json({ error: "Attempt not found." });
+  if (a.status !== "in_progress") return res.status(409).json({ error: "Attempt is not in progress." });
+  a.geofenceOutsideSince = null;
+  a.geofenceLocked = false;
+  if (a.geofencePauseAuto && a.paused) {
+    a.pausedMs = (a.pausedMs ?? 0) + Math.max(0, Date.now() - new Date(a.pausedAt ?? now()).getTime());
+    a.paused = false; a.pausedAt = null; a.geofencePauseAuto = false;
+  }
+  await db.upsert("attempts", a);
+  await recordAudit(req, "proctor.geofence_override", `${db.data!.users.find((u) => u.id === a.candidateId)?.name ?? "candidate"}`);
+  res.json({ ok: true, deadlineAt: new Date(attemptDeadlineMs(a)).toISOString() });
 });
 
 // Proctor → candidate message.
@@ -2832,80 +3247,150 @@ app.get("/api/admin/analytics", requireRoles(...GRADERS), async (_req, res) => {
   });
 });
 
-// Rich aggregation for the Results & Analytics dashboard.
+// Rich aggregation for the Results & Analytics dashboard — every field here is
+// a real institution-wide figure derived from submitted attempts/registrations/
+// questions; nothing is fabricated (no "loyalty score", "study hours", or
+// "Bloom taxonomy" concept exists in this app's data model, so those mockup
+// sections were mapped onto the closest real equivalents instead — see
+// CHANGELOG.md for the mapping notes).
 app.get("/api/admin/analytics-overview", requireRoles(...GRADERS), async (_req, res) => {
   const d = db.data!;
   const submitted = d.attempts.filter((a) => a.status === "submitted" && !examById(a.examId)?.practice);
   const avg = (xs: number[]) => (xs.length ? Math.round(xs.reduce((p, c) => p + c, 0) / xs.length) : 0);
   const nameOf = (id: string) => d.users.find((u) => u.id === id)?.name ?? "Candidate";
   const scores = submitted.map((a) => a.score ?? 0);
+  const subjectOf = (examId: string) => examById(examId)?.subject?.trim() || "General";
 
-  // KPI cards
-  const avgScore = scores.length ? Math.round(avg(scores) * 10) / 10 : 0;
+  // ---- Row 1: five stat cards, each with a real this-month-vs-last-month delta ----
+  const nowD = new Date();
+  const monthKey = (iso: string) => { const x = new Date(iso); return `${x.getFullYear()}-${x.getMonth()}`; };
+  const thisMonthKey = `${nowD.getFullYear()}-${nowD.getMonth()}`;
+  const lastMonthD = new Date(nowD.getFullYear(), nowD.getMonth() - 1, 1);
+  const lastMonthKey = `${lastMonthD.getFullYear()}-${lastMonthD.getMonth()}`;
+  const thisMonth = submitted.filter((a) => a.submittedAt && monthKey(a.submittedAt) === thisMonthKey);
+  const lastMonth = submitted.filter((a) => a.submittedAt && monthKey(a.submittedAt) === lastMonthKey);
+  // Real delta, or null when there's no prior-period baseline to compare against (never fabricated).
+  const delta = (thisVal: number, lastVal: number | null): number | null => (lastVal === null ? null : Math.round(thisVal - lastVal));
+  const passRateOf = (ax: Attempt[]) => (ax.length ? Math.round((ax.filter((a) => a.passed).length / ax.length) * 100) : null);
+
+  const avgScore = scores.length ? Math.round(avg(scores)) : 0;
+  const avgScoreLast = lastMonth.length ? avg(lastMonth.map((a) => a.score ?? 0)) : null;
   const highest = scores.length ? Math.max(...scores) : 0;
+  const lowest = scores.length ? Math.min(...scores) : 0;
   const durations = submitted.filter((a) => a.submittedAt).map((a) => (new Date(a.submittedAt!).getTime() - new Date(a.startedAt).getTime()) / 60000).filter((m) => m > 0 && m < 24 * 60);
   const avgMin = durations.length ? Math.round(avg(durations)) : 0;
   let top = { name: "—", score: 0 };
   for (const a of submitted) { const s = a.score ?? 0; if (s > top.score) top = { name: nameOf(a.candidateId), score: s }; }
 
-  // Per-subject stats (subject = exam)
-  const exams = d.exams.filter((e) => !e.practice);
-  const subjStats = exams
-    .map((e) => { const ax = submitted.filter((a) => a.examId === e.id); const ss = ax.map((a) => a.score ?? 0); return { id: e.id, subject: e.subject || e.title, attempts: ax.length, avg: avg(ss), under50: ss.length ? Math.round((ss.filter((s) => s < 50).length / ss.length) * 100) : 0 }; })
-    .filter((s) => s.attempts > 0);
+  const passRate = passRateOf(submitted);
+  const passRateLast = lastMonth.length ? passRateOf(lastMonth) : null;
 
-  // Heatmap: subject × last-8-months average score
-  const nowD = new Date();
-  const months: { key: string; label: string }[] = [];
-  for (let i = 7; i >= 0; i--) { const x = new Date(nowD.getFullYear(), nowD.getMonth() - i, 1); months.push({ key: `${x.getFullYear()}-${x.getMonth()}`, label: x.toLocaleString(undefined, { month: "short" }) }); }
-  const mKey = (iso: string) => { const x = new Date(iso); return `${x.getFullYear()}-${x.getMonth()}`; };
-  const heatmap = subjStats.slice(0, 10).map((s) => ({
-    subject: s.subject,
-    cells: months.map((m) => { const ax = submitted.filter((a) => a.examId === s.id && a.submittedAt && mKey(a.submittedAt!) === m.key); return ax.length ? avg(ax.map((a) => a.score ?? 0)) : null; }),
-  }));
+  const confirmedRegs = d.registrations.filter((r) => r.approval === "confirmed");
+  const completionRate = confirmedRegs.length ? Math.round((confirmedRegs.filter((r) => r.status === "submitted").length / confirmedRegs.length) * 100) : 0;
 
-  // Question-level analysis: per-question correctness across recent submissions
-  const ansMap = await answerStore.forAttempts(submitted.slice(-300).map((a) => a.id));
+  const liveAttempts = d.attempts.filter((a) => a.status === "in_progress");
+  const recentForIntegrity = [...submitted].sort((a, b) => (b.submittedAt ?? "").localeCompare(a.submittedAt ?? "")).slice(0, 300);
+  const integrityEvMap = await proctorStore.forAttempts([...recentForIntegrity.map((a) => a.id), ...liveAttempts.map((a) => a.id)]);
+  const cheatingDetected = [...integrityEvMap.values()].filter((evs) => evs.some((e) => e.severity !== "info")).length;
+  const integrityDenom = recentForIntegrity.length + liveAttempts.length;
+  const integrityScore = integrityDenom ? Math.max(0, Math.round((1 - cheatingDetected / integrityDenom) * 100)) : 100;
+
+  const cards = {
+    avgScore, avgScoreDelta: delta(avgScore, avgScoreLast),
+    totalExams: submitted.length, totalExamsDelta: delta(thisMonth.length, lastMonth.length ? lastMonth.length : null),
+    passRate: passRate ?? 0, passRateDelta: passRate !== null ? delta(passRate, passRateLast) : null,
+    completionRate,
+    integrityScore,
+    highest, lowest, avgMin, top,
+  };
+
+  // ---- Row 2A: per-subject score trend over the last 6 months (top 4 subjects by volume) ----
+  const months6: { key: string; label: string }[] = [];
+  for (let i = 5; i >= 0; i--) { const x = new Date(nowD.getFullYear(), nowD.getMonth() - i, 1); months6.push({ key: `${x.getFullYear()}-${x.getMonth()}`, label: x.toLocaleString(undefined, { month: "short" }) }); }
+  const subjectVolume = new Map<string, number>();
+  for (const a of submitted) subjectVolume.set(subjectOf(a.examId), (subjectVolume.get(subjectOf(a.examId)) ?? 0) + 1);
+  const topSubjects = [...subjectVolume.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([s]) => s);
+  const subjectTrend = months6.map((m) => {
+    const row: Record<string, string | number | null> = { month: m.label };
+    for (const subj of topSubjects) {
+      const ax = submitted.filter((a) => subjectOf(a.examId) === subj && a.submittedAt && monthKey(a.submittedAt) === m.key);
+      row[subj] = ax.length ? avg(ax.map((a) => a.score ?? 0)) : null;
+    }
+    return row;
+  });
+
+  // ---- Row 2B: subject performance bars (avg score by real subject, top 6) ----
+  const subjectBars = [...subjectVolume.keys()].map((subj) => {
+    const ax = submitted.filter((a) => subjectOf(a.examId) === subj);
+    return { subject: subj, avgScore: avg(ax.map((a) => a.score ?? 0)), attempts: ax.length };
+  }).sort((a, b) => b.attempts - a.attempts).slice(0, 6);
+
+  // ---- Row 2C: question-type accuracy (institution-wide, top 4 types by volume) ----
+  const recentForQ = [...submitted].sort((a, b) => (b.submittedAt ?? "").localeCompare(a.submittedAt ?? "")).slice(0, 300);
+  const ansMap = await answerStore.forAttempts(recentForQ.map((a) => a.id));
+  const typeStat = new Map<string, { c: number; t: number }>();
+  for (const [attemptId, arr] of ansMap) {
+    const attempt = recentForQ.find((a) => a.id === attemptId);
+    if (!attempt) continue;
+    for (const an of arr) {
+      const q = d.questions.find((x) => x.id === an.questionId);
+      if (!q) continue;
+      const st = typeStat.get(q.type) ?? { c: 0, t: 0 };
+      st.t++; if (an.correct === true) st.c++;
+      typeStat.set(q.type, st);
+    }
+  }
+  const QUESTION_TYPE_LABEL: Record<string, string> = { mcq: "Multiple Choice", true_false: "True / False", short: "Short Answer", numeric: "Numeric", essay: "Essay", code: "Code", matching: "Matching", ordering: "Ordering", cloze: "Cloze", hotspot: "Hotspot", file_upload: "File Upload", parameterized: "Parameterized" };
+  const questionTypeAnalysis = [...typeStat.entries()]
+    .map(([type, st]) => ({ type: QUESTION_TYPE_LABEL[type] ?? type, score: st.t ? Math.round((st.c / st.t) * 100) : 0, volume: st.t }))
+    .sort((a, b) => b.volume - a.volume).slice(0, 4);
+
+  // ---- Row 3A: question difficulty tiers (real correctness-rate bands, institution-wide) ----
   const qStat = new Map<string, { c: number; t: number }>();
   for (const arr of ansMap.values()) for (const an of arr) { const st = qStat.get(an.questionId) ?? { c: 0, t: 0 }; st.t++; if (an.correct === true) st.c++; qStat.set(an.questionId, st); }
   const rates = [...qStat.values()].filter((s) => s.t > 0).map((s) => s.c / s.t);
   const totalQ = rates.length || 1;
   const bucket = (arr: number[]) => ({ share: Math.round((arr.length / totalQ) * 100), correct: arr.length ? Math.round((arr.reduce((p, c) => p + c, 0) / arr.length) * 100) : 0 });
-  const questionLevels = [
-    { tier: "Easy to answer", ...bucket(rates.filter((r) => r >= 0.7)), tone: "green" },
-    { tier: "Difficult to answer", ...bucket(rates.filter((r) => r >= 0.4 && r < 0.7)), tone: "amber" },
-    { tier: "Hard to answer", ...bucket(rates.filter((r) => r < 0.4)), tone: "red" },
+  const questionDifficulty = [
+    { tier: "Easy to answer", ...bucket(rates.filter((r) => r >= 0.7)) },
+    { tier: "Moderate", ...bucket(rates.filter((r) => r >= 0.4 && r < 0.7)) },
+    { tier: "Hard to answer", ...bucket(rates.filter((r) => r < 0.4)) },
   ];
 
-  // Enrollment funnel
-  const candidateIds = new Set(d.users.filter((u) => u.role === "candidate").map((u) => u.id));
-  const enrolled = new Set(d.registrations.filter((r) => candidateIds.has(r.candidateId)).map((r) => r.candidateId));
-  const funnel = { students: candidateIds.size, enrolled: enrolled.size, completed: new Set(submitted.map((a) => a.candidateId)).size };
+  // ---- Row 3B: accuracy donut + real completion-pace buckets (time used ÷ allotted time) ----
+  const totalAnswered = [...qStat.values()].reduce((s, v) => s + v.t, 0);
+  const totalCorrect = [...qStat.values()].reduce((s, v) => s + v.c, 0);
+  const accuracy = totalAnswered ? Math.round((totalCorrect / totalAnswered) * 100) : 0;
+  const paceBuckets = { fast: 0, normal: 0, slow: 0 };
+  for (const a of submitted) {
+    if (!a.submittedAt) continue;
+    const exam = examById(a.examId);
+    const allotted = exam?.durationMinutes ?? a.durationMinutes;
+    if (!allotted) continue;
+    const takenMin = (new Date(a.submittedAt).getTime() - new Date(a.startedAt).getTime()) / 60000;
+    const ratio = takenMin / allotted;
+    if (ratio < 0.5) paceBuckets.fast++; else if (ratio <= 0.9) paceBuckets.normal++; else paceBuckets.slow++;
+  }
 
-  // Recommendation for the weakest subject
-  const weakest = [...subjStats].sort((a, b) => a.avg - b.avg)[0] ?? null;
-  const recommendations = weakest ? { subject: weakest.subject, avg: weakest.avg, under50: weakest.under50 } : null;
+  // ---- Row 3C: weekly attempt activity (real submission counts, last 6 weeks) ----
+  const weeklyActivity: { week: string; attempts: number }[] = [];
+  for (let i = 5; i >= 0; i--) {
+    const end = new Date(nowD.getTime() - i * 7 * 86_400_000);
+    const start = new Date(end.getTime() - 7 * 86_400_000);
+    const count = submitted.filter((a) => a.submittedAt && new Date(a.submittedAt) > start && new Date(a.submittedAt) <= end).length;
+    weeklyActivity.push({ week: `Wk ${6 - i}`, attempts: count });
+  }
 
-  // Performance growth over multiple attempts (per registration, ordered)
-  const byReg = new Map<string, Attempt[]>();
-  for (const a of submitted) { const arr = byReg.get(a.registrationId) ?? []; arr.push(a); byReg.set(a.registrationId, arr); }
-  const idxScores = new Map<number, number[]>();
-  for (const arr of byReg.values()) { arr.sort((x, y) => x.startedAt.localeCompare(y.startedAt)); arr.forEach((a, i) => { const list = idxScores.get(i) ?? []; list.push(a.score ?? 0); idxScores.set(i, list); }); }
-  const growth = [...idxScores.entries()].sort((a, b) => a[0] - b[0]).slice(0, 5).map(([i, list]) => ({ attempt: i + 1, avg: avg(list) }));
+  // ---- Row 4A: monthly average-score trend (real, last 6 months) ----
+  const monthlyPerformance = months6.map((m) => {
+    const ax = submitted.filter((a) => a.submittedAt && monthKey(a.submittedAt) === m.key);
+    return { month: m.label, score: ax.length ? avg(ax.map((a) => a.score ?? 0)) : null };
+  });
 
-  // Rapid performance acceleration — derived from the weakest subjects
-  const priorities = ["Urgent", "High", "Medium", "Low"];
-  const actions = ["Peer mentoring + targeted review", "Key-concept review session", "Add practice attempts", "Vocabulary / drills sprint"];
-  const impacts = ["High avg gain", "Reduce fail rate", "+ completion", "+ mastery"];
-  const rapid = [...subjStats].sort((a, b) => a.avg - b.avg).slice(0, 4).map((s, i) => ({
-    priority: priorities[i] ?? "Low",
-    focus: s.subject,
-    status: s.under50 >= 40 ? `${s.under50}% scored <50` : `avg ${s.avg}%`,
-    action: actions[i] ?? actions[3],
-    impact: impacts[i] ?? impacts[3],
-  }));
-
-  res.json({ cards: { avgScore, highest, totalAnalyzed: submitted.length, avgMin, top }, heatMonths: months.map((m) => m.label), heatmap, questionLevels, funnel, recommendations, growth, rapid });
+  res.json({
+    cards, subjectTrend, topSubjects, subjectBars, questionTypeAnalysis, questionDifficulty,
+    accuracy, paceBuckets, weeklyActivity, monthlyPerformance,
+  });
 });
 
 // ---- admin: certificates ----
@@ -3262,6 +3747,13 @@ app.post("/api/admin/communication/send", requireRoles(...GRADERS), async (req, 
 app.get("/api/admin/communication/status", requireRoles(...GRADERS), (_req, res) => {
   res.json(mailerStatus());
 });
+app.post("/api/admin/communication/test", requireRole("admin"), async (req, res) => {
+  const to = String(req.body?.to ?? "").trim();
+  if (!to) return res.status(400).json({ error: "Provide an email address to test." });
+  const r = await sendMail(to, "Oriole email test", "This is a test email from Oriole — your SMTP configuration is working.");
+  await recordAudit(req, "email.test", to);
+  res.json({ ...r, status: mailerStatus() });
+});
 
 // ---- admin: SMS / WhatsApp reminders ----
 app.get("/api/admin/sms/status", requireRoles(...GRADERS), (_req, res) => {
@@ -3361,7 +3853,7 @@ app.post("/api/me/password", requireAuth, validate(passwordChangeSchema), async 
   const { current, password } = req.body ?? {};
   if (!password || String(password).length < 12) return res.status(400).json({ error: "New password must be at least 12 characters." });
   if (!current || !(await bcrypt.compare(String(current), user.passwordHash))) return res.status(400).json({ error: "Current password is incorrect." });
-  user.passwordHash = await bcrypt.hash(String(password), 10);
+  user.passwordHash = await bcrypt.hash(String(password), BCRYPT_COST);
   user.tokenVersion = (user.tokenVersion ?? 0) + 1; // revoke other sessions on password change
   await db.upsert("users", user);
   issueSession(res, user); // keep the caller signed in with a token at the new version
@@ -3504,7 +3996,7 @@ app.get("/api/practice", requireAuth, async (req, res) => {
 // Candidate-facing: in-app announcements visible to the logged-in user's audience.
 app.get("/api/announcements", requireAuth, (req, res) => {
   const u = currentUser(req)!;
-  const auds = u.role === "candidate" ? ["everyone", "students"] : ["everyone", "admins"];
+  const auds = audiencesFor(u.role);
   const myReads = new Set(db.data!.announcementReads.filter((r) => r.candidateId === u.id).map((r) => r.announcementId));
   const announcements = db.data!.announcements
     .filter((a) => a.status === "sent" && a.channels.includes("in_app") && auds.includes(a.audience))
@@ -3521,7 +4013,9 @@ app.get("/api/announcements", requireAuth, (req, res) => {
 app.post("/api/announcements/:id/read", requireAuth, async (req, res) => {
   const u = currentUser(req)!;
   const id = String(req.params.id);
-  if (!db.data!.announcements.some((a) => a.id === id)) return res.status(404).json({ error: "Announcement not found." });
+  const auds = audiencesFor(u.role);
+  const ann = db.data!.announcements.find((a) => a.id === id);
+  if (!ann || !auds.includes(ann.audience)) return res.status(404).json({ error: "Announcement not found." });
   if (!db.data!.announcementReads.some((r) => r.announcementId === id && r.candidateId === u.id)) {
     const read: AnnouncementRead = { id: nanoid(10), announcementId: id, candidateId: u.id, readAt: now() };
     db.data!.announcementReads.push(read);
@@ -3532,7 +4026,7 @@ app.post("/api/announcements/:id/read", requireAuth, async (req, res) => {
 
 app.post("/api/announcements/read-all", requireAuth, async (req, res) => {
   const u = currentUser(req)!;
-  const auds = u.role === "candidate" ? ["everyone", "students"] : ["everyone", "admins"];
+  const auds = audiencesFor(u.role);
   const visible = db.data!.announcements.filter((a) => a.status === "sent" && a.channels.includes("in_app") && auds.includes(a.audience));
   const already = new Set(db.data!.announcementReads.filter((r) => r.candidateId === u.id).map((r) => r.announcementId));
   for (const a of visible) {
@@ -4397,17 +4891,27 @@ app.get("/api/admin/dashboard", requireRoles(...STAFF), async (_req, res) => {
 });
 
 // ---- admin: Classes (cohorts) ----
-app.get("/api/admin/classes", requireRoles(...GRADERS), (_req, res) => {
+app.get("/api/admin/classes", requireRoles(...GRADERS), (req, res) => {
+  const yearFilter = typeof req.query.academicYearId === "string" ? req.query.academicYearId : null;
+  const yearName = (id?: string | null) => (id ? db.data!.academicYears.find((y) => y.id === id)?.name ?? null : null);
   const classes = [...db.data!.classes]
+    .filter((c) => !yearFilter || c.academicYearId === yearFilter)
     .sort((a, b) => a.name.localeCompare(b.name))
-    .map((c) => ({ id: c.id, name: c.name, code: c.code ?? "", description: c.description ?? "", members: c.memberIds.length, assignments: c.assignments.length }));
+    .map((c) => ({
+      id: c.id, name: c.name, code: c.code ?? "", description: c.description ?? "",
+      members: c.memberIds.length, assignments: c.assignments.length,
+      academicYearId: c.academicYearId ?? null, academicYearName: yearName(c.academicYearId),
+    }));
   res.json({ classes });
 });
 
 app.post("/api/admin/classes", requireRole("admin"), async (req, res) => {
   const name = String(req.body?.name ?? "").trim();
   if (!name) return res.status(400).json({ error: "Class name is required." });
-  const cls = { id: nanoid(10), name, code: String(req.body?.code ?? "").trim(), description: String(req.body?.description ?? "").trim(), memberIds: [], assignments: [], createdAt: now() };
+  const academicYearId = typeof req.body?.academicYearId === "string" && req.body.academicYearId
+    ? (db.data!.academicYears.some((y) => y.id === req.body.academicYearId) ? req.body.academicYearId : null)
+    : null;
+  const cls = { id: nanoid(10), name, code: String(req.body?.code ?? "").trim(), description: String(req.body?.description ?? "").trim(), memberIds: [], assignments: [], createdAt: now(), academicYearId };
   db.data!.classes.push(cls);
   await db.upsert("classes", cls);
   await recordAudit(req, "class.created", name);
@@ -4447,7 +4951,8 @@ app.get("/api/admin/classes/:id", requireRole("admin"), (req, res) => {
       const passRate = scores.length ? Math.round((passing / scores.length) * 100) : null;
       return { ...a, examTitle: exam?.title ?? "Examination", memberCount: cls.memberIds.length, submitted, avgScore, passRate };
     });
-  res.json({ class: { id: cls.id, name: cls.name, code: cls.code ?? "", description: cls.description ?? "" }, members, assignments });
+  const academicYearName = cls.academicYearId ? db.data!.academicYears.find((y) => y.id === cls.academicYearId)?.name ?? null : null;
+  res.json({ class: { id: cls.id, name: cls.name, code: cls.code ?? "", description: cls.description ?? "", academicYearId: cls.academicYearId ?? null, academicYearName }, members, assignments });
 });
 
 app.patch("/api/admin/classes/:id", requireRole("admin"), async (req, res) => {
@@ -4457,6 +4962,9 @@ app.patch("/api/admin/classes/:id", requireRole("admin"), async (req, res) => {
   if (typeof b.name === "string" && b.name.trim()) cls.name = b.name.trim();
   if (typeof b.code === "string") cls.code = b.code.trim();
   if (typeof b.description === "string") cls.description = b.description.trim();
+  if ("academicYearId" in b) {
+    cls.academicYearId = b.academicYearId && db.data!.academicYears.some((y) => y.id === b.academicYearId) ? b.academicYearId : null;
+  }
   await db.upsert("classes", cls);
   res.json({ ok: true });
 });
@@ -4489,36 +4997,6 @@ function sha256OfDataUrl(dataUrl: string): string {
 }
 function decodedByteLength(dataUrl: string): number {
   return Buffer.byteLength(dataUrl.slice(dataUrl.indexOf(",") + 1), "base64");
-}
-
-/** Average rating (0 if none yet) and count for a resource — computed on
- *  read since resourceRatings is small per-book, no need to denormalize. */
-function ratingSummary(bookId: string): { avg: number; count: number } {
-  const ratings = db.data!.resourceRatings.filter((r) => r.bookId === bookId);
-  if (!ratings.length) return { avg: 0, count: 0 };
-  return { avg: Math.round((ratings.reduce((s, r) => s + r.score, 0) / ratings.length) * 10) / 10, count: ratings.length };
-}
-
-/** Real access-control gate: institution-wide by default, or scoped to
- *  specific classes (via ClassGroup.memberIds — the only real enrollment
- *  primitive this app has) and/or specific students. Faculty/department/
- *  programme/course/level are descriptive metadata only, not gates, since
- *  User has no faculty/department/programme fields to check against. */
-function studentCanSeeBook(book: Book, user: User): boolean {
-  if (book.status !== "published") return false;
-  const nowIso = now();
-  if (book.availableFrom && book.availableFrom > nowIso) return false;
-  if (book.availableUntil && book.availableUntil < nowIso) return false;
-  if (book.visibility.scope === "institution") return true;
-  if (book.visibility.studentIds.includes(user.id)) return true;
-  return db.data!.classes.some((c) => book.visibility.classIds.includes(c.id) && c.memberIds.includes(user.id));
-}
-
-function studentsInScope(book: Book): User[] {
-  if (book.visibility.scope === "institution") return db.data!.users.filter((u) => u.role === "candidate");
-  const ids = new Set(book.visibility.studentIds);
-  for (const cls of db.data!.classes) if (book.visibility.classIds.includes(cls.id)) for (const id of cls.memberIds) ids.add(id);
-  return db.data!.users.filter((u) => u.role === "candidate" && ids.has(u.id));
 }
 
 /** Best-effort email fan-out when an admin/facilitator opts in to notify
@@ -4572,6 +5050,8 @@ function validateBookBody(b: Record<string, unknown>): { errors: string[]; book:
       errors.push("Unsupported file type. Allowed: PDF, DOCX, PPTX, XLSX, ZIP, MP3, MP4, JPEG/PNG/WEBP.");
     } else if (b.fileData.length >= BOOK_FILE_MAX) {
       errors.push("The uploaded file must be under ~20MB. For lecture-length video/audio, use an external link instead.");
+    } else if (looksLikeMarkupOrScript(b.fileData)) {
+      errors.push("That file looks like markup or a script and isn't allowed.");
     } else {
       fileData = b.fileData;
       fileMime = mime;
@@ -4586,8 +5066,11 @@ function validateBookBody(b: Record<string, unknown>): { errors: string[]; book:
 
   let externalUrl: string | null = null;
   if (typeof b.externalUrl === "string" && b.externalUrl.trim()) {
-    try { externalUrl = new URL(b.externalUrl.trim()).toString(); }
-    catch { errors.push("The resource link must be a valid URL."); }
+    try {
+      const u = new URL(b.externalUrl.trim());
+      if (u.protocol !== "http:" && u.protocol !== "https:") errors.push("The resource link must be a valid http(s) URL.");
+      else externalUrl = u.toString();
+    } catch { errors.push("The resource link must be a valid URL."); }
   }
 
   const tags = Array.isArray(b.tags) ? (b.tags as unknown[]).map((t) => String(t).trim()).filter(Boolean).slice(0, 20) : [];
@@ -4681,6 +5164,10 @@ app.get("/api/admin/books", requireRoles(...GRADERS), (_req, res) => {
 app.post("/api/admin/books", requireRoles(...GRADERS), async (req, res) => {
   const { errors, book: partial, manualTotalPages, duplicateOf } = validateBookBody(req.body ?? {});
   if (errors.length) return res.status(400).json({ errors });
+  if (partial.fileData) {
+    const scan = await scanForMalware(Buffer.from(partial.fileData.slice(partial.fileData.indexOf(",") + 1), "base64"));
+    if (!scan.clean) return res.status(400).json({ errors: [scan.reason!] });
+  }
 
   const detected = partial.fileData ? await detectPdfPageCount(partial.fileData) : null;
   const totalPages = detected ?? manualTotalPages ?? 0;
@@ -4724,6 +5211,8 @@ app.patch("/api/admin/books/:id", requireRoles(...GRADERS), async (req, res) => 
   // changed) — don't re-parse or version on every unrelated metadata edit.
   const fileChanged = "fileData" in req.body && req.body.fileData !== book.fileData && !!partial.fileData;
   if (fileChanged) {
+    const scan = await scanForMalware(Buffer.from(partial.fileData!.slice(partial.fileData!.indexOf(",") + 1), "base64"));
+    if (!scan.clean) return res.status(400).json({ errors: [scan.reason!] });
     const prevVersion: ResourceVersion = {
       id: nanoid(10), bookId: book.id, version: book.version,
       fileData: book.fileData, fileName: book.fileName, fileMime: book.fileMime, fileSize: book.fileSize, checksum: book.checksum,
@@ -4963,7 +5452,7 @@ app.get("/api/books/:id/read", requireAuth, (req, res) => {
 app.post("/api/books/:id/bookmark", requireAuth, async (req, res) => {
   const user = currentUser(req)!;
   const book = db.data!.books.find((b) => b.id === req.params.id);
-  if (!book) return res.status(404).json({ error: "Resource not found." });
+  if (!book || (user.role === "candidate" && !studentCanSeeBook(book, user))) return res.status(404).json({ error: "Resource not found." });
   if (!db.data!.resourceBookmarks.some((bm) => bm.bookId === book.id && bm.candidateId === user.id)) {
     const bookmark: ResourceBookmark = { id: nanoid(10), bookId: book.id, candidateId: user.id, createdAt: now() };
     db.data!.resourceBookmarks.push(bookmark);
@@ -4974,6 +5463,8 @@ app.post("/api/books/:id/bookmark", requireAuth, async (req, res) => {
 
 app.delete("/api/books/:id/bookmark", requireAuth, async (req, res) => {
   const user = currentUser(req)!;
+  const book = db.data!.books.find((b) => b.id === req.params.id);
+  if (!book || (user.role === "candidate" && !studentCanSeeBook(book, user))) return res.status(404).json({ error: "Resource not found." });
   const bookmark = db.data!.resourceBookmarks.find((b) => b.bookId === req.params.id && b.candidateId === user.id);
   if (bookmark) {
     db.data!.resourceBookmarks = db.data!.resourceBookmarks.filter((b) => b.id !== bookmark.id);
@@ -4985,7 +5476,7 @@ app.delete("/api/books/:id/bookmark", requireAuth, async (req, res) => {
 app.post("/api/books/:id/rating", requireAuth, async (req, res) => {
   const user = currentUser(req)!;
   const book = db.data!.books.find((b) => b.id === req.params.id);
-  if (!book) return res.status(404).json({ error: "Resource not found." });
+  if (!book || (user.role === "candidate" && !studentCanSeeBook(book, user))) return res.status(404).json({ error: "Resource not found." });
   const score = Math.round(Number(req.body?.score));
   if (!Number.isFinite(score) || score < 1 || score > 5) return res.status(400).json({ error: "score must be between 1 and 5." });
   const comment = typeof req.body?.comment === "string" ? req.body.comment.trim().slice(0, 500) : undefined;
@@ -5002,11 +5493,11 @@ app.post("/api/books/:id/rating", requireAuth, async (req, res) => {
 });
 
 app.post("/api/books/:id/progress", requireAuth, async (req, res) => {
+  const user = currentUser(req)!;
   const book = db.data!.books.find((b) => b.id === req.params.id);
-  if (!book) return res.status(404).json({ error: "Book not found." });
+  if (!book || (user.role === "candidate" && !studentCanSeeBook(book, user))) return res.status(404).json({ error: "Book not found." });
   const currentPage = Math.max(0, Math.min(book.totalPages, Math.round(Number(req.body?.currentPage))));
   if (!Number.isFinite(currentPage)) return res.status(400).json({ error: "currentPage must be a number." });
-  const user = currentUser(req)!;
   let progress = db.data!.readingProgress.find((p) => p.bookId === book.id && p.candidateId === user.id);
   if (progress) {
     progress.currentPage = currentPage;
@@ -5096,7 +5587,7 @@ app.post("/api/admin/team", requireRole("admin"), validate(teamCreateSchema), as
   if (db.data!.users.some((u) => u.email.toLowerCase() === String(email).trim().toLowerCase())) {
     return res.status(409).json({ error: "An account with that email already exists." });
   }
-  const user = { id: nanoid(10), email: String(email).trim(), passwordHash: await bcrypt.hash(String(password), 10), name: String(name).trim(), role };
+  const user = { id: nanoid(10), email: String(email).trim(), passwordHash: await bcrypt.hash(String(password), BCRYPT_COST), name: String(name).trim(), role };
   db.data!.users.push(user);
   await db.upsert("users", user);
   await recordAudit(req, "team.invited", `${user.name} <${user.email}> · ${role}`);
@@ -5225,6 +5716,24 @@ const autoSubmitTimer = setInterval(() => {
 }, 60_000);
 autoSubmitTimer.unref?.();
 
+// Geofence exit-policy sweep: a candidate's browser reports GPS on its own schedule
+// (geofenceCheckIntervalSec), so a client that simply stops pinging while outside every
+// approved area could otherwise dodge the exit policy forever. This independently
+// re-checks every in-progress attempt with an open outside-period against its exam's
+// grace period, so the policy still applies even without a fresh ping.
+async function sweepGeofenceViolations() {
+  const candidates = db.data!.attempts.filter((a) => a.status === "in_progress" && a.geofenceOutsideSince);
+  for (const attempt of candidates) {
+    const exam = db.data!.exams.find((e) => e.id === attempt.examId);
+    if (!exam?.lockdown?.requireGeofence || !exam.lockdown.geofenceContinuousMonitoring) continue;
+    await applyGeofencePolicy(attempt, exam);
+  }
+}
+const geofenceSweepTimer = setInterval(() => {
+  sweepGeofenceViolations().catch((e) => logger.error({ err: String(e) }, "geofence sweep failed"));
+}, 30_000);
+geofenceSweepTimer.unref?.();
+
 // Send 24h / 1h "starting soon" reminders for confirmed upcoming exams.
 const reminderTimer = setInterval(() => {
   sendExamReminders().catch((e) => logger.error({ err: String(e) }, "reminder sweep failed"));
@@ -5253,6 +5762,7 @@ async function shutdown(signal: string) {
   stopRetention();
   stopBackup();
   clearInterval(autoSubmitTimer);
+  clearInterval(geofenceSweepTimer);
   clearInterval(reminderTimer);
   clearInterval(digestTimer);
   server.close(async () => {

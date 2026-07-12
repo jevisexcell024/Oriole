@@ -4,7 +4,7 @@
 > running, building, and deploying. Written 2026-06-22.
 >
 > **This is the LIVE project.** Orcalis v2 (this folder) is the Express + embedded-Postgres
-> app deployed to **lockdown.jevislab.com**. A separate folder on the Desktop,
+> app deployed to **oriole.jevislab.com**. A separate folder on the Desktop,
 > `orcalis-assess-sign-in`, is an older Supabase-based prototype and is **NOT** the live
 > deployment — don't confuse the two. To tell a running instance apart, probe `/api/health`.
 
@@ -175,7 +175,7 @@ Install") always picks up whatever dependencies were current at build time, beca
 `package.json`/`package-lock.json` now travel with every deploy — no more manually editing
 the host's `package.json` when a new dependency is added.
 
-**Live deployment:** `lockdown.jevislab.com`. Includes Safe Exam Browser hard-lockdown
+**Live deployment:** `oriole.jevislab.com`. Includes Safe Exam Browser hard-lockdown
 (per-exam Config Key, server-side hash verification) — see `server/seb.ts` / `src/lib/seb.ts`.
 
 ## 9. Repository layout

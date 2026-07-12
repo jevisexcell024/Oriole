@@ -17,6 +17,7 @@ dist-server/
 
 # Embedded database (local dev) & migrated legacy data
 server/.pgdata/
+server/.pgdata.*/
 server/data.json
 server/data.json.migrated
 

@@ -1,4 +1,28 @@
 import { z } from "zod";
+import { createHash } from "node:crypto";
+
+// Have I Been Pwned "Pwned Passwords" range API — free, no key, and k-anonymous:
+// only the first 5 hex chars of the password's SHA-1 hash are ever sent, never the
+// password or the full hash, so HIBP can't learn what password was checked.
+// Fails OPEN (treats the password as not-breached) on any network error or
+// timeout — this is a supplementary check, not the primary defense, and a slow/
+// down third party must never block account creation or password changes.
+async function isPasswordBreached(password: string): Promise<boolean> {
+  const sha1 = createHash("sha1").update(password).digest("hex").toUpperCase();
+  const prefix = sha1.slice(0, 5);
+  const suffix = sha1.slice(5);
+  try {
+    const r = await fetch(`https://api.pwnedpasswords.com/range/${prefix}`, {
+      headers: { "Add-Padding": "true" },
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!r.ok) return false;
+    const body = await r.text();
+    return body.split("\n").some((line) => line.trim().split(":")[0] === suffix);
+  } catch {
+    return false;
+  }
+}
 
 // Request schemas for the auth-sensitive endpoints. The `validate` middleware
 // turns these into 400s with structured field errors, and the handler downstream
@@ -8,13 +32,15 @@ export const loginSchema = z.object({
   password: z.string().min(1).max(200),
 });
 
-// Policy for NEW / changed passwords: length over composition (NIST 800-63B) plus a
-// light variety check. A breached-password (HIBP k-anonymity) check is a recommended
-// follow-up. Login itself is intentionally lenient (existing passwords must still work).
+// Policy for NEW / changed passwords: length over composition (NIST 800-63B), a
+// light variety check, and a live breached-password check against HIBP. Login
+// itself is intentionally lenient (existing passwords must still work even if
+// they'd fail this policy today).
 const strongPassword = z.string()
   .min(12, "Password must be at least 12 characters.")
   .max(200)
-  .refine((pw) => new Set(pw).size >= 5, "Password is too simple — use a longer, more varied passphrase.");
+  .refine((pw) => new Set(pw).size >= 5, "Password is too simple — use a longer, more varied passphrase.")
+  .refine(async (pw) => !(await isPasswordBreached(pw)), "This password has appeared in a known data breach. Please choose a different one.");
 
 export const teamCreateSchema = z.object({
   name: z.string().trim().min(1).max(120),

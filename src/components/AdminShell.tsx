@@ -79,7 +79,7 @@ export function AdminShell({ children }: { children: ReactNode; wide?: boolean }
   return (
     <div className="flex min-h-screen">
       {/* Mobile top bar */}
-      <header className="fixed inset-x-0 top-0 z-30 flex h-14 items-center gap-3 border-b border-[var(--border)] bg-[var(--card)] px-4 lg:hidden">
+      <header className="fixed inset-x-0 top-0 z-30 flex h-14 items-center gap-3 border-b border-[var(--border)] bg-[var(--card)] px-4 print:hidden lg:hidden">
         <button onClick={() => setMobileOpen(true)} aria-label={t("anav.openMenu")} className="rounded-lg p-1.5 text-[var(--muted)] hover:bg-white/[0.05] hover:text-[var(--fg)]">
           <Menu className="h-5 w-5" />
         </button>
@@ -94,7 +94,7 @@ export function AdminShell({ children }: { children: ReactNode; wide?: boolean }
 
       {/* Sidebar — static on desktop, slide-in drawer on mobile */}
       <aside className={clsx(
-        "fixed inset-y-0 left-0 z-50 flex h-screen w-60 shrink-0 flex-col border-r border-[var(--border)] bg-[#111110] text-[#DCE8EA] transition-[transform,width] duration-200",
+        "fixed inset-y-0 left-0 z-50 flex h-screen w-60 shrink-0 flex-col border-r border-[var(--border)] bg-[#111110] text-[#DCE8EA] transition-[transform,width] duration-200 print:hidden",
         "lg:sticky lg:top-0 lg:z-auto lg:translate-x-0",
         collapsed ? "lg:w-[74px]" : "lg:w-60",
         mobileOpen ? "translate-x-0" : "-translate-x-full",
@@ -183,8 +183,8 @@ export function AdminShell({ children }: { children: ReactNode; wide?: boolean }
       </aside>
 
       {/* Content */}
-      <div className="min-w-0 flex-1 bg-[var(--bg)] pt-14 lg:pt-0">
-        <main className="max-w-[1560px] px-4 py-5 [--app-header-h:56px] sm:px-6 sm:py-6 lg:[--app-header-h:0px]">{children}</main>
+      <div className="min-w-0 flex-1 bg-[var(--bg)] pt-14 print:pt-0 lg:pt-0">
+        <main className="max-w-[1560px] px-4 py-5 [--app-header-h:56px] print:max-w-none print:p-0 sm:px-6 sm:py-6 lg:[--app-header-h:0px]">{children}</main>
       </div>
     </div>
   );

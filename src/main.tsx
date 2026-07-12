@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import "./index.css";
 import "katex/dist/katex.min.css";
+import "leaflet/dist/leaflet.css";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { ThemeProvider } from "@/lib/theme";
 import { I18nProvider } from "@/lib/i18n";
@@ -33,7 +34,6 @@ import { ExamBuilder } from "@/pages/ExamBuilder";
 import { AdminResults } from "@/pages/AdminResults";
 import { AdminGrading } from "@/pages/AdminGrading";
 import { AdminRegrades } from "@/pages/AdminRegrades";
-import { AdminStudentReport } from "@/pages/AdminStudentReport";
 import { CertificateView } from "@/pages/CertificateView";
 import { AdminSimilarity } from "@/pages/AdminSimilarity";
 import { AdminAttemptReview } from "@/pages/AdminAttemptReview";
@@ -133,7 +133,6 @@ function App() {
         <Route path="/admin/certificates" element={<Protected cap="results"><AdminCertificates /></Protected>} />
         <Route path="/admin/candidates" element={<Protected cap="students"><AdminCandidates /></Protected>} />
         <Route path="/admin/students" element={<Protected cap="students"><StudentsSIS /></Protected>} />
-        <Route path="/admin/students/:id/report" element={<Protected cap="students"><AdminStudentReport /></Protected>} />
         <Route path="/admin/students/:id" element={<Protected cap="students"><StudentRecord /></Protected>} />
         <Route path="/admin/attendance" element={<Protected cap="students"><AdminAttendance /></Protected>} />
         <Route path="/admin/communication" element={<Protected cap="communication"><AdminCommunication /></Protected>} />

@@ -1,19 +1,34 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { Radio, Loader2, AlertTriangle, ShieldCheck, Clock, Pause, Play, MessageSquare, Ban, Send, X, ExternalLink } from "lucide-react";
+import { Radio, Loader2, AlertTriangle, ShieldCheck, Clock, Pause, Play, MessageSquare, Ban, Send, X, ExternalLink, MapPin, LayoutGrid, Map as MapIcon, Unlock } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
 import { PageHeader } from "@/components/PageHeader";
 import { api } from "@/lib/api";
-import type { ProctorEvent } from "@shared/types";
+import { GeofenceMap, type LiveCandidateMarker } from "@/components/GeofenceMap";
+import type { ProctorEvent, GeofenceCenter, GeofenceLog } from "@shared/types";
 import { clsx } from "clsx";
 
+interface SessionGeofence {
+  continuousMonitoring: boolean;
+  centers: GeofenceCenter[];
+  graceSeconds: number;
+  policy: "warn" | "pause" | "lock" | "auto_submit" | "terminate";
+  lat: number | null; lng: number | null;
+  distanceMeters: number | null;
+  inside: boolean | null;
+  lastCheckAt: string | null;
+  outsideSince: string | null;
+  locked: boolean;
+}
+
 interface Session {
-  attemptId: string; candidateName: string; examTitle: string;
+  attemptId: string; examId: string; candidateName: string; examTitle: string;
   startedAt: string; durationMinutes: number;
   flagCount: number; integrity: number; answeredCount: number; questionCount: number;
   recentEvents: ProctorEvent[];
   snapshot: string | null;
   paused: boolean;
+  geofence: SessionGeofence | null;
 }
 
 function remaining(startedAt: string, durationMinutes: number) {
@@ -28,6 +43,8 @@ export function AdminLiveMonitor() {
   const [flaggedOnly, setFlaggedOnly] = useState(false);
   const [sort, setSort] = useState<"recent" | "integrity" | "flags">("recent");
   const [active, setActive] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<"grid" | "map">("grid");
+  const [mapExamId, setMapExamId] = useState<string | null>(null);
 
   useEffect(() => {
     const load = () => api.get<{ sessions: Session[] }>("/admin/live").then((d) => setSessions(d.sessions)).catch(() => {});
@@ -47,6 +64,23 @@ export function AdminLiveMonitor() {
     return sorted;
   }, [sessions, flaggedOnly, sort]);
 
+  // Sessions from geofenced exams — the source for the live location map. Grouped by
+  // exam since different exams have different approved areas; the admin picks one.
+  const geoSessions = useMemo(() => (sessions ?? []).filter((s) => s.geofence), [sessions]);
+  const examOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const s of geoSessions) if (!seen.has(s.examId)) seen.set(s.examId, s.examTitle);
+    return [...seen.entries()].map(([id, title]) => ({ id, title }));
+  }, [geoSessions]);
+  useEffect(() => {
+    if (mapExamId && examOptions.some((e) => e.id === mapExamId)) return;
+    setMapExamId(examOptions[0]?.id ?? null);
+  }, [examOptions, mapExamId]);
+  const mapCenters: GeofenceCenter[] = geoSessions.find((s) => s.examId === mapExamId)?.geofence?.centers ?? [];
+  const mapCandidates: LiveCandidateMarker[] = geoSessions
+    .filter((s) => s.examId === mapExamId && s.geofence?.lat != null && s.geofence?.lng != null)
+    .map((s) => ({ id: s.attemptId, label: s.candidateName, lat: s.geofence!.lat!, lng: s.geofence!.lng!, inside: s.geofence!.inside }));
+
   return (
     <AdminShell wide>
       <div className="fade-in">
@@ -65,18 +99,54 @@ export function AdminLiveMonitor() {
 
         {sessions && sessions.length > 0 && (
           <div className="mt-6 flex flex-wrap items-center gap-2">
-            <button onClick={() => setFlaggedOnly((v) => !v)} className={clsx("inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-semibold transition", flaggedOnly ? "border-[#c6ff34] bg-[rgba(198,255,52,0.1)] text-[#c6ff34]" : "border-[var(--border)] text-[var(--muted)] hover:text-[var(--fg)]")}>
-              <AlertTriangle className="h-4 w-4" /> Flagged only
-            </button>
-            <select value={sort} onChange={(e) => setSort(e.target.value as typeof sort)} className="input h-10 w-auto">
-              <option value="recent">Most recent</option>
-              <option value="integrity">Lowest integrity</option>
-              <option value="flags">Most flags</option>
-            </select>
-            <span className="ml-auto text-xs text-[var(--muted)]">{view.length} of {sessions.length} sessions</span>
+            <div className="inline-flex rounded-lg border border-[var(--border)] p-0.5">
+              <button onClick={() => setViewMode("grid")} className={clsx("inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold transition", viewMode === "grid" ? "bg-[var(--card-2)] text-[var(--fg)]" : "text-[var(--muted)] hover:text-[var(--fg)]")}>
+                <LayoutGrid className="h-3.5 w-3.5" /> Grid
+              </button>
+              <button onClick={() => setViewMode("map")} disabled={examOptions.length === 0} className={clsx("inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-40", viewMode === "map" ? "bg-[var(--card-2)] text-[var(--fg)]" : "text-[var(--muted)] hover:text-[var(--fg)]")}>
+                <MapIcon className="h-3.5 w-3.5" /> Map
+              </button>
+            </div>
+            {viewMode === "grid" && (
+              <button onClick={() => setFlaggedOnly((v) => !v)} className={clsx("inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-semibold transition", flaggedOnly ? "border-[#c6ff34] bg-[rgba(198,255,52,0.1)] text-[#c6ff34]" : "border-[var(--border)] text-[var(--muted)] hover:text-[var(--fg)]")}>
+                <AlertTriangle className="h-4 w-4" /> Flagged only
+              </button>
+            )}
+            {viewMode === "grid" ? (
+              <select value={sort} onChange={(e) => setSort(e.target.value as typeof sort)} className="input h-10 w-auto">
+                <option value="recent">Most recent</option>
+                <option value="integrity">Lowest integrity</option>
+                <option value="flags">Most flags</option>
+              </select>
+            ) : (
+              <select value={mapExamId ?? ""} onChange={(e) => setMapExamId(e.target.value)} className="input h-10 w-auto">
+                {examOptions.map((e) => <option key={e.id} value={e.id}>{e.title}</option>)}
+              </select>
+            )}
+            <span className="ml-auto text-xs text-[var(--muted)]">{viewMode === "grid" ? `${view.length} of ${sessions.length} sessions` : `${mapCandidates.length} live on this exam's map`}</span>
           </div>
         )}
 
+        {sessions && sessions.length > 0 && viewMode === "map" && (
+          examOptions.length === 0 ? (
+            <div className="card mt-4 flex flex-col items-center gap-2 p-12 text-center">
+              <MapPin className="h-8 w-8 text-[var(--muted)]" />
+              <p className="text-sm font-medium">No geofenced sessions right now</p>
+              <p className="text-xs text-[var(--muted)]">The live map shows candidates only for exams with location verification enabled.</p>
+            </div>
+          ) : (
+            <div className="mt-4">
+              <GeofenceMap centers={mapCenters} candidates={mapCandidates} onSelectCandidate={(id) => setActive(id)} />
+              <div className="mt-2 flex flex-wrap items-center gap-4 text-xs text-[var(--muted)]">
+                <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-[#22c55e]" /> Inside approved area</span>
+                <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-[#f43f5e]" /> Outside</span>
+                <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-[#9ca3af]" /> No GPS fix yet</span>
+              </div>
+            </div>
+          )
+        )}
+
+        {viewMode === "grid" && (
         <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
           {view.map((s) => (
             <div key={s.attemptId} onClick={() => setActive(s.attemptId)}
@@ -93,6 +163,11 @@ export function AdminLiveMonitor() {
                 <span className={clsx("absolute left-2 top-2 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold text-white", s.paused ? "bg-sky-500/90" : "bg-rose-500/90")}>
                   {s.paused ? <><Pause className="h-2.5 w-2.5" /> PAUSED</> : <><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--card)]" /> LIVE</>}
                 </span>
+                {s.geofence?.inside === false && (
+                  <span className="absolute bottom-2 left-2 inline-flex items-center gap-1 rounded-md bg-rose-500/90 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                    <MapPin className="h-2.5 w-2.5" /> {s.geofence.locked ? "LOCATION LOCKED" : "OUTSIDE AREA"}
+                  </span>
+                )}
               </div>
               <div className="p-5">
               <div className="flex items-start justify-between">
@@ -134,6 +209,7 @@ export function AdminLiveMonitor() {
             </div>
           ))}
         </div>
+        )}
 
         {active && <InterveneDrawer attemptId={active} onClose={() => setActive(null)} />}
       </div>
@@ -146,6 +222,7 @@ interface LiveDetail {
   paused: boolean; terminated: boolean; messages: { id: string; text: string; at: string }[];
   events: ProctorEvent[]; snapshots: { id: string; dataUrl: string; at: string }[];
   integrity: number; flagCount: number; answeredCount: number; questionCount: number;
+  geofence: (SessionGeofence & { history: GeofenceLog[] }) | null;
 }
 
 function InterveneDrawer({ attemptId, onClose }: { attemptId: string; onClose: () => void }) {
@@ -182,6 +259,12 @@ function InterveneDrawer({ attemptId, onClose }: { attemptId: string; onClose: (
     if (reason === null) return;
     setBusy("term");
     try { await api.post(`/admin/attempts/${attemptId}/terminate`, { reason }); onClose(); }
+    catch (e) { alert((e as Error).message); }
+    finally { setBusy(null); }
+  };
+  const clearGeofenceLock = async () => {
+    setBusy("geo");
+    try { await api.post(`/admin/attempts/${attemptId}/geofence-override`, {}); load(); }
     catch (e) { alert((e as Error).message); }
     finally { setBusy(null); }
   };
@@ -233,6 +316,30 @@ function InterveneDrawer({ attemptId, onClose }: { attemptId: string; onClose: (
                 </div>
               )}
             </div>
+
+            {/* Location (Phase 2 geofence continuous monitoring) */}
+            {d.geofence?.continuousMonitoring && (
+              <div className="border-t border-[var(--border)] px-5 py-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">Location</p>
+                <div className="mt-2 flex items-center justify-between text-xs">
+                  <span className={clsx("inline-flex items-center gap-1.5 font-semibold", d.geofence.inside === true ? "text-emerald-400" : d.geofence.inside === false ? "text-rose-400" : "text-[var(--muted)]")}>
+                    <MapPin className="h-3.5 w-3.5" /> {d.geofence.inside === true ? "Inside approved area" : d.geofence.inside === false ? "Outside approved area" : "No GPS fix yet"}
+                  </span>
+                  {d.geofence.distanceMeters != null && <span className="text-[var(--muted)]">{d.geofence.distanceMeters} m from nearest area</span>}
+                </div>
+                {d.geofence.lastCheckAt && <p className="mt-1 text-[11px] text-[var(--muted)]">Last checked {new Date(d.geofence.lastCheckAt).toLocaleTimeString()}</p>}
+                {d.geofence.outsideSince && (
+                  <p className="mt-1 text-[11px] font-medium text-amber-400">
+                    Outside since {new Date(d.geofence.outsideSince).toLocaleTimeString()} · policy: {d.geofence.policy.replace(/_/g, " ")}
+                  </p>
+                )}
+                {(d.geofence.locked || (d.geofence.outsideSince && d.geofence.policy !== "warn")) && (
+                  <button onClick={clearGeofenceLock} disabled={busy === "geo"} className="btn btn-outline mt-2 h-8 w-full text-xs disabled:opacity-50">
+                    {busy === "geo" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Unlock className="h-3.5 w-3.5" />} Clear geofence lock / pause
+                  </button>
+                )}
+              </div>
+            )}
 
             {/* Flagged events */}
             {d.events.length > 0 && (

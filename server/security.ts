@@ -1,5 +1,6 @@
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
+import type { Request, Response, NextFunction } from "express";
 import dns from "node:dns/promises";
 import net from "node:net";
 
@@ -38,6 +39,19 @@ export const securityHeaders = helmet({
     },
   },
 });
+
+// Permissions-Policy — explicitly ALLOW the browser features this app legitimately uses
+// itself (geolocation for geofencing, camera/microphone for proctoring), scoped to our
+// own origin only (no third party ever needs them — matches the CSP's frameAncestors
+// 'none' / no-embedding stance). Several hosts (shared cPanel/LiteSpeed stacks especially)
+// inject a locked-down default Permissions-Policy that silently disables these features —
+// the browser never even shows a permission prompt, it just refuses outright — so this
+// must be set explicitly to override that, not merely omitted. Mirrored in public/.htaccess
+// for the same "override whatever the host injects" reason the CSP is set in both places.
+export function permissionsPolicy(_req: Request, res: Response, next: NextFunction) {
+  res.setHeader("Permissions-Policy", "geolocation=(self), camera=(self), microphone=(self)");
+  next();
+}
 
 // Limiter for credential endpoints — blunts brute-force / credential stuffing.
 // Keyed by the ACCOUNT (email) being accessed, NOT by IP. A whole class logging in

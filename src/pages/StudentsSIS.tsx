@@ -1,19 +1,24 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   Loader2, ArrowRight, ArrowLeft, Mail, Award, ShieldCheck,
-  CheckCircle2, XCircle, Hourglass, BookOpen, Calendar, FileText, Users2,
+  CheckCircle2, XCircle, Hourglass, BookOpen, Calendar, Users2,
   Search, ChevronDown, Pin, MoreHorizontal, ArrowUpDown,
-  Download, Activity,
+  Download, Activity, Brain, TrendingDown, Minus, GraduationCap, Target, Check,
 } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
 import { PageHeader } from "@/components/PageHeader";
 import { api } from "@/lib/api";
-import { StudentTrend } from "@/components/StudentTrend";
-import type { StudentTrend as StudentTrendData } from "@shared/types";
+import type { StudentTrend as StudentTrendData, SubjectTrend as SubjectTrendItem } from "@shared/types";
 import { TrendingUp } from "lucide-react";
-import { useT } from "@/lib/i18n";
+import { useT, type TFn } from "@/lib/i18n";
 import { clsx } from "clsx";
+
+// Accent colours for subject differentiation — the surrounding cards stay on
+// the app's own theme tokens (var(--card)/var(--border)/var(--fg)) so this
+// panel matches the rest of the page; only these per-subject accents are hardcoded.
+const SUBJ_LIME = "#c6ff34", SUBJ_CYAN = "#22d3ee", SUBJ_PURPLE = "#c084fc", SUBJ_ORANGE = "#fb923c", SUBJ_GREEN = "#4ade80", SUBJ_ROSE = "#f43f5e";
+const SUBJECT_COLORS = [SUBJ_LIME, SUBJ_CYAN, SUBJ_PURPLE, SUBJ_ORANGE, SUBJ_GREEN, SUBJ_ROSE];
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface StudentRow {
@@ -64,6 +69,11 @@ function initials(name: string) {
 function scoreTone(n: number | null) {
   if (n === null) return "text-[var(--muted)]";
   return n >= 80 ? "text-emerald-400" : n >= 60 ? "text-amber-400" : "text-rose-400";
+}
+/** Same score→tone banding as scoreTone, as a hex value for inline SVG/style use. */
+function scoreHex(n: number | null) {
+  if (n === null) return "var(--muted)";
+  return n >= 80 ? "#34d399" : n >= 60 ? "#fbbf24" : "#fb7185";
 }
 
 const esc = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
@@ -652,38 +662,54 @@ export function StudentRecord() {
   return (
     <AdminShell wide>
       <div className="fade-in max-w-4xl">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-3 print:hidden">
           <Link to="/admin/students" className="inline-flex items-center gap-1.5 text-sm text-[var(--muted)] hover:text-[var(--fg)]">
             <ArrowLeft className="h-4 w-4" /> {t("acan.title")}
           </Link>
-          <Link to={`/admin/students/${id}/report`} className="btn btn-outline h-9 text-sm">
-            <FileText className="h-4 w-4" /> {t("asis.progressReport")}
-          </Link>
+          <button onClick={() => window.print()} className="btn btn-outline h-8 text-xs">
+            <Download className="h-3.5 w-3.5" /> {t("asis.downloadReport")}
+          </button>
+        </div>
+
+        {/* Print-only report letterhead */}
+        <div className="hidden print:block print:mb-4">
+          <h1 className="text-lg font-bold">{t("asis.reportTitle")}</h1>
+          <p className="text-xs text-[var(--muted)]">{t("asis.generatedOn", { date: fmtDate(new Date().toISOString()) })}</p>
         </div>
 
         {/* Profile header */}
-        <div className="card mt-4 p-6">
-          <div className="flex items-center gap-4">
-            <span className="flex h-14 w-14 items-center justify-center rounded-full bg-[#111110] text-lg font-bold text-white">
-              {initials(student.name)}
-            </span>
-            <div>
-              <h1 className="text-xl font-bold tracking-tight">{student.name}</h1>
-              <p className="flex items-center gap-1.5 text-sm text-[var(--muted)]">
-                <Mail className="h-3.5 w-3.5" /> {student.email}
-              </p>
+        <div className="card mt-4 p-6 print:mt-0">
+          <div className="flex flex-wrap items-center justify-between gap-5">
+            <div className="flex items-center gap-4">
+              <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[#111110] text-lg font-bold text-white">
+                {initials(student.name)}
+              </span>
+              <div>
+                <h1 className="text-xl font-bold tracking-tight">{student.name}</h1>
+                <p className="flex items-center gap-1.5 text-sm text-[var(--muted)]">
+                  <Mail className="h-3.5 w-3.5" /> {student.email}
+                </p>
+              </div>
             </div>
+            {stats.enrollments > 0 && (
+              <RadialRing
+                value={Math.round((stats.completed / stats.enrollments) * 100)}
+                color={SUBJ_LIME}
+                label={t("asis.completion")}
+                sublabel={t("asis.completionOf", { completed: stats.completed, total: stats.enrollments })}
+              />
+            )}
           </div>
-          <div className="mt-5 grid grid-cols-3 gap-4 sm:grid-cols-7">
-            <Stat label={t("asis.stEnrolled")}     value={stats.enrollments} />
-            <Stat label={t("asis.stCompleted")}    value={stats.completed} />
-            <Stat label={t("asis.stAvgScore")}     value={stats.avgScore === null ? "—" : `${stats.avgScore}%`} tone={scoreTone(stats.avgScore)} />
-            <Stat label={t("asis.stGpa")}          value={stats.gpa === null ? "—" : stats.gpa.toFixed(2)} />
-            <Stat label={t("asis.stPassRate")}     value={stats.passRate === null ? "—" : `${stats.passRate}%`} />
-            <Stat label={t("asis.stIntegrity")}    value={stats.avgIntegrity === null ? "—" : stats.avgIntegrity} tone={scoreTone(stats.avgIntegrity)} />
-            <Stat label={t("asis.stCertificates")} value={stats.certificates} />
+          <div className="mt-5 grid grid-cols-2 gap-2.5 sm:grid-cols-4 lg:grid-cols-7">
+            <IconStatChip icon={Users2}       label={t("asis.stEnrolled")}     value={stats.enrollments} />
+            <IconStatChip icon={CheckCircle2} label={t("asis.stCompleted")}    value={stats.completed} tone="text-brand-400" />
+            <IconStatChip icon={TrendingUp}   label={t("asis.stAvgScore")}     value={stats.avgScore === null ? "—" : `${stats.avgScore}%`} tone={scoreTone(stats.avgScore)} />
+            <IconStatChip icon={GraduationCap} label={t("asis.stGpa")}         value={stats.gpa === null ? "—" : stats.gpa.toFixed(2)} />
+            <IconStatChip icon={Target}       label={t("asis.stPassRate")}     value={stats.passRate === null ? "—" : `${stats.passRate}%`} tone={scoreTone(stats.passRate)} />
+            <IconStatChip icon={ShieldCheck}  label={t("asis.stIntegrity")}    value={stats.avgIntegrity === null ? "—" : stats.avgIntegrity} tone={scoreTone(stats.avgIntegrity)} />
+            <IconStatChip icon={Award}        label={t("asis.stCertificates")} value={stats.certificates} tone="text-amber-400" />
           </div>
-          <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-[var(--border)] pt-4 text-sm">
+          <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-[var(--border)] pt-4 text-sm print:hidden">
             <Hourglass className="h-4 w-4 text-brand-400" />
             <span className="font-medium">{t("asis.accommodation")}</span>
             <input type="number" min={0} max={600} className="input h-8 w-20" value={acc} onChange={(e) => setAcc(e.target.value)} />
@@ -700,126 +726,522 @@ export function StudentRecord() {
         <h2 className="mt-6 flex items-center gap-2 text-sm font-semibold">
           <TrendingUp className="h-4 w-4 text-brand-400" /> {t("arpt.trends")}
         </h2>
-        <div className="card mt-3 p-5">
-          <StudentTrend trend={trend} studentId={id} aiEnabled={data.aiEnabled} />
+        <div className="mt-3">
+          <SubjectAnalysisPanel trend={trend} studentId={id!} aiEnabled={data.aiEnabled} />
         </div>
 
-        {/* Academic record */}
-        <h2 className="mt-6 flex items-center gap-2 text-sm font-semibold">
-          <BookOpen className="h-4 w-4 text-brand-400" /> {t("asis.academicRecord")}
-        </h2>
-        <div className="card mt-3 overflow-hidden">
-          {attempts.length === 0 ? (
-            <p className="px-4 py-8 text-center text-sm text-[var(--muted)]">{t("asis.noCompletedExams")}</p>
-          ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-[var(--border)] text-left text-[11px] uppercase tracking-wide text-[var(--muted)]">
-                  <th className="px-4 py-2.5 font-semibold">{t("asis.colExam")}</th>
-                  <th className="px-3 py-2.5 text-center font-semibold">{t("asis.colScore")}</th>
-                  <th className="px-3 py-2.5 text-center font-semibold">{t("asis.colResult")}</th>
-                  <th className="px-3 py-2.5 text-center font-semibold">{t("asis.colIntegrity")}</th>
-                  <th className="px-3 py-2.5 font-semibold">{t("asis.colSubmitted")}</th>
-                  <th className="px-3 py-2.5" />
-                </tr>
-              </thead>
-              <tbody>
-                {attempts.map((a) => (
-                  <tr key={a.attemptId} className="border-b border-[var(--border)] last:border-0 hover:bg-white/[0.02]">
-                    <td className="px-4 py-3">
-                      <span className="font-medium">{a.examTitle}</span>
-                      <span className="block text-xs text-[var(--muted)]">{a.examCode}</span>
-                    </td>
-                    <td className={clsx("px-3 py-3 text-center font-semibold tabular-nums", scoreTone(a.score))}>{a.score}%</td>
-                    <td className="px-3 py-3 text-center">
-                      {a.gradingStatus === "pending_review"
-                        ? <span className="inline-flex items-center gap-1 text-amber-400"><Hourglass className="h-3.5 w-3.5" /> {t("asis.pending")}</span>
-                        : a.passed
-                          ? <span className="inline-flex items-center gap-1 text-emerald-400"><CheckCircle2 className="h-3.5 w-3.5" /> {t("common.pass")}</span>
-                          : <span className="inline-flex items-center gap-1 text-rose-400"><XCircle className="h-3.5 w-3.5" /> {t("common.fail")}</span>}
-                    </td>
-                    <td className={clsx("px-3 py-3 text-center font-semibold tabular-nums", scoreTone(a.integrity))}>{a.integrity}</td>
-                    <td className="px-3 py-3 text-xs text-[var(--muted)]">{fmtDate(a.submittedAt)}</td>
-                    <td className="px-3 py-3 text-right">
-                      <Link to={`/admin/attempts/${a.attemptId}`} className="inline-flex items-center text-[var(--muted)] hover:text-[var(--fg)]">
-                        <ArrowRight className="h-4 w-4" />
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-
-        {/* Enrollments */}
-        <h2 className="mt-6 flex items-center gap-2 text-sm font-semibold">
-          <Calendar className="h-4 w-4 text-brand-400" /> {t("asis.enrollments")}
-        </h2>
-        <div className="mt-3 space-y-2">
-          {enrollments.length === 0 && (
-            <p className="card p-4 text-sm text-[var(--muted)]">{t("asis.noEnrollments")}</p>
-          )}
-          {enrollments.map((e) => (
-            <div key={e.regId} className="card flex items-center justify-between gap-3 p-3.5">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium">
-                  {e.examTitle} <span className="text-xs text-[var(--muted)]">· {e.examCode}</span>
-                </p>
-                <p className="text-xs text-[var(--muted)]">
-                  {e.scheduled ? t("asis.scheduledOn", { date: fmtDate(e.scheduled) }) : t("asis.noScheduledDate")}
-                  {e.identity ? t("asis.idSuffix", { id: e.identity }) : ""}
-                  {e.checkedIn ? t("asis.checkedInSuffix") : ""}
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="rounded-full bg-[var(--bg)] px-2 py-0.5 text-[11px] font-medium capitalize text-[var(--muted)]">
-                  {e.status.replace(/_/g, " ")}
-                </span>
-                <span className={clsx("rounded-full px-2 py-0.5 text-[11px] font-semibold", APPROVAL_TONE[e.approval] ?? "bg-[var(--card-2)] text-[var(--muted)]")}>
-                  {t(APPROVAL_KEY[e.approval] ?? e.approval)}
-                </span>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Certificates */}
-        {certificates.length > 0 && (
-          <>
-            <h2 className="mt-6 flex items-center gap-2 text-sm font-semibold">
-              <Award className="h-4 w-4 text-amber-500" /> {t("arpt.certificates")}
+        {/* Academic record (left, wider) + Enrollments/Certificates (right sidebar) */}
+        <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[1.6fr_1fr]">
+          <div>
+            <h2 className="flex items-center gap-2 text-sm font-semibold">
+              <BookOpen className="h-4 w-4 text-brand-400" /> {t("asis.academicRecord")}
             </h2>
-            <div className="mt-3 space-y-2">
-              {certificates.map((c) => (
-                <Link key={c.certNumber} to={`/verify/${c.certNumber}`}
-                  className="card flex items-center justify-between gap-3 p-3.5 transition hover:shadow-md">
-                  <div className="flex items-center gap-2.5">
-                    <ShieldCheck className="h-4 w-4 text-emerald-500" />
-                    <div>
-                      <p className="text-sm font-medium">{c.examTitle}</p>
-                      <p className="font-mono text-xs text-[var(--muted)]">{c.certNumber}</p>
+            <div className="card mt-3 overflow-hidden">
+              {attempts.length === 0 ? (
+                <p className="px-4 py-8 text-center text-sm text-[var(--muted)]">{t("asis.noCompletedExams")}</p>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-[var(--border)] text-left text-[11px] uppercase tracking-wide text-[var(--muted)]">
+                      <th className="px-4 py-2.5 font-semibold">{t("asis.colExam")}</th>
+                      <th className="px-3 py-2.5 text-center font-semibold">{t("asis.colScore")}</th>
+                      <th className="px-3 py-2.5 text-center font-semibold">{t("asis.colResult")}</th>
+                      <th className="px-3 py-2.5 text-center font-semibold">{t("asis.colIntegrity")}</th>
+                      <th className="px-3 py-2.5 font-semibold">{t("asis.colSubmitted")}</th>
+                      <th className="px-3 py-2.5 print:hidden" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {attempts.map((a) => (
+                      <tr key={a.attemptId} className="border-b border-[var(--border)] last:border-0 hover:bg-white/[0.02]">
+                        <td className="px-4 py-3">
+                          <span className="font-medium">{a.examTitle}</span>
+                          <span className="block text-xs text-[var(--muted)]">{a.examCode}</span>
+                        </td>
+                        <td className="px-3 py-3 text-center"><ScoreBar value={a.score} /></td>
+                        <td className="px-3 py-3 text-center">
+                          {a.gradingStatus === "pending_review"
+                            ? <span className="inline-flex items-center gap-1 text-amber-400"><Hourglass className="h-3.5 w-3.5" /> {t("asis.pending")}</span>
+                            : a.passed
+                              ? <span className="inline-flex items-center gap-1 text-emerald-400"><CheckCircle2 className="h-3.5 w-3.5" /> {t("common.pass")}</span>
+                              : <span className="inline-flex items-center gap-1 text-rose-400"><XCircle className="h-3.5 w-3.5" /> {t("common.fail")}</span>}
+                        </td>
+                        <td className="px-3 py-3 text-center"><ScoreBar value={a.integrity} /></td>
+                        <td className="px-3 py-3 text-xs text-[var(--muted)]">{fmtDate(a.submittedAt)}</td>
+                        <td className="px-3 py-3 text-right print:hidden">
+                          <Link to={`/admin/attempts/${a.attemptId}`} className="inline-flex items-center text-[var(--muted)] hover:text-[var(--fg)]">
+                            <ArrowRight className="h-4 w-4" />
+                          </Link>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-6">
+            {/* Enrollments */}
+            <div>
+              <h2 className="flex items-center gap-2 text-sm font-semibold">
+                <Calendar className="h-4 w-4 text-brand-400" /> {t("asis.enrollments")}
+              </h2>
+              <div className="mt-3 space-y-2">
+                {enrollments.length === 0 && (
+                  <p className="card p-4 text-sm text-[var(--muted)]">{t("asis.noEnrollments")}</p>
+                )}
+                {enrollments.map((e) => (
+                  <div key={e.regId} className="card p-3.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="min-w-0 truncate text-sm font-medium">
+                        {e.examTitle} <span className="text-xs font-normal text-[var(--muted)]">· {e.examCode}</span>
+                      </p>
+                      <span className={clsx("shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold", APPROVAL_TONE[e.approval] ?? "bg-[var(--card-2)] text-[var(--muted)]")}>
+                        {t(APPROVAL_KEY[e.approval] ?? e.approval)}
+                      </span>
+                    </div>
+                    <p className="mt-0.5 text-xs text-[var(--muted)]">
+                      {e.scheduled ? t("asis.scheduledOn", { date: fmtDate(e.scheduled) }) : t("asis.noScheduledDate")}
+                      {e.identity ? t("asis.idSuffix", { id: e.identity }) : ""}
+                    </p>
+                    <div className="mt-2.5 border-t border-[var(--border)] pt-2.5">
+                      <EnrollmentStepper enrollment={e} />
                     </div>
                   </div>
-                  <div className="text-right text-xs text-[var(--muted)]">
-                    <p className="font-semibold text-[var(--fg)]">{c.score}%</p>
-                    <p>{fmtDate(c.issuedAt)}</p>
-                  </div>
-                </Link>
-              ))}
+                ))}
+              </div>
             </div>
-          </>
-        )}
+
+            {/* Certificates */}
+            {certificates.length > 0 && (
+              <div>
+                <h2 className="flex items-center gap-2 text-sm font-semibold">
+                  <Award className="h-4 w-4 text-amber-500" /> {t("arpt.certificates")}
+                </h2>
+                <div className="mt-3 space-y-2">
+                  {certificates.map((c) => (
+                    <Link key={c.certNumber} to={`/verify/${c.certNumber}`}
+                      className="card card-hover flex items-center gap-3 p-3.5">
+                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full" style={{ background: "linear-gradient(135deg, #fcd34d, #f59e0b)" }}>
+                        <Award className="h-5 w-5" style={{ color: "#0a0a0a" }} />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold">{c.examTitle}</p>
+                        <p className="font-mono text-[11px] text-[var(--muted)]">{c.certNumber}</p>
+                      </div>
+                      <div className="shrink-0 text-right text-xs">
+                        <p className="font-bold tabular-nums" style={{ color: scoreHex(c.score) }}>{c.score}%</p>
+                        <p className="text-[var(--muted)]">{fmtDate(c.issuedAt)}</p>
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </AdminShell>
   );
 }
 
-function Stat({ label, value, tone }: { label: string; value: string | number; tone?: string }) {
+/** Score/integrity cell — the number plus a thin colour-banded bar underneath, so the
+ *  academic-record table reads visually at a glance instead of as bare digits. */
+function ScoreBar({ value }: { value: number }) {
+  const color = scoreHex(value);
   return (
-    <div>
-      <p className="text-[11px] uppercase tracking-wide text-[var(--muted)]">{label}</p>
-      <p className={clsx("mt-0.5 text-lg font-bold tabular-nums", tone)}>{value}</p>
+    <div className="mx-auto w-14">
+      <span className="text-sm font-semibold tabular-nums" style={{ color }}>{value}{value <= 100 ? "%" : ""}</span>
+      <div className="mt-1 h-1 overflow-hidden rounded-full bg-[var(--border)]">
+        <div className="h-full rounded-full" style={{ width: `${Math.max(0, Math.min(100, value))}%`, backgroundColor: color }} />
+      </div>
+    </div>
+  );
+}
+
+/** Compact 4-stage progress dots (Registered → Confirmed → Checked in → Submitted) so an
+ *  enrollment's real lifecycle reads as a glance-able pipeline instead of separate badges. */
+function EnrollmentStepper({ enrollment: e }: { enrollment: Enrollment }) {
+  const steps = [
+    { key: "registered", done: true, label: "asis.stepRegistered" },
+    { key: "confirmed", done: e.approval === "confirmed", label: "asis.stepConfirmed" },
+    { key: "checkedIn", done: e.checkedIn, label: "asis.stepCheckedIn" },
+    { key: "submitted", done: e.status === "submitted", label: "asis.stepSubmitted" },
+  ] as const;
+  const t = useT();
+  return (
+    <div className="flex items-center">
+      {steps.map((s, i) => (
+        <Fragment key={s.key}>
+          {i > 0 && <span className="h-px flex-1" style={{ background: s.done ? SUBJ_LIME : "var(--border)" }} />}
+          <span className="group relative flex shrink-0 items-center justify-center">
+            <span className="flex h-4 w-4 items-center justify-center rounded-full transition" style={{ background: s.done ? SUBJ_LIME : "var(--border)" }}>
+              {s.done && <Check className="h-2.5 w-2.5" style={{ color: "#0a0a0a" }} strokeWidth={3} />}
+            </span>
+            <span className="pointer-events-none absolute bottom-full mb-1.5 whitespace-nowrap rounded-md bg-[#111110] px-1.5 py-0.5 text-[10px] font-medium text-white opacity-0 transition group-hover:opacity-100">
+              {t(s.label)}
+            </span>
+          </span>
+        </Fragment>
+      ))}
+    </div>
+  );
+}
+
+/** Radial progress ring (SVG) — used at the top of the record for a single glance-able
+ *  completion metric, complementing the numeric stat chips below it. */
+function RadialRing({ value, color, label, sublabel, size = 72, stroke = 6 }: { value: number; color: string; label: string; sublabel?: string; size?: number; stroke?: number }) {
+  const r = (size - stroke) / 2;
+  const c = 2 * Math.PI * r;
+  const pct = Math.max(0, Math.min(100, value));
+  const offset = c * (1 - pct / 100);
+  return (
+    <div className="flex items-center gap-3 print:hidden">
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--border)" strokeWidth={stroke} />
+        <g transform={`rotate(-90 ${size / 2} ${size / 2})`}>
+          <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={stroke}
+            strokeDasharray={c} strokeDashoffset={offset} strokeLinecap="round" style={{ transition: "stroke-dashoffset .4s ease" }} />
+        </g>
+        <text x={size / 2} y={size / 2 + 5} textAnchor="middle" fontSize={17} fontWeight={700} className="fill-[var(--fg)]">{pct}%</text>
+      </svg>
+      <div>
+        <p className="text-sm font-semibold">{label}</p>
+        {sublabel && <p className="text-[11px] text-[var(--muted)]">{sublabel}</p>}
+      </div>
+    </div>
+  );
+}
+
+/** Icon-chip stat — a bordered mini-card (icon + value + label), used for the profile
+ *  header's stat row so it reads as a proper infographic strip rather than bare numbers
+ *  in a flat grid. */
+function IconStatChip({ icon: Icon, label, value, tone }: { icon: typeof BookOpen; label: string; value: string | number; tone?: string }) {
+  return (
+    <div className="flex items-center gap-2.5 rounded-xl border border-[var(--border)] bg-[var(--card-2)] px-3 py-2.5">
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--card)]">
+        <Icon className={clsx("h-4 w-4", tone ?? "text-[var(--muted)]")} />
+      </span>
+      <div className="min-w-0">
+        <p className={clsx("text-base font-bold leading-tight tabular-nums", tone)}>{value}</p>
+        <p className="truncate text-[10px] uppercase tracking-wide text-[var(--muted)]">{label}</p>
+      </div>
+    </div>
+  );
+}
+
+// ── Subject performance analysis ────────────────────────────────────────────
+// Built on the app's own `.card` surface + theme tokens (not a hardcoded dark
+// palette), so it matches the rest of this page and respects light/dark mode.
+// Every number comes from the student's real submitted attempts — a student
+// with one real subject shows one fan slice, not a padded set of fake ones.
+function SubjectAnalysisPanel({ trend, studentId, aiEnabled }: { trend: StudentTrendData; studentId: string; aiEnabled: boolean }) {
+  const t = useT();
+  if (trend.subjects.length === 0) {
+    return <div className="card p-5"><p className="text-sm text-[var(--muted)]">{t("asis.noCompletedExams")}</p></div>;
+  }
+  const colorOf = new Map(trend.subjects.map((s, i) => [s.subject, SUBJECT_COLORS[i % SUBJECT_COLORS.length]]));
+  const cardCols = Math.min(trend.subjects.length, 4);
+  return (
+    <div className="flex flex-col gap-3">
+      <SubjectDonutCard trend={trend} colorOf={colorOf} />
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+        <AiSummaryCard trend={trend} studentId={studentId} aiEnabled={aiEnabled} />
+        <SubjectBarsCard subjects={trend.subjects} colorOf={colorOf} />
+      </div>
+      <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${cardCols}, minmax(0, 1fr))` }}>
+        {trend.subjects.slice(0, 4).map((s) => <SubjectCard key={s.subject} s={s} color={colorOf.get(s.subject)!} />)}
+      </div>
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1.6fr_1fr]">
+        <HeatmapCard points={trend.points} subjects={trend.subjects} />
+        <RecentExamsCard points={trend.points} />
+      </div>
+    </div>
+  );
+}
+
+/** One real, data-driven sentence per subject for the donut's numbered legend —
+ *  mirrors what a human grader would actually say about that subject's trajectory. */
+function subjectInsight(s: SubjectTrendItem, t: TFn) {
+  const delta = Math.abs(s.last - s.first);
+  if (s.trend === "single") return t("asis.insightSingle");
+  if (s.trend === "improving") return t("asis.insightImproving", { delta });
+  if (s.trend === "declining") return t("asis.insightDeclining", { delta });
+  return t("asis.insightSteady", { attempts: s.attempts });
+}
+
+/** Full-circle donut (petal radius still carries the real score, 0–100 mapped to
+ *  inner→outer radius) + a numbered legend + a real score-band distribution — the
+ *  "survey infographic" treatment applied to actual exam data instead of decoration. */
+function SubjectDonutCard({ trend, colorOf }: { trend: StudentTrendData; colorOf: Map<string, string> }) {
+  const t = useT();
+  const subjects = trend.subjects.slice(0, 6);
+  const n = subjects.length;
+  const CX = 170, CY = 170, INNER_R = 58, OUTER_MAX = 150;
+  const sliceDeg = 360 / n;
+  const gap = Math.min(5, sliceDeg * 0.1);
+  const pt = (r: number, deg: number): [number, number] => {
+    const rad = (deg * Math.PI) / 180;
+    return [CX + r * Math.sin(rad), CY - r * Math.cos(rad)];
+  };
+  const outerROf = (score: number) => INNER_R + Math.max(0, Math.min(1, score / 100)) * (OUTER_MAX - INNER_R);
+  const overallAvg = Math.round(subjects.reduce((s, x) => s + x.avg, 0) / n);
+  const overallTone = trend.overall.trend === "up" ? SUBJ_LIME : trend.overall.trend === "down" ? SUBJ_ROSE : "var(--muted)";
+  const overallLabel = trend.overall.trend === "up" ? t("asis.trendUp") : trend.overall.trend === "down" ? t("asis.trendDown") : t("asis.trendFlat");
+
+  // Real score-band breakdown across every submitted attempt (not just subject averages) —
+  // the direct analogue of the reference infographic's response-distribution bars.
+  const scores = trend.points.map((p) => p.score);
+  const total = scores.length || 1;
+  const bands = [
+    { key: "strong", label: t("asis.distStrong"), count: scores.filter((s) => s >= 80).length, color: SUBJ_LIME },
+    { key: "satisfactory", label: t("asis.distSatisfactory"), count: scores.filter((s) => s >= 60 && s < 80).length, color: SUBJ_ORANGE },
+    { key: "weak", label: t("asis.distWeak"), count: scores.filter((s) => s < 60).length, color: SUBJ_ROSE },
+  ];
+
+  return (
+    <div className="card p-5">
+      <div className="flex items-start justify-between">
+        <div>
+          <h3 className="text-sm font-semibold">{t("asis.donutTitle")}</h3>
+          <p className="text-[11px] text-[var(--muted)]">{t("asis.donutSubtitle")}</p>
+        </div>
+        <span className="rounded-full px-2.5 py-1 text-[10px] font-semibold" style={{ background: `${overallTone}1a`, color: overallTone }}>{overallLabel}</span>
+      </div>
+
+      <div className="mt-2 flex flex-col items-center gap-5 lg:flex-row lg:items-start">
+        <svg viewBox="0 0 340 340" className="w-full max-w-[300px] shrink-0">
+          {subjects.map((s, i) => {
+            const startDeg = i * sliceDeg;
+            const endDeg = startDeg + sliceDeg;
+            const midDeg = (startDeg + endDeg) / 2;
+            const aStart = startDeg + gap / 2, aEnd = endDeg - gap / 2;
+            const outerR = outerROf(s.avg);
+            const color = colorOf.get(s.subject)!;
+            const large = aEnd - aStart > 180 ? 1 : 0;
+            const p1 = pt(INNER_R, aStart), p2 = pt(outerR, aStart), p3 = pt(outerR, aEnd), p4 = pt(INNER_R, aEnd);
+            const path = `M ${p1[0]} ${p1[1]} L ${p2[0]} ${p2[1]} A ${outerR} ${outerR} 0 ${large} 1 ${p3[0]} ${p3[1]} L ${p4[0]} ${p4[1]} A ${INNER_R} ${INNER_R} 0 ${large} 0 ${p1[0]} ${p1[1]}`;
+            const sin = Math.sin((midDeg * Math.PI) / 180), cos = Math.cos((midDeg * Math.PI) / 180);
+            const anchor = sin > 0.2 ? "start" : sin < -0.2 ? "end" : "middle";
+            const labelPt = pt(Math.min(outerR + 26, OUTER_MAX + 24), midDeg);
+            return (
+              <g key={s.subject}>
+                <path d={path} fill={color} fillOpacity={0.88} stroke="var(--card)" strokeWidth={2} />
+                <text x={pt(INNER_R + (outerR - INNER_R) * 0.55, midDeg)[0]} y={pt(INNER_R + (outerR - INNER_R) * 0.55, midDeg)[1]}
+                  fontSize={11} fontWeight={800} fill="#0a0a0a" textAnchor="middle" dominantBaseline="middle">{s.avg}%</text>
+                <text x={labelPt[0]} y={labelPt[1] + (cos > 0.3 ? 8 : cos < -0.3 ? -4 : 2)} fontSize={10} fontWeight={600}
+                  className="fill-[var(--fg)]" textAnchor={anchor}>{s.subject.length > 16 ? `${s.subject.slice(0, 15)}…` : s.subject}</text>
+              </g>
+            );
+          })}
+          <circle cx={CX} cy={CY} r={INNER_R - 8} fill="var(--card)" stroke={SUBJ_LIME} strokeWidth={2.5} />
+          <text x={CX} y={CY - 20} textAnchor="middle" fontSize={9} fontWeight={700} letterSpacing={1} className="fill-[var(--muted)]">{t("asis.donutCenterLabel")}</text>
+          <rect x={CX - 34} y={CY - 12} width={68} height={24} rx={12} fill={SUBJ_LIME} />
+          <text x={CX} y={CY + 5} textAnchor="middle" fontSize={13} fontWeight={800} fill="#0a0a0a">{t("asis.mean")} {overallAvg}%</text>
+          <text x={CX} y={CY + 28} textAnchor="middle" fontSize={9} className="fill-[var(--muted)]">{t("asis.subjectsCount", { n })}</text>
+        </svg>
+
+        <div className="flex w-full min-w-0 flex-col gap-2">
+          {subjects.map((s, i) => {
+            const color = colorOf.get(s.subject)!;
+            return (
+              <div key={s.subject} className="flex items-center gap-3 rounded-xl border border-[var(--border)] bg-[var(--card-2)] px-3 py-2.5">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-sm font-extrabold" style={{ background: color, color: "#0a0a0a" }}>{i + 1}</span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold">{s.subject}</p>
+                  <p className="truncate text-[11px] text-[var(--muted)]">{subjectInsight(s, t)}</p>
+                </div>
+                <span className="shrink-0 text-sm font-bold tabular-nums" style={{ color }}>{s.avg}%</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Real score-band distribution across every submitted attempt */}
+      <div className="mt-5 border-t border-[var(--border)] pt-4">
+        <p className="mb-3 text-center text-[11px] font-bold uppercase tracking-wide" style={{ color: SUBJ_LIME }}>{t("asis.distTitle")}</p>
+        <div className="grid grid-cols-3 gap-4">
+          {bands.map((b) => {
+            const pct = Math.round((b.count / total) * 100);
+            return (
+              <div key={b.key} className="text-center">
+                <p className="text-xs text-[var(--muted)]">{b.label}</p>
+                <p className="text-lg font-bold tabular-nums" style={{ color: b.color }}>{pct}%</p>
+                <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-[var(--border)]">
+                  <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: b.color }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AiSummaryCard({ trend, studentId, aiEnabled }: { trend: StudentTrendData; studentId: string; aiEnabled: boolean }) {
+  const [narrative, setNarrative] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const generate = async () => {
+    setLoading(true); setErr(null);
+    try {
+      const r = await api.post<{ narrative: string }>(`/admin/students/${studentId}/trend-narrative`);
+      setNarrative(r.narrative);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="card flex flex-col p-5">
+      <div className="flex items-center gap-2">
+        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md" style={{ background: `linear-gradient(135deg, ${SUBJ_LIME}, ${SUBJ_CYAN})` }}>
+          <Brain className="h-3.5 w-3.5" style={{ color: "#0a0a0a" }} />
+        </span>
+        <h3 className="text-sm font-semibold">AI Summary</h3>
+      </div>
+      <div className="mt-3 flex-1 text-xs leading-relaxed" style={{ color: err ? SUBJ_ORANGE : "var(--muted)" }}>
+        {loading ? "Generating…" : err ?? narrative ?? trend.summary}
+      </div>
+      {aiEnabled && (
+        <button onClick={generate} disabled={loading} className="btn btn-outline mt-3 h-8 shrink-0 self-start text-xs disabled:opacity-40 print:hidden">
+          {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : narrative ? "Regenerate" : "Generate AI summary"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function SubjectBarsCard({ subjects, colorOf }: { subjects: SubjectTrendItem[]; colorOf: Map<string, string> }) {
+  return (
+    <div className="card p-5">
+      <h3 className="mb-3.5 text-sm font-semibold">Subject Performance</h3>
+      <div className="flex flex-col gap-3">
+        {subjects.map((s) => {
+          const color = colorOf.get(s.subject)!;
+          return (
+            <div key={s.subject}>
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="text-[11px] text-[var(--muted)]">{s.subject}</span>
+                <span className="text-[11px] font-bold tabular-nums" style={{ color }}>{s.avg}%</span>
+              </div>
+              <div className="h-1.5 overflow-hidden rounded-full bg-[var(--border)]">
+                <div className="h-full rounded-full" style={{ width: `${s.avg}%`, backgroundColor: color }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function SubjectCard({ s, color }: { s: SubjectTrendItem; color: string }) {
+  const delta = s.last - s.first;
+  const Arrow = s.trend === "improving" ? TrendingUp : s.trend === "declining" ? TrendingDown : Minus;
+  const tone = s.trend === "improving" ? SUBJ_LIME : s.trend === "declining" ? SUBJ_ROSE : "var(--muted)";
+  return (
+    <div className="card p-3.5">
+      <div className="flex items-center justify-between">
+        <span className="flex h-6 w-6 items-center justify-center rounded-md" style={{ background: `${color}18` }}>
+          <BookOpen className="h-3.5 w-3.5" style={{ color }} />
+        </span>
+        {s.trend !== "single" && (
+          <span className="flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-bold" style={{ color: tone, background: `${tone}18` }}>
+            <Arrow className="h-2.5 w-2.5" /> {delta >= 0 ? "+" : ""}{delta}%
+          </span>
+        )}
+      </div>
+      <p className="mt-2 text-[11px] text-[var(--muted)]">{s.subject}</p>
+      <p className="text-2xl font-bold tabular-nums tracking-tight" style={{ color }}>{s.avg}%</p>
+      <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-[var(--border)]">
+        <div className="h-full rounded-full" style={{ width: `${s.avg}%`, backgroundColor: color }} />
+      </div>
+      <p className="mt-1.5 text-[10px] text-[var(--muted)]">Best {s.best}% · {s.attempts} exam{s.attempts === 1 ? "" : "s"}</p>
+    </div>
+  );
+}
+
+function HeatmapCard({ points, subjects }: { points: StudentTrendData["points"]; subjects: SubjectTrendItem[] }) {
+  const months: { key: string; label: string }[] = [];
+  const cursor = new Date(); cursor.setDate(1);
+  for (let i = 5; i >= 0; i--) {
+    const dt = new Date(cursor.getFullYear(), cursor.getMonth() - i, 1);
+    months.push({ key: `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`, label: dt.toLocaleDateString(undefined, { month: "short" }) });
+  }
+  const cellAvg = (subject: string, monthKey: string) => {
+    const rows = points.filter((p) => p.subject === subject && p.at && p.at.slice(0, 7) === monthKey);
+    if (!rows.length) return null;
+    return Math.round(rows.reduce((s, p) => s + p.score, 0) / rows.length);
+  };
+  return (
+    <div className="card p-5">
+      <h3 className="text-sm font-semibold">Performance Heatmap</h3>
+      <p className="mb-3.5 text-[11px] text-[var(--muted)]">Monthly average score, per subject</p>
+      <div className="overflow-x-auto">
+        <table style={{ minWidth: 420, borderCollapse: "separate", borderSpacing: "4px 4px" }}>
+          <thead>
+            <tr>
+              <th style={{ width: 80 }} />
+              {months.map((m) => <th key={m.key} className="text-[9px] font-medium text-[var(--muted)]">{m.label}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {subjects.map((s) => (
+              <tr key={s.subject}>
+                <td className="whitespace-nowrap pr-2.5 text-[11px] text-[var(--muted)]">{s.subject}</td>
+                {months.map((m) => {
+                  const v = cellAvg(s.subject, m.key);
+                  const bg = v === null ? "transparent" : v >= 80 ? `${SUBJ_LIME}26` : v >= 60 ? `${SUBJ_ORANGE}26` : `${SUBJ_ROSE}26`;
+                  const fg = v === null ? "var(--muted)" : v >= 80 ? SUBJ_LIME : v >= 60 ? SUBJ_ORANGE : SUBJ_ROSE;
+                  return (
+                    <td key={m.key} className="text-center">
+                      <div className="mx-auto flex items-center justify-center rounded" style={{ width: 34, height: 24, background: bg }}>
+                        <span className="text-[10px] font-bold tabular-nums" style={{ color: fg }}>{v ?? "—"}</span>
+                      </div>
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function heatScoreColor(s: number) { return s >= 80 ? SUBJ_LIME : s >= 60 ? SUBJ_ORANGE : SUBJ_ROSE; }
+function heatScoreBg(s: number) { return s >= 80 ? `${SUBJ_LIME}26` : s >= 60 ? `${SUBJ_ORANGE}26` : `${SUBJ_ROSE}26`; }
+
+function RecentExamsCard({ points }: { points: StudentTrendData["points"] }) {
+  const recent = [...points].filter((p) => p.at).sort((a, b) => (b.at ?? "").localeCompare(a.at ?? "")).slice(0, 6);
+  return (
+    <div className="card p-5">
+      <h3 className="mb-3 text-sm font-semibold">Recent Exams</h3>
+      {recent.length === 0 ? (
+        <p className="text-xs text-[var(--muted)]">No completed exams yet.</p>
+      ) : (
+        <div className="flex flex-col gap-1.5">
+          {recent.map((e, i) => (
+            <div key={i} className="flex items-center gap-2.5 rounded-xl px-3 py-2" style={{ background: "var(--card-2, var(--border))" }}>
+              <div className="flex h-7 w-8 shrink-0 items-center justify-center rounded-lg" style={{ background: heatScoreBg(e.score) }}>
+                <span className="text-[11px] font-bold tabular-nums" style={{ color: heatScoreColor(e.score) }}>{e.score}</span>
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[11px] font-medium">{e.examTitle}</p>
+                <p className="text-[10px] text-[var(--muted)]">{e.at ? new Date(e.at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "—"}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

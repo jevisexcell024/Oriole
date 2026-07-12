@@ -28,6 +28,10 @@ const args = Object.fromEntries(
 const BASE = args.base || "http://localhost:8787";
 const STUDENTS = Number(args.students || 500);
 const DURATION_S = Number(args.duration || 90);
+// Spread student logins across this many seconds instead of firing all at once
+// (simulates students trickling into check-in over a window rather than
+// everyone clicking "Start Exam" in the same instant). 0 = original behavior.
+const STAGGER_S = Number(args.stagger || 0);
 const POLL_INTERVAL_MS = 3500;
 const ANSWER_INTERVAL_MS = 10000;
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "admin@orcalis.dev";
@@ -135,7 +139,9 @@ async function setup() {
   // Generous timeout: creating N candidates means N sequential bcrypt hashes plus
   // N mock emails plus a full-mirror db.write() at the end — genuinely slow at
   // scale, but this is a one-time setup cost outside the measured load window.
-  const bulkRes = await admin.request("POST", "/api/admin/candidates/bulk", { rows }, 120000);
+  // Measured: 400 accounts takes ~150s (sequential bcryptjs hashing, no native
+  // bindings) — 120s was too tight and caused false-negative timeouts.
+  const bulkRes = await admin.request("POST", "/api/admin/candidates/bulk", { rows }, 300000);
   if (!bulkRes.json?.created?.length) throw new Error(`Bulk candidate creation returned no accounts (status ${bulkRes.status}, error: ${bulkRes.error ?? "none"}): ${JSON.stringify(bulkRes.json)}`);
   console.log(`Created ${bulkRes.json.created.length} candidates (${bulkRes.json.skipped?.length ?? 0} skipped).`);
 
@@ -143,7 +149,8 @@ async function setup() {
 }
 
 // ---- One simulated student's full session lifecycle ----
-async function runStudent(cred, questionId, stopAt) {
+async function runStudent(cred, questionId, stopAt, startDelayMs = 0) {
+  if (startDelayMs > 0) await new Promise((r) => setTimeout(r, startDelayMs));
   const s = new Session();
   // Generous timeout here on purpose: this is exactly the "login stampede" case
   // (many students logging in within the same few seconds) the test is meant to
@@ -180,15 +187,19 @@ async function runStudent(cred, questionId, stopAt) {
 
 // ---- Main ----
 async function main() {
-  console.log(`\nLoad test: ${STUDENTS} concurrent students, ${DURATION_S}s sustained, against ${BASE}\n`);
+  const staggerNote = STAGGER_S > 0 ? `, logins staggered over ${STAGGER_S}s` : ", all logins fired at once";
+  console.log(`\nLoad test: ${STUDENTS} concurrent students, ${DURATION_S}s sustained${staggerNote}, against ${BASE}\n`);
 
   const { examId, questionId, candidates } = await setup();
 
-  console.log(`\nStarting ${candidates.length} concurrent student sessions...\n`);
-  const stopAt = Date.now() + DURATION_S * 1000;
+  console.log(`\nStarting ${candidates.length} student sessions${STAGGER_S > 0 ? ` (staggered over ${STAGGER_S}s)` : " (concurrently)"}...\n`);
+  const stopAt = Date.now() + (DURATION_S + STAGGER_S) * 1000;
   const t0 = performance.now();
 
-  await Promise.all(candidates.map((c) => runStudent(c, questionId, stopAt).catch((e) => errors.push({ bucket: "student", ms: 0, note: String(e), at: new Date().toISOString() }))));
+  await Promise.all(candidates.map((c, i) => {
+    const startDelayMs = STAGGER_S > 0 ? Math.floor((i / candidates.length) * STAGGER_S * 1000) : 0;
+    return runStudent(c, questionId, stopAt, startDelayMs).catch((e) => errors.push({ bucket: "student", ms: 0, note: String(e), at: new Date().toISOString() }));
+  }));
 
   const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
 

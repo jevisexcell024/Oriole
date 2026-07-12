@@ -56,6 +56,21 @@ export function AdminOrganization() {
   const load = () => api.get<Inst>("/admin/institution").then((d) => { setData(d); setProfile(d.settings); }).catch((e) => setError(e.message));
   useEffect(() => { load(); }, []);
 
+  // The "academic" tab's underlying entity (AcademicYear — id/name/startDate/endDate/
+  // current) doubles as the Learning Structure "Cohort" in Cohort mode: a Cohort like
+  // "2025/2026" is a top-level intake/batch, exactly the same shape as an academic year,
+  // just relabeled — it is NOT the same thing as a Class (see ClassGroup.academicYearId,
+  // which links a class to one of these). Only hide the tab if NEITHER concept is active.
+  // Read straight off `data` (not the cached useLearningStructure() hook) so a save on
+  // this same page updates the tabs immediately via `load()`.
+  const structure = data?.settings.learningStructure ?? DEFAULT_LEARNING_STRUCTURE;
+  const academicTabLabel = structure.mode === "cohort" ? structure.cohortLabel : structure.academicYearLabel;
+  const visibleTabs = TABS.filter((tb) => tb.key !== "academic" || structure.useAcademicYears || structure.useCohorts);
+  useEffect(() => {
+    if (!visibleTabs.some((tb) => tb.key === tab)) setTab("overview");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [structure.useAcademicYears, structure.useCohorts]);
+
   const websiteOk = !profile.website?.trim() || /^https?:\/\/\S+\.\S+/i.test(profile.website.trim());
 
   async function saveProfile() {
@@ -85,11 +100,11 @@ export function AdminOrganization() {
 
         {/* Tabs */}
         <div className="flex flex-wrap gap-1 rounded-xl border border-[var(--border)] bg-[var(--card)] p-1">
-          {TABS.map((tb) => (
+          {visibleTabs.map((tb) => (
             <button key={tb.key} onClick={() => setTab(tb.key)}
               className={clsx("flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition",
                 tab === tb.key ? "bg-[var(--color-navy)] text-white shadow-sm" : "text-[var(--muted)] hover:text-[var(--fg)]")}>
-              <tb.icon className="h-4 w-4" /> {t(tb.labelKey)}
+              <tb.icon className="h-4 w-4" /> {tb.key === "academic" ? academicTabLabel : t(tb.labelKey)}
             </button>
           ))}
         </div>
@@ -156,7 +171,7 @@ export function AdminOrganization() {
         ) : tab === "campuses" ? (
           <CampusesTab items={data.campuses} onChanged={load} />
         ) : (
-          <AcademicYearsTab items={data.academicYears} onChanged={load} />
+          <AcademicYearsTab items={data.academicYears} onChanged={load} label={academicTabLabel} />
         )}
       </div>
     </AdminShell>
@@ -302,7 +317,7 @@ function CampusesTab({ items, onChanged }: { items: Campus[]; onChanged: () => v
   );
 }
 
-function AcademicYearsTab({ items, onChanged }: { items: AcademicYear[]; onChanged: () => void }) {
+function AcademicYearsTab({ items, onChanged, label }: { items: AcademicYear[]; onChanged: () => void; label: string }) {
   const t = useT();
   const { busy, create, del } = useCreate("academic-years", onChanged);
   const [name, setName] = useState("");
@@ -311,7 +326,7 @@ function AcademicYearsTab({ items, onChanged }: { items: AcademicYear[]; onChang
   const [current, setCurrent] = useState(false);
   const fmt = (s?: string | null) => (s ? new Date(s).toLocaleDateString() : "");
   return (
-    <Panel title={t("aorg.academicYears")}>
+    <Panel title={label}>
       <div className="flex flex-wrap items-end gap-2">
         <input className="input h-10 flex-1" placeholder={t("aorg.yearPh")} value={name} onChange={(e) => setName(e.target.value)} />
         <label className="text-xs text-[var(--muted)]"><span className="mb-1 block">{t("aorg.start")}</span><input type="date" className="input h-10" value={startDate} onChange={(e) => setStartDate(e.target.value)} /></label>

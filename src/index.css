@@ -107,6 +107,17 @@
       0 6px 16px -10px rgba(0, 0, 0, 0.55);
   }
   :root.light .card { box-shadow: 0 1px 2px 0 rgba(24, 42, 53, 0.06), 0 6px 16px -8px rgba(24, 42, 53, 0.14); }
+  /* Print: dark canvas with brand-lime ink, regardless of the active theme —
+     matches the app's own dark mode instead of a light printout (shadows/insets
+     don't render in print, so cards read as bordered cells on the same canvas). */
+  @media print {
+    :root {
+      --bg: #0E0E0D; --card: #0E0E0D; --card-2: #1A1A18;
+      --border: rgba(198, 255, 52, 0.35); --fg: #c6ff34; --muted: #7a9e2e;
+    }
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .card { box-shadow: none; border: 1px solid rgba(198, 255, 52, 0.35); break-inside: avoid; }
+  }
   :root.light .btn-outline { background: rgba(35, 61, 76, 0.03); }
   :root.light .btn-ghost:hover { background: rgba(35, 61, 76, 0.06); }
   /* Opt-in interactive surface (cards that act as buttons/links). */

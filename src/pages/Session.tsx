@@ -3,10 +3,11 @@ import { useNavigate, useParams } from "react-router-dom";
 import {
   Clock, ShieldCheck, AlertTriangle, Loader2, Send, ChevronLeft, ChevronRight, CircleDot, Circle,
   Lock, Maximize, EyeOff, Flag, Check, CloudOff, CloudUpload, X, CheckSquare, Square,
-  ChevronUp, ChevronDown, Upload, Pause as PauseIcon, MessageSquare, WifiOff,
+  ChevronUp, ChevronDown, Upload, Pause as PauseIcon, MessageSquare, WifiOff, MapPin,
 } from "lucide-react";
 import { api, sendBeaconJson } from "@/lib/api";
 import { useProctoring } from "@/lib/proctoring";
+import { useGeofenceMonitor } from "@/lib/geofence";
 import { useExamLockdown, type LockdownEvent } from "@/lib/lockdown";
 import { useAnswerSync } from "@/lib/useAnswerSync";
 import { CodeAnswer } from "@/components/CodeAnswer";
@@ -56,6 +57,8 @@ export function Session() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [paused, setPaused] = useState(false);
   const pausedRef = useRef(false);
+  const [geofencePauseAuto, setGeofencePauseAuto] = useState(false);
+  const [geofenceLocked, setGeofenceLocked] = useState(false);
   const [proctorMsgs, setProctorMsgs] = useState<{ id: string; text: string; at: string }[]>([]);
   const [dismissedMsgs, setDismissedMsgs] = useState<Set<string>>(new Set());
   const [online, setOnline] = useState(() => typeof navigator !== "undefined" ? navigator.onLine : true);
@@ -79,6 +82,10 @@ export function Session() {
 
   const { videoRef, cameraReady, faceStatus } = useProctoring({ active: !!data && proctored && (ld?.webcam ?? true), onEvent, audioMonitoring: ld?.audioMonitoring });
   const lockdown = useExamLockdown({ active: !!data && proctored, onEvent, rules: ld });
+  const geo = useGeofenceMonitor({
+    active: !!data && proctored && !!ld?.requireGeofence && !!ld?.geofenceContinuousMonitoring,
+    attemptId, intervalSec: ld?.geofenceCheckIntervalSec ?? 60,
+  });
 
   // Load attempt.
   useEffect(() => {
@@ -154,7 +161,7 @@ export function Session() {
     let alive = true;
     const poll = async () => {
       try {
-        const c = await api.get<{ paused: boolean; terminated: boolean; terminationReason: string | null; messages: { id: string; text: string; at: string }[]; deadlineAt: string; serverNow: string }>(`/attempts/${attemptId}/control`);
+        const c = await api.get<{ paused: boolean; terminated: boolean; terminationReason: string | null; messages: { id: string; text: string; at: string }[]; deadlineAt: string; serverNow: string; geofenceLocked: boolean; geofenceOutsideSince: string | null; geofencePauseAuto: boolean }>(`/attempts/${attemptId}/control`);
         if (!alive) return;
         if (c.terminated && !submittedRef.current) {
           submittedRef.current = true;
@@ -164,6 +171,8 @@ export function Session() {
         }
         pausedRef.current = c.paused;
         setPaused(c.paused);
+        setGeofencePauseAuto(c.geofencePauseAuto);
+        setGeofenceLocked(c.geofenceLocked);
         setProctorMsgs(c.messages);
         // A pause/resume changes the deadline — refresh the countdown anchors when it does.
         setData((d) => (d && d.deadlineAt !== c.deadlineAt ? { ...d, deadlineAt: c.deadlineAt, serverNow: c.serverNow } : d));
@@ -265,15 +274,32 @@ export function Session() {
 
   return (
     <div className="min-h-screen bg-[var(--bg)]">
-      {/* Proctor pause — freezes the exam until resumed */}
+      {/* Proctor pause — freezes the exam until resumed (or geofence auto-pause, until the candidate returns) */}
       {paused && (
         <div className="fixed inset-0 z-[60] flex flex-col items-center justify-center gap-4 bg-[var(--color-navy)] text-white">
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/15"><PauseIcon className="h-7 w-7" /></div>
-          <p className="text-xl font-bold">{t("run.pausedTitle")}</p>
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/15">
+            {geofencePauseAuto ? <MapPin className="h-7 w-7" /> : <PauseIcon className="h-7 w-7" />}
+          </div>
+          <p className="text-xl font-bold">{geofencePauseAuto ? t("run.geofencePausedTitle") : t("run.pausedTitle")}</p>
           <p className="max-w-md text-center text-sm text-white/70">
-            A proctor has paused your session. Your timer is frozen — please wait, do not close this window. The exam will resume automatically.
+            {geofencePauseAuto
+              ? t("run.geofencePausedBody")
+              : "A proctor has paused your session. Your timer is frozen — please wait, do not close this window. The exam will resume automatically."}
           </p>
-          <span className="inline-flex items-center gap-2 text-xs text-white/60"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Waiting for the proctor…</span>
+          <span className="inline-flex items-center gap-2 text-xs text-white/60">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> {geofencePauseAuto ? t("run.geofenceWaitingReturn") : "Waiting for the proctor…"}
+          </span>
+        </div>
+      )}
+
+      {/* Geofence lock — blocks the exam UI while outside the approved area; unlike a
+          pause, the timer keeps running (a stricter policy than "pause"). */}
+      {geofenceLocked && !paused && (
+        <div className="fixed inset-0 z-[60] flex flex-col items-center justify-center gap-4 bg-[var(--color-navy)] text-white">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-rose-500/20"><MapPin className="h-7 w-7 text-rose-300" /></div>
+          <p className="text-xl font-bold">{t("run.geofenceLockedTitle")}</p>
+          <p className="max-w-md text-center text-sm text-white/70">{t("run.geofenceLockedBody")}</p>
+          <span className="inline-flex items-center gap-2 text-xs text-white/60"><Loader2 className="h-3.5 w-3.5 animate-spin" /> {t("run.geofenceWaitingReturn")}</span>
         </div>
       )}
 
@@ -343,6 +369,21 @@ export function Session() {
         <div className={clsx("mx-auto mt-3 flex max-w-6xl items-center gap-2 rounded-xl px-4 py-3 text-sm font-medium",
           banner.level === "crit" ? "bg-rose-500/15 text-rose-400 ring-1 ring-rose-500/30" : "bg-amber-500/15 text-amber-400 ring-1 ring-amber-500/30")}>
           <AlertTriangle className="h-4 w-4 shrink-0" /> {banner.msg}
+        </div>
+      )}
+
+      {/* Geofence exit warning — shown from the first outside checkpoint until the grace
+          period runs out (or the candidate returns). Not shown once already paused/locked
+          for it, since the full-screen overlays above already communicate the state. */}
+      {geo.allowed === false && !paused && !geofenceLocked && (
+        <div className="mx-auto mt-3 flex max-w-6xl items-center gap-2 rounded-xl bg-amber-500/15 px-4 py-3 text-sm font-medium text-amber-400 ring-1 ring-amber-500/30">
+          <MapPin className="h-4 w-4 shrink-0" />
+          <span className="flex-1">
+            {geo.reason ?? t("run.geofenceOutsideBanner")}
+            {geo.graceRemainingSec !== null && geo.policy !== "warn" && (
+              <> {t("run.geofenceReturnWithin", { seconds: geo.graceRemainingSec })}</>
+            )}
+          </span>
         </div>
       )}
 

@@ -41,6 +41,10 @@ export interface User {
    *  (logout, password change, admin reset). Tokens carry the value they were
    *  issued with; a mismatch means the session has been revoked. */
   tokenVersion?: number;
+  /** Fingerprints (hash of IP + user agent) of devices this account has
+   *  successfully logged in from before, newest first, capped at 10. A login
+   *  from an unrecognized fingerprint triggers a "new sign-in" email alert. */
+  knownDevices?: { fingerprint: string; lastSeenAt: string }[];
 }
 
 export interface NotificationPrefs {
@@ -121,6 +125,15 @@ export interface RubricCriterion {
   maxPoints: number;
 }
 
+/** An approved physical exam location — a candidate inside its radius may begin the exam. */
+export interface GeofenceCenter {
+  id: string;
+  label: string;
+  lat: number;
+  lng: number;
+  radiusM: number;
+}
+
 /** Per-exam lockdown rules an institution can toggle. */
 export interface LockdownConfig {
   fullscreen: boolean;        // require fullscreen, block exam when exited
@@ -136,6 +149,24 @@ export interface LockdownConfig {
   requireRoomScan?: boolean;  // capture a short webcam room scan at check-in for the proctor
   requireAgreement: boolean;  // require accepting exam rules + integrity policy
   violationLimit: number;     // auto-submit after N violations (0 = never auto-submit)
+
+  // ── Geofencing (restrict the exam to approved physical locations) ──
+  requireGeofence?: boolean;
+  /** Approved locations — a candidate inside ANY one of these may begin the exam. */
+  geofenceCenters?: GeofenceCenter[];
+  /** Maximum acceptable GPS error, in metres. Entry is blocked above this until accuracy improves. */
+  geofenceMinAccuracyM?: number;
+  /** Re-check location periodically DURING the exam, not just at entry (Phase 2). */
+  geofenceContinuousMonitoring?: boolean;
+  /** How often the candidate's browser re-checks GPS while the exam is running, in seconds. */
+  geofenceCheckIntervalSec?: number;
+  /** Seconds a candidate may remain outside every approved area before the exit policy applies. */
+  geofenceGraceSeconds?: number;
+  /** What happens once the grace period expires while the candidate is still outside every
+   *  approved area — from most to least lenient: warn (log only), pause (freeze the timer
+   *  until they return), lock (block the exam UI but keep the timer running), auto_submit /
+   *  terminate (end the exam; both call the same force-submit path, worded differently). */
+  geofenceExitPolicy?: "warn" | "pause" | "lock" | "auto_submit" | "terminate";
 
   // ── Safe Exam Browser (hard, OS-level lockdown) ──
   // When on, the exam can ONLY be taken inside Safe Exam Browser: the server
@@ -162,6 +193,13 @@ export const DEFAULT_LOCKDOWN: LockdownConfig = {
   requireIdentity: true,
   requireAgreement: true,
   violationLimit: 2,
+  requireGeofence: false,
+  geofenceCenters: [],
+  geofenceMinAccuracyM: 20,
+  geofenceContinuousMonitoring: false,
+  geofenceCheckIntervalSec: 60,
+  geofenceGraceSeconds: 120,
+  geofenceExitPolicy: "warn",
   requireSafeExamBrowser: false,
   sebConfigKeys: [],
   sebBrowserExamKeys: [],
@@ -304,6 +342,16 @@ export interface Attempt {
   terminationReason?: string | null;
   /** Messages a proctor has sent to the candidate during the attempt. */
   proctorMessages?: { id: string; text: string; at: string }[];
+  // ── Geofence continuous monitoring (Phase 2) ──
+  /** ISO timestamp of the first continuous check that found the candidate outside every
+   *  approved area since their last return; null while inside (or not yet checked). */
+  geofenceOutsideSince?: string | null;
+  /** Set when the exam's exit policy escalated to "lock" — blocks the exam UI (the timer
+   *  keeps running, unlike `paused`) until the candidate returns inside an approved area. */
+  geofenceLocked?: boolean;
+  /** True when the current pause was auto-triggered by the geofence exit policy (auto-resumes
+   *  once the candidate returns), as opposed to a manual proctor pause. */
+  geofencePauseAuto?: boolean;
   // ── Per-attempt question delivery (frozen at start so resume is stable) ──
   /** The exact question ids served to this attempt, in served order. */
   questionIds?: string[];
@@ -348,11 +396,38 @@ export const PROCTOR_EVENT_TYPES = [
   "shortcut_blocked",
   "audio_noise",
   "multi_monitor",
+  "geofence_exit",
 ] as const;
 
 export type ProctorEventType = (typeof PROCTOR_EVENT_TYPES)[number];
 
 export type Severity = "info" | "warning" | "high";
+
+/** A single GPS check recorded during geofence verification (entry check, and later
+ *  continuous checkpoints). Kept even for successful/benign checks, so the full
+ *  location history can be exported as an audit report. */
+export type GeofenceLogEventType = "ENTRY" | "GPS_DISABLED" | "GPS_PERMISSION_DENIED" | "LOW_ACCURACY" | "DENIED" | "EXIT";
+
+export interface GeofenceLog {
+  id: string;
+  registrationId: string;
+  /** Set once an attempt exists (continuous-monitoring checkpoints); null for pre-attempt entry checks. */
+  attemptId: string | null;
+  examId: string;
+  candidateId: string;
+  lat: number | null;
+  lng: number | null;
+  accuracy: number | null;
+  distanceMeters: number | null;
+  nearestCenterLabel: string | null;
+  insideGeofence: boolean;
+  eventType: GeofenceLogEventType;
+  ipAddress: string | null;
+  deviceId: string | null;
+  browser: string | null;
+  operatingSystem: string | null;
+  at: string;
+}
 
 export interface ProctorEvent {
   id: string;
@@ -533,7 +608,9 @@ export interface ScheduledReport {
 export const WEBHOOK_EVENTS = ["attempt.submitted", "result.released", "certificate.issued", "exam.published"] as const;
 export type WebhookEvent = (typeof WEBHOOK_EVENTS)[number];
 
-/** A class/cohort of students (Teams-style). Exams are assigned to the whole class at a scheduled time. */
+/** A class/section of students (Teams-style). Exams are assigned to the whole class at a
+ *  scheduled time. Distinct from a Learning Structure "Cohort" (a top-level intake/batch,
+ *  e.g. "2025/2026") — a Cohort *contains* classes via `academicYearId`, it isn't one. */
 export interface ClassGroup {
   id: string;
   name: string;
@@ -542,6 +619,10 @@ export interface ClassGroup {
   memberIds: string[];
   assignments: { examId: string; scheduledStart: string | null; assignedAt: string }[];
   createdAt: string;
+  /** The Cohort/Academic Year this class belongs to (same `AcademicYear` entity, just
+   *  relabeled "Cohort" when `learningStructure.mode === "cohort"`). Optional — not every
+   *  institution organizes classes by intake year. */
+  academicYearId?: string | null;
 }
 
 // ---- Digital library (Digital Learning Resource Management) ----

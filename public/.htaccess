@@ -5,4 +5,13 @@
 <IfModule mod_headers.c>
   Header always unset Content-Security-Policy
   Header always set Content-Security-Policy "default-src 'self' data: blob: https:; script-src 'self' 'unsafe-eval' 'unsafe-inline' https:; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: blob: https:; font-src 'self' data: https:; connect-src 'self' https: wss:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'"
+
+  # Many shared cPanel/LiteSpeed hosts inject a locked-down default Permissions-Policy
+  # that silently disables geolocation/camera/microphone (the browser never even shows
+  # a permission prompt — it just refuses). This app needs all three (geofencing,
+  # webcam/mic proctoring), scoped to our own origin only, so it's unset and re-set
+  # here the same way the CSP above is, in case the host's header wins over the Node
+  # app's own (server/security.ts sets the same header — this is the second layer).
+  Header always unset Permissions-Policy
+  Header always set Permissions-Policy "geolocation=(self), camera=(self), microphone=(self)"
 </IfModule>

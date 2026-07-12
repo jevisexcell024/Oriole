@@ -1,319 +1,312 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { Download, TrendingUp, TrendingDown, Minus, Loader2 } from "lucide-react";
 import {
-  Loader2, Search, Bell, Download, Trophy, Clock, BarChart3, Layers, Target, ArrowUpRight, AlertTriangle,
-} from "lucide-react";
+  ResponsiveContainer, LineChart, Line, AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
+  XAxis, YAxis, CartesianGrid, Tooltip,
+} from "recharts";
 import { AdminShell } from "@/components/AdminShell";
-import { RadialGauge, TrendLine } from "@/components/Charts";
 import { api } from "@/lib/api";
 import { useT, type TFn } from "@/lib/i18n";
-import { clsx } from "clsx";
 
-const PRIORITY_KEY: Record<string, string> = { Urgent: "aan.prUrgent", High: "aan.prHigh", Medium: "aan.prMedium", Low: "aan.prLow" };
+// ── Design tokens ────────────────────────────────────────────────────────
+const LIME = "#c8f53d";
+const CYAN = "#22d3ee";
+const PURPLE = "#c084fc";
+const ORANGE = "#fb923c";
+const GREEN = "#4ade80";
+const ROSE = "#f43f5e";
+const CARD = "#141414";
+const INNER = "#1c1c1c";
+const DIM = "#5a5a6a";
+const BG = "#0a0a0a";
+const SUBJECT_COLORS = [LIME, CYAN, PURPLE, ORANGE, GREEN, ROSE];
 
-const G = { btn: "#111110", accent: "#c6ff34", amber: "#E9B949", red: "#6E1423", deep: "#111110" };
-// Score-band tiles for the heatmap (single-hue #111110 ramp, light → dark).
-const BANDS = ["#DCE6E9", "#9DB6BD", "#5A8290", "#111110"];
-const bandOf = (v: number | null) => (v == null ? -1 : v < 40 ? 0 : v < 60 ? 1 : v < 80 ? 2 : 3);
-
+interface Cards {
+  avgScore: number; avgScoreDelta: number | null;
+  totalExams: number; totalExamsDelta: number | null;
+  passRate: number; passRateDelta: number | null;
+  completionRate: number; integrityScore: number;
+  highest: number; lowest: number; avgMin: number; top: { name: string; score: number };
+}
 interface Analytics {
-  cards: { avgScore: number; highest: number; totalAnalyzed: number; avgMin: number; top: { name: string; score: number } };
-  heatMonths: string[];
-  heatmap: { subject: string; cells: (number | null)[] }[];
-  questionLevels: { tier: string; share: number; correct: number; tone: string }[];
-  funnel: { students: number; enrolled: number; completed: number };
-  recommendations: { subject: string; avg: number; under50: number } | null;
-  growth: { attempt: number; avg: number }[];
-  rapid: { priority: string; focus: string; status: string; action: string; impact: string }[];
+  cards: Cards;
+  subjectTrend: Record<string, string | number | null>[];
+  topSubjects: string[];
+  subjectBars: { subject: string; avgScore: number; attempts: number }[];
+  questionTypeAnalysis: { type: string; score: number; volume: number }[];
+  questionDifficulty: { tier: string; share: number; correct: number }[];
+  accuracy: number;
+  paceBuckets: { fast: number; normal: number; slow: number };
+  weeklyActivity: { week: string; attempts: number }[];
+  monthlyPerformance: { month: string; score: number | null }[];
 }
 
-interface CohortRow { id: string; name: string; members: number; attempts: number; avgScore: number | null; passRate: number | null }
-interface TermRow { label: string; attempts: number; avgScore: number | null; passRate: number | null }
-interface AtRiskRow { candidateId: string; name: string; attempts: number; avgScore: number; lastScore: number; fails: number; level: "high" | "medium"; reasons: string[] }
-interface CohortAnalytics { cohorts: CohortRow[]; terms: TermRow[]; atRisk: AtRiskRow[] }
-
-const fmtTime = (min: number, t: TFn) => (min >= 60 ? t("aan.hrMin", { h: Math.floor(min / 60), m: min % 60 }) : t("aan.min", { m: min }));
+function difficultyLabel(score: number) { return score >= 80 ? "Strong" : score >= 70 ? "Good" : "Needs work"; }
 
 export function AdminAnalytics() {
   const t = useT();
   const navigate = useNavigate();
   const [d, setD] = useState<Analytics | null>(null);
-  const [c, setC] = useState<CohortAnalytics | null>(null);
-  const [search, setSearch] = useState("");
-  useEffect(() => {
-    api.get<Analytics>("/admin/analytics-overview").then(setD).catch(() => setD(null));
-    api.get<CohortAnalytics>("/admin/analytics/cohorts").then(setC).catch(() => setC(null));
-  }, []);
+  const [error, setError] = useState<string | null>(null);
 
-  const heatRows = useMemo(
-    () => (d?.heatmap ?? []).filter((r) => r.subject.toLowerCase().includes(search.trim().toLowerCase())),
-    [d, search],
-  );
+  useEffect(() => { api.get<Analytics>("/admin/analytics-overview").then(setD).catch((e) => setError((e as Error).message)); }, []);
+
+  if (error) return <AdminShell wide><p className="p-6 text-sm text-rose-400">{error}</p></AdminShell>;
+  if (!d) return <AdminShell wide><div className="flex items-center gap-2 p-8 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div></AdminShell>;
 
   return (
     <AdminShell wide>
-      <div className="fade-in space-y-4">
+      <div className="fade-in -m-4 sm:-m-6" style={{ minHeight: "100vh", backgroundColor: BG, fontFamily: "Inter, sans-serif", scrollbarWidth: "none" }}>
         {/* Header */}
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-[6px] bg-[#111110] px-5 py-4">
+        <div className="flex items-center justify-between" style={{ backgroundColor: CARD, padding: "16px 28px", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-white">{t("aan.title")}</h1>
-            <p className="text-sm text-[#C7D6DA]">{t("aan.subtitle")}</p>
+            <p style={{ fontSize: 16, fontWeight: 700, color: "#f0f0f0" }}>{t("aan.title")}</p>
+            <p style={{ fontSize: 11, color: DIM, marginTop: 2 }}>{t("aan.subtitle")}</p>
           </div>
-          <div className="flex items-center gap-2">
-            <div className="hidden items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-2 sm:flex">
-              <Search className="h-4 w-4 text-[#C7D6DA]" />
-              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t("aan.searchSubject")} className="w-36 bg-transparent text-sm text-white outline-none placeholder:text-[#C7D6DA]" />
-            </div>
-            <span className="flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-white/10 text-white"><Bell className="h-4 w-4" /></span>
-            <button onClick={() => navigate("/admin/reports")} className="btn btn-on-teal"><Download className="h-4 w-4" /> {t("aan.exportReport")}</button>
-          </div>
+          <button onClick={() => navigate("/admin/reports")} className="flex items-center gap-2 transition hover:opacity-80"
+            style={{ backgroundColor: LIME, color: "#0a0a0a", fontSize: 12, fontWeight: 600, padding: "8px 16px", borderRadius: 8 }}>
+            <Download className="h-3.5 w-3.5" /> {t("aan.exportReport")}
+          </button>
         </div>
 
-        {!d ? <div className="flex items-center gap-2 py-16 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div> : (
-          <>
-            {/* KPI cards */}
-            <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-              <Kpi icon={BarChart3} tint={G.accent} label={t("aan.kpiAvgScore")} value={`${d.cards.avgScore}%`} sub={t("aan.marks")} />
-              <Kpi icon={Trophy} tint={G.amber} label={t("aan.kpiHighest")} value={`${d.cards.highest}%`} sub={t("aan.marks")} />
-              <Kpi icon={Layers} tint="#0EA5E9" label={t("aan.kpiAnalyzed")} value={d.cards.totalAnalyzed} sub={t("aan.submissions")} />
-              <Kpi icon={Clock} tint="#0EA5E9" label={t("aan.kpiAvgTime")} value={fmtTime(d.cards.avgMin, t)} sub={t("aan.perAttempt")} />
-              <Kpi icon={Trophy} tint={G.btn} label={t("aan.kpiTop")} value={`${d.cards.top.score}%`} sub={d.cards.top.name} />
-            </div>
+        {/* Row 1 — stat cards */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 2, marginTop: 2, height: 110 }}>
+          <StatCard label={t("aan.stOverallScore")} value={`${d.cards.avgScore}%`} delta={d.cards.avgScoreDelta} note={t("aan.vsLastMonth")} color={LIME} />
+          <StatCard label={t("aan.stTotalExams")} value={d.cards.totalExams} delta={d.cards.totalExamsDelta} note={t("aan.examsTakenNote")} color={CYAN} />
+          <StatCard label={t("aan.stPassingScore")} value={`${d.cards.passRate}%`} delta={d.cards.passRateDelta} note={t("aan.passRateNote")} color={LIME} />
+          <StatCard label={t("aan.stCompletionRate")} value={`${d.cards.completionRate}%`} delta={null} note={t("aan.completionNote")} color={ORANGE} />
+          <StatCard label={t("aan.stIntegrityScore")} value={`${d.cards.integrityScore}%`} delta={null} note={t("aan.integrityNote")} color={PURPLE} />
+        </div>
 
-            <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.35fr_1fr]">
-              {/* ===== Left ===== */}
-              <div className="space-y-4">
-                {/* Heatmap */}
-                <div className="card rounded-2xl p-5">
-                  <div className="flex items-center justify-between">
-                    <h2 className="text-base font-bold">{t("aan.bySubject")}</h2>
-                    <span className="text-[11px] text-[var(--muted)]">{t("aan.avgLast8")}</span>
-                  </div>
-                  {heatRows.length === 0 ? (
-                    <p className="mt-4 text-sm text-[var(--muted)]">{t("aan.noResults")}</p>
-                  ) : (
-                    <div className="mt-4 overflow-x-auto">
-                      <div className="min-w-[460px]">
-                        {heatRows.map((row) => (
-                          <div key={row.subject} className="mb-1.5 flex items-center gap-2">
-                            <span className="w-20 shrink-0 truncate text-xs text-[var(--muted)]">{row.subject}</span>
-                            <div className="flex flex-1 gap-1.5">
-                              {row.cells.map((v, i) => {
-                                const b = bandOf(v);
-                                return <div key={i} title={v == null ? t("aan.noData") : `${v}%`} className="h-6 flex-1 rounded-[3px]" style={{ background: b < 0 ? "var(--card-2)" : BANDS[b] }} />;
-                              })}
-                            </div>
-                          </div>
-                        ))}
-                        <div className="mt-2 flex items-center gap-2">
-                          <span className="w-20 shrink-0" />
-                          <div className="flex flex-1 justify-between text-[9px] text-[var(--muted)]">
-                            {d.heatMonths.map((m) => <span key={m}>{m}</span>)}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                  <div className="mt-4 flex flex-wrap gap-3 text-[10px] text-[var(--muted)]">
-                    {["0–40", "40–60", "60–80", "80–100"].map((l, i) => (
-                      <span key={l} className="inline-flex items-center gap-1.5"><span className="h-3 w-3 rounded-[2px]" style={{ background: BANDS[i] }} /> {l}</span>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Rapid performance acceleration */}
-                <div className="card rounded-2xl p-5">
-                  <h2 className="text-base font-bold">{t("aan.rapid")}</h2>
-                  {d.rapid.length === 0 ? (
-                    <p className="mt-3 text-sm text-[var(--muted)]">{t("aan.notEnoughRec")}</p>
-                  ) : (
-                    <div className="mt-3 overflow-x-auto">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="border-b border-[var(--border)] text-left text-[11px] uppercase tracking-wide text-[var(--muted)]">
-                            <th className="pb-2.5 font-semibold">{t("aan.colPriority")}</th>
-                            <th className="pb-2.5 font-semibold">{t("aan.colFocus")}</th>
-                            <th className="pb-2.5 font-semibold">{t("aan.colStatus")}</th>
-                            <th className="hidden pb-2.5 font-semibold sm:table-cell">{t("aan.colAction")}</th>
-                            <th className="pb-2.5 font-semibold">{t("aan.colImpact")}</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {d.rapid.map((r, i) => (
-                            <tr key={i} className="border-b border-[var(--border)] last:border-0">
-                              <td className="py-2.5"><PriorityTag p={r.priority} /></td>
-                              <td className="py-2.5 font-medium">{r.focus}</td>
-                              <td className="py-2.5 text-[var(--muted)]">{r.status}</td>
-                              <td className="hidden py-2.5 text-[var(--muted)] sm:table-cell">{r.action}</td>
-                              <td className="py-2.5 font-medium" style={{ color: G.btn }}>{r.impact}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* ===== Right ===== */}
-              <div className="space-y-4">
-                {/* Question-level analysis */}
-                <div className="card rounded-2xl p-5">
-                  <div className="flex items-center justify-between">
-                    <h2 className="text-base font-bold">{t("aan.questionLevel")}</h2>
-                    <button onClick={() => navigate("/admin/results")} className="text-[var(--muted)] hover:text-[var(--fg)]"><ArrowUpRight className="h-4 w-4" /></button>
-                  </div>
-                  <div className="mt-4 grid grid-cols-3 gap-3">
-                    {d.questionLevels.map((q) => {
-                      const c = q.tone === "green" ? G.accent : q.tone === "amber" ? G.amber : G.red;
-                      return (
-                        <div key={q.tier} className="flex flex-col items-center text-center" title={t("aan.answeredCorrectly", { n: q.correct })}>
-                          <RadialGauge size={74} thickness={7} color={c} value={q.correct} max={100} display={`${q.correct}%`} />
-                          <p className="mt-2 text-[11px] font-medium leading-tight">{q.tier}</p>
-                          <p className="text-[10px] leading-tight text-[var(--muted)]">{t("aan.ofItems", { n: q.share })}</p>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Enrollment at a glance */}
-                <div className="card rounded-2xl p-5">
-                  <h2 className="text-sm font-bold">{t("aan.enrollGlance")}</h2>
-                  <p className="stat-num mt-1 font-display text-2xl font-semibold">{d.funnel.students} <span className="text-xs font-medium text-[var(--muted)]">{t("aan.totalStudents")}</span></p>
-                  <div className="mt-4 flex items-center justify-around gap-3">
-                    <div className="flex flex-col items-center gap-1.5">
-                      <RadialGauge size={84} thickness={8} color={G.btn} value={d.funnel.enrolled} max={Math.max(1, d.funnel.students)} display={d.funnel.enrolled} />
-                      <span className="text-[11px] font-medium text-[var(--muted)]">{t("aan.enrolled")}</span>
-                    </div>
-                    <div className="flex flex-col items-center gap-1.5">
-                      <RadialGauge size={84} thickness={8} color={G.accent} value={d.funnel.completed} max={Math.max(1, d.funnel.students)} display={d.funnel.completed} />
-                      <span className="text-[11px] font-medium text-[var(--muted)]">{t("aan.completed")}</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Recommendations */}
-                <div className="card rounded-2xl p-5">
-                  <h2 className="text-sm font-bold">{t("aan.recommendations")}{d.recommendations ? ` · ${d.recommendations.subject}` : ""}</h2>
-                  {!d.recommendations ? (
-                    <p className="mt-2 text-sm text-[var(--muted)]">{t("aan.noAttentionSubject")}</p>
-                  ) : (
-                    <div className="mt-3 space-y-2 text-xs">
-                      <div className="flex items-start gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2">
-                        <span className="rounded bg-rose-500/20 px-1.5 py-0.5 text-[10px] font-bold text-rose-400">{t("aan.crisis")}</span>
-                        <span className="text-[var(--muted)]">{t("aan.crisisLine", { avg: d.recommendations.avg, under: d.recommendations.under50 })}</span>
-                      </div>
-                      <div className="flex items-start gap-2 rounded-lg border px-3 py-2" style={{ borderColor: "rgba(43,174,132,0.3)", background: "rgba(43,174,132,0.08)" }}>
-                        <span className="rounded px-1.5 py-0.5 text-[10px] font-bold" style={{ background: "rgba(43,174,132,0.2)", color: G.btn }}>{t("aan.actionBadge")}</span>
-                        <span className="text-[var(--muted)]">{t("aan.actionLine")}</span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* Performance growth over attempts */}
-                <div className="card rounded-2xl p-5">
-                  <h2 className="text-sm font-bold">{t("aan.growth")}</h2>
-                  {d.growth.length < 2 ? (
-                    <p className="mt-2 text-sm text-[var(--muted)]">{t("aan.notEnoughRepeat")}</p>
-                  ) : <GrowthChart data={d.growth} t={t} />}
-                </div>
-              </div>
-            </div>
-
-            {/* Cohort & term comparison + at-risk */}
-            {c && (
-              <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-                <div className="card rounded-2xl p-5">
-                  <h2 className="text-base font-bold">{t("aan.cohortComparison")}</h2>
-                  <p className="mt-0.5 text-xs text-[var(--muted)]">{t("aan.avgByClass")}</p>
-                  {c.cohorts.length === 0 ? <p className="mt-3 text-sm text-[var(--muted)]">{t("aan.noClasses")}</p> : (
-                    <div className="mt-4 grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3">
-                      {c.cohorts.map((co) => (
-                        <div key={co.id} className="flex flex-col items-center gap-1.5 text-center" title={`${co.attempts} · ${co.members}`}>
-                          <RadialGauge size={76} thickness={7} color={G.btn} value={co.avgScore ?? 0} max={100} display={co.avgScore != null ? `${co.avgScore}%` : "—"} />
-                          <span className="max-w-full truncate text-[11px] font-medium">{co.name}</span>
-                          {co.passRate != null && <span className="text-[10px] text-[var(--muted)]">{t("aan.passSuffix", { n: co.passRate })}</span>}
-                        </div>
+        {/* Row 2 */}
+        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 2, marginTop: 2 }}>
+          <Panel>
+            <SectionHead title={t("aan.perfOverTime")} sub={t("aan.perfOverTimeSub")} />
+            {d.topSubjects.length === 0 ? <Empty t={t} /> : (
+              <>
+                <div style={{ height: 200 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={d.subjectTrend} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
+                      <CartesianGrid stroke="rgba(255,255,255,0.03)" strokeDasharray="3 3" vertical={false} />
+                      <XAxis dataKey="month" tick={{ fill: DIM, fontSize: 10 }} axisLine={false} tickLine={false} />
+                      <YAxis domain={[0, 100]} tick={{ fill: DIM, fontSize: 10 }} axisLine={false} tickLine={false} />
+                      <Tooltip content={<DarkTooltip />} />
+                      {d.topSubjects.map((subj, i) => (
+                        <Line key={subj} type="monotone" dataKey={subj} name={subj} stroke={SUBJECT_COLORS[i % SUBJECT_COLORS.length]} strokeWidth={1.5} dot={false} activeDot={{ r: 4 }} connectNulls />
                       ))}
-                    </div>
-                  )}
+                    </LineChart>
+                  </ResponsiveContainer>
                 </div>
+                <div className="flex flex-wrap" style={{ columnGap: 16, rowGap: 6, marginTop: 12 }}>
+                  {d.topSubjects.map((subj, i) => (
+                    <span key={subj} className="flex items-center gap-1.5">
+                      <span style={{ width: 20, height: 2, background: SUBJECT_COLORS[i % SUBJECT_COLORS.length] }} />
+                      <span style={{ fontSize: 10, color: DIM }}>{subj}</span>
+                    </span>
+                  ))}
+                </div>
+              </>
+            )}
+          </Panel>
 
-                <div className="card rounded-2xl p-5">
-                  <h2 className="text-base font-bold">{t("aan.termOverTerm")}</h2>
-                  <p className="mt-0.5 text-xs text-[var(--muted)]">{t("aan.avgAcrossTerms")}</p>
-                  {c.terms.length === 0 ? <p className="mt-3 text-sm text-[var(--muted)]">{t("aan.noDatedResults")}</p> : c.terms.length < 2 ? (
-                    <div className="mt-4 flex items-center gap-4">
-                      <RadialGauge size={88} thickness={9} color={G.accent} value={c.terms[0].avgScore ?? 0} max={100} display={c.terms[0].avgScore != null ? `${c.terms[0].avgScore}%` : "—"} />
-                      <div className="text-sm"><p className="font-semibold">{c.terms[0].label}</p><p className="text-xs text-[var(--muted)]">{t("aan.avgScoreSmall")}{c.terms[0].passRate != null ? ` · ${t("aan.passSuffix", { n: c.terms[0].passRate })}` : ""}</p></div>
-                    </div>
-                  ) : (
-                    <TrendLine data={c.terms.map((tm) => ({ label: tm.label, value: tm.avgScore ?? 0 }))} color={G.accent} yMax={100} />
-                  )}
-                </div>
-
-                <div className="card rounded-2xl p-5">
-                  <div className="flex items-center justify-between">
-                    <h2 className="text-base font-bold">{t("aan.atRisk")}</h2>
-                    {c.atRisk.length > 0 && <span className="rounded-full bg-rose-500/15 px-2 py-0.5 text-[11px] font-semibold text-rose-400">{c.atRisk.length}</span>}
-                  </div>
-                  {c.atRisk.length === 0 ? <p className="mt-3 text-sm text-emerald-400">{t("aan.noneFlagged")}</p> : (
-                    <div className="mt-3 max-h-[260px] space-y-2 overflow-y-auto">
-                      {c.atRisk.map((s) => (
-                        <button key={s.candidateId} onClick={() => navigate(`/admin/students/${s.candidateId}`)} className="flex w-full items-start gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-left hover:bg-[var(--card-2)]">
-                          <span className={clsx("mt-0.5 h-2 w-2 shrink-0 rounded-full", s.level === "high" ? "bg-rose-500" : "bg-amber-500")} />
-                          <span className="min-w-0 flex-1">
-                            <span className="flex items-center justify-between gap-2"><span className="truncate text-sm font-medium">{s.name}</span><span className="shrink-0 text-xs tabular-nums text-[var(--muted)]">{t("aan.avgSmall", { n: s.avgScore })}</span></span>
-                            <span className="text-[11px] text-[var(--muted)]">{s.reasons.join(" · ")}</span>
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
+          <Panel>
+            <SectionHead title={t("aan.subjectPerf")} sub={t("aan.subjectPerfSub")} />
+            {d.subjectBars.length === 0 ? <Empty t={t} /> : (
+              <div className="flex flex-col" style={{ gap: 14 }}>
+                {d.subjectBars.map((s, i) => <HBar key={s.subject} label={s.subject} score={s.avgScore} color={SUBJECT_COLORS[i % SUBJECT_COLORS.length]} />)}
               </div>
             )}
-          </>
-        )}
+          </Panel>
+
+          <Panel>
+            <SectionHead title={t("aan.questionTypeAnalysis")} sub={t("aan.questionTypeSub")} />
+            {d.questionTypeAnalysis.length === 0 ? <Empty t={t} /> : (
+              <div className="flex flex-col" style={{ gap: 16 }}>
+                {d.questionTypeAnalysis.map((q, i) => {
+                  const color = SUBJECT_COLORS[i % SUBJECT_COLORS.length];
+                  const dots = Math.round(q.score / 20);
+                  return (
+                    <div key={q.type}>
+                      <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+                        <span style={{ fontSize: 11, fontWeight: 500, color: "#d0d0d0" }}>{q.type}</span>
+                        <span style={{ fontSize: 11, fontWeight: 700, color }}>{q.score}%</span>
+                      </div>
+                      <div style={{ height: 5, backgroundColor: INNER, borderRadius: 9999, overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${q.score}%`, backgroundColor: color, borderRadius: 9999 }} />
+                      </div>
+                      <div className="flex items-center justify-between" style={{ marginTop: 6 }}>
+                        <div className="flex" style={{ gap: 4 }}>
+                          {Array.from({ length: 5 }).map((_, di) => <span key={di} style={{ width: 6, height: 6, borderRadius: "50%", background: di < dots ? color : "#242424" }} />)}
+                        </div>
+                        <span style={{ fontSize: 9, color: DIM }}>{difficultyLabel(q.score)}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Panel>
+        </div>
+
+        {/* Row 3 */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.4fr", gap: 2, marginTop: 2 }}>
+          <Panel>
+            <SectionHead title={t("aan.questionDifficulty")} sub={t("aan.questionDifficultySub")} />
+            {d.questionDifficulty.length === 0 ? <Empty t={t} /> : (
+              <div className="flex flex-col" style={{ gap: 14 }}>
+                {d.questionDifficulty.map((lvl, i) => {
+                  const color = [LIME, ORANGE, ROSE][i] ?? DIM;
+                  return (
+                    <div key={lvl.tier}>
+                      <div className="flex items-center justify-between" style={{ marginBottom: 6 }}>
+                        <span className="flex items-center gap-2"><span style={{ width: 8, height: 8, borderRadius: "50%", background: color }} /><span style={{ fontSize: 11, fontWeight: 500, color: "#d0d0d0" }}>{lvl.tier}</span></span>
+                        <span style={{ fontSize: 11, fontWeight: 700, color }}>{lvl.correct}%</span>
+                      </div>
+                      <div style={{ height: 4, backgroundColor: INNER, borderRadius: 9999, overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${lvl.correct}%`, backgroundColor: color, opacity: 0.85, borderRadius: 9999 }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Panel>
+
+          <Panel style={{ display: "flex", flexDirection: "column" }}>
+            <SectionHead title={t("aan.accuracyPace")} sub={t("aan.accuracyPaceSub")} />
+            <div className="flex flex-1 items-center" style={{ gap: 16 }}>
+              <div className="relative shrink-0" style={{ width: 120, height: 120 }}>
+                <ResponsiveContainer width={120} height={120}>
+                  <PieChart>
+                    <Pie data={[{ name: "acc", value: d.accuracy }, { name: "rest", value: 100 - d.accuracy }]} cx={55} cy={55} innerRadius={38} outerRadius={54} startAngle={90} endAngle={-270} strokeWidth={0} dataKey="value">
+                      <Cell fill={LIME} /><Cell fill={INNER} />
+                    </Pie>
+                  </PieChart>
+                </ResponsiveContainer>
+                <div className="absolute inset-0 flex flex-col items-center justify-center">
+                  <span style={{ fontSize: 18, fontWeight: 700, color: LIME }}>{d.accuracy}%</span>
+                  <span style={{ fontSize: 8, textTransform: "uppercase", color: DIM }}>{t("aan.accuracyLabel")}</span>
+                </div>
+              </div>
+              <div className="flex-1" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <PaceRow label={t("aan.paceFast")} count={d.paceBuckets.fast} color={LIME} />
+                <PaceRow label={t("aan.paceNormal")} count={d.paceBuckets.normal} color={CYAN} />
+                <PaceRow label={t("aan.paceSlow")} count={d.paceBuckets.slow} color={ORANGE} />
+              </div>
+            </div>
+          </Panel>
+
+          <Panel>
+            <SectionHead title={t("aan.weeklyActivity")} sub={t("aan.weeklyActivitySub")} />
+            <div style={{ height: 210 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={d.weeklyActivity} barGap={2}>
+                  <CartesianGrid stroke="rgba(255,255,255,0.03)" strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="week" tick={{ fill: DIM, fontSize: 10 }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fill: DIM, fontSize: 10 }} axisLine={false} tickLine={false} />
+                  <Tooltip content={<DarkTooltip />} cursor={{ fill: "rgba(255,255,255,0.02)" }} />
+                  <Bar dataKey="attempts" name={t("aan.weeklyActivity")} fill={LIME} radius={[3, 3, 0, 0]} maxBarSize={24} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </Panel>
+        </div>
+
+        {/* Row 4 */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 2, marginTop: 2 }}>
+          <Panel>
+            <SectionHead title={t("aan.monthlyPerf")} sub={t("aan.monthlyPerfSub")} />
+            <div style={{ height: 170 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={d.monthlyPerformance}>
+                  <defs><linearGradient id="gMonthlyScore" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={LIME} stopOpacity={0.35} /><stop offset="100%" stopColor={LIME} stopOpacity={0} /></linearGradient></defs>
+                  <CartesianGrid stroke="rgba(255,255,255,0.03)" strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="month" tick={{ fill: DIM, fontSize: 10 }} axisLine={false} tickLine={false} />
+                  <YAxis domain={[0, 100]} tick={{ fill: DIM, fontSize: 10 }} axisLine={false} tickLine={false} />
+                  <Tooltip content={<DarkTooltip />} />
+                  <Area type="monotone" dataKey="score" name={t("aan.stOverallScore")} stroke={LIME} strokeWidth={2} fill="url(#gMonthlyScore)" dot={{ r: 3.5, fill: LIME, stroke: CARD, strokeWidth: 2 }} connectNulls />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </Panel>
+        </div>
       </div>
     </AdminShell>
   );
 }
 
-function Kpi({ icon: Icon, tint, label, value, sub }: { icon: typeof Bell; tint: string; label: string; value: string | number; sub: string }) {
+// ── Shared bits ───────────────────────────────────────────────────────────
+function Panel({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
+  return <div style={{ backgroundColor: CARD, padding: 20, ...style }}>{children}</div>;
+}
+function SectionHead({ title, sub }: { title: string; sub?: string }) {
   return (
-    <div className="card rounded-xl p-3.5">
-      <div className="flex items-center justify-between">
-        <span className="text-[11px] text-[var(--muted)]">{label}</span>
-        <Icon className="h-4 w-4" style={{ color: tint }} />
+    <div style={{ marginBottom: 16 }}>
+      <p style={{ fontSize: 12, fontWeight: 600, color: "#f0f0f0" }}>{title}</p>
+      {sub && <p style={{ fontSize: 10, color: DIM, marginTop: 2 }}>{sub}</p>}
+    </div>
+  );
+}
+function Empty({ t }: { t: TFn }) {
+  return <p style={{ fontSize: 12, color: DIM }}>{t("aan.noDataShort")}</p>;
+}
+function HBar({ label, score, color }: { label: string; score: number; color: string }) {
+  return (
+    <div>
+      <div className="flex items-center justify-between" style={{ marginBottom: 6 }}>
+        <span style={{ fontSize: 11, fontWeight: 500, color: "#d0d0d0" }}>{label}</span>
+        <span style={{ fontSize: 11, fontWeight: 700, color }}>{score}%</span>
       </div>
-      <div className="mt-2 text-xl font-extrabold leading-none">{value}</div>
-      <div className="mt-1.5 truncate text-[11px] text-[var(--muted)]">{sub}</div>
+      <div style={{ height: 5, backgroundColor: INNER, borderRadius: 9999, overflow: "hidden" }}>
+        <div style={{ height: "100%", width: `${score}%`, backgroundColor: color, borderRadius: 9999 }} />
+      </div>
+    </div>
+  );
+}
+function PaceRow({ label, count, color }: { label: string; count: number; color: string }) {
+  return (
+    <div className="flex items-center justify-between" style={{ padding: 8, borderRadius: 8, backgroundColor: INNER }}>
+      <span className="flex items-center gap-2"><span style={{ width: 8, height: 8, borderRadius: "50%", background: color }} /><span style={{ fontSize: 10, color: "#c0c0c0" }}>{label}</span></span>
+      <span style={{ fontSize: 12, fontWeight: 700, color }}>{count}</span>
+    </div>
+  );
+}
+function StatCard({ label, value, delta, note, color }: { label: string; value: string | number; delta: number | null; note: string; color: string }) {
+  const TrendIcon = delta === null ? Minus : delta > 0 ? TrendingUp : delta < 0 ? TrendingDown : Minus;
+  const trendColor = delta === null || delta === 0 ? DIM : delta > 0 ? LIME : "#ef4444";
+  const trendBg = delta === null || delta === 0 ? "rgba(90,90,106,0.20)" : delta > 0 ? "rgba(200,245,61,0.10)" : "rgba(239,68,68,0.10)";
+  return (
+    <div className="relative flex h-full flex-col justify-between" style={{ backgroundColor: CARD, padding: 20 }}>
+      <div className="flex items-center justify-between" style={{ marginBottom: 12 }}>
+        <span style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600, color: DIM }}>{label}</span>
+        {delta !== null && (
+          <span className="flex items-center gap-1 rounded-full" style={{ padding: "2px 8px", fontSize: 10, fontWeight: 600, background: trendBg, color: trendColor }}>
+            <TrendIcon className="h-2.5 w-2.5" /> {delta > 0 ? "+" : ""}{delta}
+          </span>
+        )}
+      </div>
+      <div>
+        <p style={{ fontSize: 30, fontWeight: 700, color, letterSpacing: "-1px" }}>{value}</p>
+        <p style={{ fontSize: 10, color: DIM, marginTop: 6 }}>{note}</p>
+      </div>
+      <span className="absolute inset-x-0 bottom-0" style={{ height: 1, backgroundColor: `${color}28` }} />
     </div>
   );
 }
 
-function PriorityTag({ p }: { p: string }) {
-  const t = useT();
-  const map: Record<string, string> = { Urgent: "#6E1423", High: "#E9B949", Medium: "#111110", Low: "#687069" };
-  return <span className="text-xs font-semibold" style={{ color: map[p] ?? "#687069" }}>{t(PRIORITY_KEY[p] ?? p)}</span>;
-}
-
-function GrowthChart({ data, t }: { data: { attempt: number; avg: number }[]; t: TFn }) {
-  const w = 300, h = 120, padL = 24, padB = 22, padT = 12;
-  const max = 100;
-  const stepX = (w - padL) / Math.max(1, data.length - 1);
-  const x = (i: number) => padL + i * stepX;
-  const y = (v: number) => padT + (1 - v / max) * (h - padT - padB);
-  const line = data.map((d, i) => `${x(i)},${y(d.avg)}`).join(" ");
+function DarkTooltip({ active, payload, label }: { active?: boolean; payload?: { name?: string; value?: number | string; color?: string; fill?: string }[]; label?: string }) {
+  if (!active || !payload?.length) return null;
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="mt-2 w-full">
-      {[0, 50, 100].map((g) => { const yy = y(g); return <g key={g}><line x1={padL} x2={w} y1={yy} y2={yy} stroke="var(--border)" /><text x={0} y={yy + 3} className="fill-[var(--muted)]" fontSize="8">{g}</text></g>; })}
-      <polyline points={line} fill="none" stroke={G.btn} strokeWidth="2" />
-      {data.map((d, i) => <circle key={i} cx={x(i)} cy={y(d.avg)} r="3" fill={G.btn} />)}
-      {data.map((d, i) => <text key={i} x={x(i)} y={h - 6} textAnchor="middle" className="fill-[var(--muted)]" fontSize="8">{t("aan.attemptN", { n: d.attempt })}</text>)}
-    </svg>
+    <div style={{ backgroundColor: "#1e1e1e", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 12, padding: "10px 12px", boxShadow: "0 8px 24px rgba(0,0,0,0.6)" }}>
+      {label && <p style={{ fontSize: 11, fontWeight: 600, color: "#f0f0f0", marginBottom: 6 }}>{label}</p>}
+      {payload.map((p, i) => (
+        <p key={i} style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ width: 8, height: 8, borderRadius: "50%", backgroundColor: p.color || p.fill, display: "inline-block" }} />
+          <span style={{ color: "#888" }}>{p.name}:</span>
+          <span style={{ color: "#f0f0f0", fontWeight: 600 }}>{p.value}</span>
+        </p>
+      ))}
+    </div>
   );
 }

@@ -4,6 +4,48 @@ A running record of what shipped in each version. Newest first.
 
 ---
 
+## v1.7.0 — Geofencing: entry check + continuous monitoring
+
+**Phase 1 — entry check.** Exams can now be restricted to approved physical locations: admins draw one or more approved areas on a map in the exam builder (search-by-address, current-location, or manual coordinates, each with its own radius), and a candidate must be inside one of them — within a configurable GPS-accuracy tolerance — to start the exam. Every check (pass or fail) is logged to a new `geofence_logs` table for a full location audit trail, independent of whether the candidate was let in.
+
+**Phase 2 — continuous monitoring during the exam.** Entry alone doesn't stop someone leaving mid-exam, so geofenced exams can now optionally re-check the candidate's location on a configurable interval for the whole duration:
+- **Configurable exit policy** (from most to least lenient) — *warn* (log only, exam continues), *pause* (freeze the timer until they return — the candidate loses no time), *lock* (block the exam screen but the timer keeps running — stricter than pause), or *auto-submit*/*terminate* (end the exam immediately, routed through the same `forceSubmitAttempt` path the existing violation-limit auto-submit already uses).
+- **Grace period** — a candidate who steps outside gets a configurable window (with a live countdown shown in the exam UI) to return before the policy actually applies.
+- **Server-enforced, not just client-trusted** — a background sweep independently re-applies the exit policy every 30s, so a candidate can't dodge it by simply letting their browser stop sending location pings instead of returning.
+- **Live location map** — `Live Monitor` gained a Grid/Map toggle; map view plots every candidate on a geofenced exam's approved area(s) in real time (green = inside, red = outside, grey = no GPS fix), and the existing intervene drawer gained a Location panel plus a "clear geofence lock/pause" override for proctors (e.g. for a GPS glitch — doesn't require the candidate to physically move first).
+
+**Disclosed trust boundary:** browser geolocation is client-reported and inherently spoofable — this is a known, accepted limitation shared with Phase 1's entry check, not something Phase 2 changes. Accordingly the *lock* policy's exam-screen block is UI-only enforcement (like the existing fullscreen-lock overlay); the real teeth is server-side — the independent sweep and the *auto_submit*/*terminate* policies, which cannot be bypassed by a client that stops cooperating.
+
+New `shared/geo.ts` helpers (`graceSecondsRemaining`, `graceExpired`) are pure and unit-tested (`test/geo.test.ts`), matching the existing haversine/`nearestGeofence` coverage.
+
+---
+
+## v1.6.0 — Digital Learning Resource Management System, redesigned Dashboard & Announcements
+
+**Library rebuilt into a real academic resource system** (previously a recreational-reading shelf). Resources are now scoped, versioned, and access-controlled rather than a flat list:
+- **Visibility scoping** — institution-wide by default, or scoped to specific `ClassGroup`s and/or individual students (the only real enrollment primitive this app has; faculty/department/programme/course/level remain descriptive metadata for search/browse, not access gates).
+- **Versioning** — replacing a file snapshots the previous version (`ResourceVersion`); admins can view history and restore.
+- **Real in-app reading** — PDF/image/audio/video render natively in-browser; DOCX renders via `mammoth`; gated by a separate `canPreview` permission from `canDownload`.
+- **Download controls** — per-resource `canDownload`, `downloadLimit` (enforced server-side on every request via `resourceDownloadLogs`, not just at upload), and optional PDF watermarking (`pdf-lib`, stamps viewer name/date/"do not redistribute" on every page).
+- **Scheduling** — `availableFrom`/`availableUntil`, same pattern as `Exam`.
+- **Admin dashboard** — real engagement stats (views, downloads, bookmarks, storage used, top contributors) on a new bento-style Library Dashboard tab.
+- New `server/library.ts` (extracted, unit-tested visibility/rating logic) and `server/uploads.ts` (shared upload content-sniffing, also now used by the exam-answer upload path).
+
+**Learning Structure config layer** — the first increment of a broader Academic/Cohort/Hybrid abstraction (institutions will eventually configure which structure drives courses/scheduling/exams/library/etc. instead of it being hardcoded). This release ships just the config layer (`OrgSettings.learningStructure`, an admin settings tab); not yet consumed by other modules.
+
+**Redesigned student Dashboard** — replaced the exam-focused bento grid with a course-carousel layout (search + real pagination over enrolled exams), a real 7-day "hours activity" chart derived from actual attempt timestamps (no synthetic data), in-progress/assignments/mini-calendar panels, a time-based greeting, and full light/dark theme support (previously hardcoded to a fixed dark palette regardless of the theme toggle).
+
+**Redesigned Announcements** — priority badges (Urgent/Normal/Info), per-candidate unread tracking (new `AnnouncementRead`), a pinned section, filter tabs with live counts, and a mute toggle (reusing the existing `notificationPrefs.announcements` field).
+
+**Security fixes found in a same-day follow-up audit of the above** (see `SECURITY-ROUTE-MATRIX.md` §2/§3 2026-07-10 addendum for details):
+- **High** — `bookmark`/`rating`/`progress` routes were missing the resource-visibility gate entirely, letting a candidate interact with a draft or out-of-scope resource by ID (and pollute the average rating shown to legitimately-scoped viewers). Fixed.
+- **Medium** — library file uploads trusted the client-declared MIME type with no content-sniffing or malware scan, unlike the exam-answer upload path. Fixed — now shares the same `looksLikeMarkupOrScript` sniff and optional `scanForMalware` AV check.
+- **Low** — the announcement read-receipt endpoint didn't verify the announcement was in the caller's audience before recording a read. Fixed.
+- **Low** — `Book.externalUrl` accepted any URL scheme. Now restricted to `http(s)://`.
+- Added `test/library.test.ts` and `test/uploads.test.ts` — this new logic previously had zero automated coverage.
+
+---
+
 ## v1.5.1 — Reliability, operations & fixes
 
 - **Scheduled database backups** — the embedded database previously had no backup strategy at all (single folder, single host, no recovery path if the disk failed). Now takes a full compressed snapshot of every table on a schedule (default: daily, keeps the last 14) plus a manual "Run backup now" action, written to a folder that survives redeploys (a sibling of the live data directory, not inside the app's own redeployable code). Surfaced as a new status card + detail panel on the System Health page. New `server/backup.ts`, `GET/POST /api/admin/backup/*`.

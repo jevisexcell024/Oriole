@@ -9,8 +9,8 @@ type Where = "body" | "query" | "params";
  * On failure it returns 400 with a structured field-error map.
  */
 export function validate(schema: ZodType, where: Where = "body") {
-  return (req: Request, res: Response, next: NextFunction) => {
-    const result = schema.safeParse(req[where]);
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const result = await schema.safeParseAsync(req[where]);
     if (!result.success) {
       return res.status(400).json({ error: "Validation failed", details: result.error.flatten() });
     }

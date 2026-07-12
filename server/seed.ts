@@ -1,6 +1,7 @@
 import bcrypt from "bcryptjs";
 import { nanoid } from "nanoid";
 import { db, initDb } from "./db.ts";
+import { BCRYPT_COST } from "./env.ts";
 import type { Exam, Question, Registration, User } from "../shared/types.ts";
 import { DEFAULT_LOCKDOWN } from "../shared/types.ts";
 
@@ -15,8 +16,8 @@ export async function seed() {
 
   // Reset core catalog (keep attempts/answers so a re-seed doesn't wipe progress
   // unless this is a clean DB).
-  const candidatePw = bcrypt.hashSync("password123", 10);
-  const adminPw = bcrypt.hashSync("password123", 10);
+  const candidatePw = bcrypt.hashSync("password123", BCRYPT_COST);
+  const adminPw = bcrypt.hashSync("password123", BCRYPT_COST);
 
   const candidate: User = {
     id: "user_candidate",

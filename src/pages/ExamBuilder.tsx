@@ -7,6 +7,7 @@ import {
   Code as CodeIcon, Target, Layers, GripVertical, Bold, Italic, Underline, List, Image as ImageIcon,
   Save, Loader2, Settings as SettingsIcon, ListTree, ArrowLeftRight, ListOrdered, MousePointerClick,
   Upload, TextCursorInput, Tag, Library, Search, BookmarkPlus, Sparkles, Clock, Calculator, CalendarClock,
+  MapPin, Crosshair, Navigation,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useT } from "@/lib/i18n";
@@ -15,7 +16,8 @@ import { MathText } from "@/lib/richtext";
 import { parseTableFile, IMPORT_ACCEPT } from "@/lib/importTable";
 import { DEFAULT_GRADE_BANDS } from "@shared/grades";
 import { tryEvalExpr } from "@shared/expr";
-import type { Exam, LockdownConfig, Question, QuestionType, RubricCriterion } from "@shared/types";
+import { GeofenceMap } from "@/components/GeofenceMap";
+import type { Exam, GeofenceCenter, LockdownConfig, Question, QuestionType, RubricCriterion } from "@shared/types";
 import { clsx } from "clsx";
 
 type SaveStatus = "idle" | "saving" | "saved";
@@ -1097,11 +1099,248 @@ function ProctoringPanel({ exam, patchExam }: { exam: Exam; patchExam: (p: Parti
             </div>
             <div>
               <label className="text-xs font-medium">{t("eb.launchLink")}</label>
-              <input className="input h-9 w-full text-xs" placeholder="sebs://lockdown.jevislab.com/exam.seb" value={exam.lockdown?.sebLaunchUrl ?? ""} onChange={(e) => patchExam({ lockdown: { ...exam.lockdown, sebLaunchUrl: e.target.value } })} />
+              <input className="input h-9 w-full text-xs" placeholder="sebs://oriole.jevislab.com/exam.seb" value={exam.lockdown?.sebLaunchUrl ?? ""} onChange={(e) => patchExam({ lockdown: { ...exam.lockdown, sebLaunchUrl: e.target.value } })} />
             </div>
             {(exam.lockdown?.sebConfigKeys ?? []).length === 0 && (exam.lockdown?.sebBrowserExamKeys ?? []).length === 0 && (
               <p className="flex items-center gap-1.5 rounded-lg bg-amber-500/15 px-3 py-2 text-xs text-amber-500"><AlertTriangle className="h-3.5 w-3.5 shrink-0" /> {t("eb.addConfigKeyWarning")}</p>
             )}
+          </div>
+        )}
+      </div>
+
+      {/* Geofencing */}
+      <div className="mt-4 border-t border-[var(--border)] pt-4">
+        <button onClick={() => patchExam({ lockdown: { ...exam.lockdown, requireGeofence: !exam.lockdown?.requireGeofence } })}
+          className={clsx("flex w-full items-center justify-between gap-3 rounded-xl border p-3 text-left transition", exam.lockdown?.requireGeofence ? "border-[#c6ff34]/40 bg-[rgba(198,255,52,0.08)]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
+          <div className="flex items-center gap-2">
+            <MapPin className="h-4 w-4 text-[var(--muted)]" />
+            <div>
+              <p className="text-sm font-medium">{t("eb.requireGeofence")}</p>
+              <p className="text-xs text-[var(--muted)]">{t("eb.requireGeofenceDesc")}</p>
+            </div>
+          </div>
+          <span className={clsx("inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition", exam.lockdown?.requireGeofence ? "bg-[#c6ff34]" : "bg-[var(--border)]")}><span className={clsx("h-4 w-4 rounded-full bg-white transition", exam.lockdown?.requireGeofence && "translate-x-4")} /></span>
+        </button>
+        {exam.lockdown?.requireGeofence && <GeofencePanel exam={exam} patchExam={patchExam} />}
+      </div>
+    </div>
+  );
+}
+
+const RADIUS_OPTIONS = [20, 50, 100, 200, 500, 1000];
+
+function GeofencePanel({ exam, patchExam }: { exam: Exam; patchExam: (p: Partial<Exam>) => void }) {
+  const t = useT();
+  const centers = exam.lockdown?.geofenceCenters ?? [];
+  const [radius, setRadius] = useState(100);
+  const [customRadius, setCustomRadius] = useState("");
+  const [manualLat, setManualLat] = useState("");
+  const [manualLng, setManualLng] = useState("");
+  const [manualLabel, setManualLabel] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<{ label: string; lat: number; lng: number }[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [locating, setLocating] = useState(false);
+  const [geoError, setGeoError] = useState<string | null>(null);
+
+  const effectiveRadius = customRadius ? Number(customRadius) || radius : radius;
+
+  const setCenters = (next: GeofenceCenter[]) => patchExam({ lockdown: { ...exam.lockdown, geofenceCenters: next } });
+  const addCenter = (lat: number, lng: number, label?: string) => {
+    const id = Math.random().toString(36).slice(2, 8);
+    setCenters([...centers, { id, label: label?.trim() || `${t("eb.geofenceLocation")} ${centers.length + 1}`, lat, lng, radiusM: effectiveRadius }]);
+  };
+  const removeCenter = (id: string) => setCenters(centers.filter((c) => c.id !== id));
+  const updateCenter = (id: string, partial: Partial<GeofenceCenter>) => setCenters(centers.map((c) => (c.id === id ? { ...c, ...partial } : c)));
+
+  const useCurrentLocation = () => {
+    setGeoError(null);
+    if (!navigator.geolocation) { setGeoError(t("eb.geoNotSupported")); return; }
+    setLocating(true);
+    const found = (pos: GeolocationPosition) => { setLocating(false); addCenter(pos.coords.latitude, pos.coords.longitude, t("eb.geofenceCurrentLocation")); };
+    navigator.geolocation.getCurrentPosition(
+      found,
+      (err) => {
+        if (err.code === err.PERMISSION_DENIED) { setLocating(false); setGeoError(t("eb.geoPermissionDenied")); return; }
+        // GPS timed out or has no fix (common on desktops with no GPS hardware) — retry with
+        // low-accuracy mode, which falls back to Wi-Fi/IP-based positioning and is often the
+        // only option that actually resolves on a laptop/desktop.
+        navigator.geolocation.getCurrentPosition(
+          found,
+          () => { setLocating(false); setGeoError(t("eb.geoUnavailable")); },
+          { enableHighAccuracy: false, timeout: 20_000, maximumAge: 60_000 },
+        );
+      },
+      { enableHighAccuracy: true, timeout: 15_000 },
+    );
+  };
+
+  const runSearch = async () => {
+    if (!searchQuery.trim()) return;
+    setSearching(true);
+    try {
+      const url = `https://nominatim.openstreetmap.org/search?format=json&limit=5&q=${encodeURIComponent(searchQuery.trim())}`;
+      const r = await fetch(url, { headers: { Accept: "application/json" } });
+      const data: { display_name: string; lat: string; lon: string }[] = await r.json();
+      setSearchResults(data.map((d) => ({ label: d.display_name, lat: Number(d.lat), lng: Number(d.lon) })));
+    } catch { setSearchResults([]); }
+    finally { setSearching(false); }
+  };
+
+  const addManual = () => {
+    const lat = Number(manualLat), lng = Number(manualLng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) return;
+    addCenter(lat, lng, manualLabel);
+    setManualLat(""); setManualLng(""); setManualLabel("");
+  };
+
+  return (
+    <div className="mt-3 space-y-3">
+      <p className="text-xs text-[var(--muted)]">{t("eb.geofenceHint")}</p>
+
+      {/* Radius quick-select */}
+      <div>
+        <label className="text-xs font-medium">{t("eb.geofenceRadius")}</label>
+        <div className="mt-1 flex flex-wrap gap-1.5">
+          {RADIUS_OPTIONS.map((r) => (
+            <button key={r} onClick={() => { setRadius(r); setCustomRadius(""); }}
+              className={clsx("rounded-lg border px-2.5 py-1 text-xs transition", radius === r && !customRadius ? "border-[#c6ff34]/50 bg-[rgba(198,255,52,0.12)] text-[#c6ff34]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
+              {r} m
+            </button>
+          ))}
+          <input className="input h-7 w-24 text-xs" placeholder={t("eb.customRadius")} type="number" min={1} value={customRadius} onChange={(e) => setCustomRadius(e.target.value)} />
+        </div>
+      </div>
+
+      {/* Map */}
+      <div>
+        <p className="mb-1 text-xs text-[var(--muted)]">{t("eb.geofenceMapHint")}</p>
+        <GeofenceMap centers={centers} onAddAt={(lat, lng) => addCenter(lat, lng)} onMove={(id, lat, lng) => updateCenter(id, { lat, lng })} />
+      </div>
+
+      {/* Add via search / current location / manual coords */}
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <div>
+          <label className="text-xs font-medium">{t("eb.geofenceSearchAddress")}</label>
+          <div className="mt-1 flex gap-1.5">
+            <input className="input h-8 flex-1 text-xs" placeholder={t("eb.geofenceSearchPlaceholder")} value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)} onKeyDown={(e) => e.key === "Enter" && runSearch()} />
+            <button onClick={runSearch} disabled={searching} className="btn btn-outline h-8 px-2 text-xs">{searching ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Search className="h-3.5 w-3.5" />}</button>
+          </div>
+          {searchResults.length > 0 && (
+            <div className="mt-1 max-h-32 space-y-1 overflow-y-auto rounded-lg border border-[var(--border)] p-1.5">
+              {searchResults.map((r, i) => (
+                <button key={i} onClick={() => { addCenter(r.lat, r.lng, r.label.split(",")[0]); setSearchResults([]); setSearchQuery(""); }}
+                  className="block w-full truncate rounded-md px-2 py-1 text-left text-xs hover:bg-[var(--card-2)]">
+                  {r.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <div>
+          <label className="text-xs font-medium">{t("eb.geofenceManualCoords")}</label>
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            <input className="input h-8 w-24 text-xs" placeholder={t("eb.geofenceLabel")} value={manualLabel} onChange={(e) => setManualLabel(e.target.value)} />
+            <input className="input h-8 w-20 text-xs" placeholder="Lat" value={manualLat} onChange={(e) => setManualLat(e.target.value)} />
+            <input className="input h-8 w-20 text-xs" placeholder="Lng" value={manualLng} onChange={(e) => setManualLng(e.target.value)} />
+            <button onClick={addManual} className="btn btn-outline h-8 px-2 text-xs"><Plus className="h-3.5 w-3.5" /></button>
+          </div>
+        </div>
+      </div>
+
+      <button onClick={useCurrentLocation} disabled={locating} className="btn btn-outline h-8 text-xs">
+        {locating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Crosshair className="h-3.5 w-3.5" />} {t("eb.geofenceUseCurrentLocation")}
+      </button>
+      {geoError && <p className="text-xs text-rose-500">{geoError}</p>}
+
+      {/* List of approved centres */}
+      <div>
+        <label className="text-xs font-medium">{t("eb.geofenceApprovedLocations")} ({centers.length})</label>
+        {centers.length === 0 ? (
+          <p className="mt-1 flex items-center gap-1.5 rounded-lg bg-amber-500/15 px-3 py-2 text-xs text-amber-500"><AlertTriangle className="h-3.5 w-3.5 shrink-0" /> {t("eb.geofenceNoLocations")}</p>
+        ) : (
+          <div className="mt-1.5 space-y-1.5">
+            {centers.map((c) => (
+              <div key={c.id} className="flex flex-wrap items-center gap-2 rounded-lg border border-[var(--border)] p-2">
+                <Navigation className="h-3.5 w-3.5 shrink-0 text-[var(--muted)]" />
+                <input className="input h-7 flex-1 min-w-[100px] text-xs" value={c.label} onChange={(e) => updateCenter(c.id, { label: e.target.value })} />
+                <span className="text-xs text-[var(--muted)]">{c.lat.toFixed(5)}, {c.lng.toFixed(5)}</span>
+                <select className="input h-7 w-20 text-xs" value={RADIUS_OPTIONS.includes(c.radiusM) ? c.radiusM : "custom"}
+                  onChange={(e) => e.target.value !== "custom" && updateCenter(c.id, { radiusM: Number(e.target.value) })}>
+                  {RADIUS_OPTIONS.map((r) => <option key={r} value={r}>{r} m</option>)}
+                  <option value="custom">{c.radiusM} m</option>
+                </select>
+                <button onClick={() => removeCenter(c.id)} className="text-[var(--muted)] hover:text-rose-500"><X className="h-3.5 w-3.5" /></button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Minimum GPS accuracy */}
+      <div className="flex flex-wrap items-center gap-2 border-t border-[var(--border)] pt-3 text-sm">
+        <Crosshair className="h-4 w-4 text-amber-500" /> {t("eb.geofenceMinAccuracy")}
+        <input type="number" min={1} className="input h-8 w-16" value={exam.lockdown?.geofenceMinAccuracyM ?? 20}
+          onChange={(e) => patchExam({ lockdown: { ...exam.lockdown, geofenceMinAccuracyM: Number(e.target.value) } })} />
+        {t("eb.geofenceMeters")}
+      </div>
+
+      {/* Continuous monitoring (Phase 2) — re-check location during the exam, not just at entry */}
+      <div className="border-t border-[var(--border)] pt-3">
+        <button onClick={() => patchExam({ lockdown: { ...exam.lockdown, geofenceContinuousMonitoring: !exam.lockdown?.geofenceContinuousMonitoring } })}
+          className={clsx("flex w-full items-center justify-between gap-3 rounded-xl border p-3 text-left transition", exam.lockdown?.geofenceContinuousMonitoring ? "border-[#c6ff34]/40 bg-[rgba(198,255,52,0.08)]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
+          <div className="flex items-center gap-2">
+            <Clock className="h-4 w-4 text-[var(--muted)]" />
+            <div>
+              <p className="text-sm font-medium">{t("eb.geofenceContinuous")}</p>
+              <p className="text-xs text-[var(--muted)]">{t("eb.geofenceContinuousDesc")}</p>
+            </div>
+          </div>
+          <span className={clsx("inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition", exam.lockdown?.geofenceContinuousMonitoring ? "bg-[#c6ff34]" : "bg-[var(--border)]")}><span className={clsx("h-4 w-4 rounded-full bg-white transition", exam.lockdown?.geofenceContinuousMonitoring && "translate-x-4")} /></span>
+        </button>
+
+        {exam.lockdown?.geofenceContinuousMonitoring && (
+          <div className="mt-3 space-y-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
+                <label className="text-xs font-medium">{t("eb.geofenceCheckInterval")}</label>
+                <div className="mt-1 flex items-center gap-1.5">
+                  <input type="number" min={20} className="input h-8 w-20 text-xs" value={exam.lockdown?.geofenceCheckIntervalSec ?? 60}
+                    onChange={(e) => patchExam({ lockdown: { ...exam.lockdown, geofenceCheckIntervalSec: Math.max(20, Number(e.target.value)) } })} />
+                  <span className="text-xs text-[var(--muted)]">{t("eb.geofenceSeconds")}</span>
+                </div>
+              </div>
+              <div>
+                <label className="text-xs font-medium">{t("eb.geofenceGracePeriod")}</label>
+                <div className="mt-1 flex items-center gap-1.5">
+                  <input type="number" min={0} className="input h-8 w-20 text-xs" value={exam.lockdown?.geofenceGraceSeconds ?? 120}
+                    onChange={(e) => patchExam({ lockdown: { ...exam.lockdown, geofenceGraceSeconds: Math.max(0, Number(e.target.value)) } })} />
+                  <span className="text-xs text-[var(--muted)]">{t("eb.geofenceSeconds")}</span>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <label className="text-xs font-medium">{t("eb.geofenceExitPolicy")}</label>
+              <select className="input mt-1 h-9 w-full text-sm" value={exam.lockdown?.geofenceExitPolicy ?? "warn"}
+                onChange={(e) => patchExam({ lockdown: { ...exam.lockdown, geofenceExitPolicy: e.target.value as LockdownConfig["geofenceExitPolicy"] } })}>
+                <option value="warn">{t("eb.geofencePolicyWarn")}</option>
+                <option value="pause">{t("eb.geofencePolicyPause")}</option>
+                <option value="lock">{t("eb.geofencePolicyLock")}</option>
+                <option value="auto_submit">{t("eb.geofencePolicyAutoSubmit")}</option>
+                <option value="terminate">{t("eb.geofencePolicyTerminate")}</option>
+              </select>
+              <p className="mt-1 text-xs text-[var(--muted)]">
+                {{
+                  warn: t("eb.geofencePolicyWarnDesc"),
+                  pause: t("eb.geofencePolicyPauseDesc"),
+                  lock: t("eb.geofencePolicyLockDesc"),
+                  auto_submit: t("eb.geofencePolicyAutoSubmitDesc"),
+                  terminate: t("eb.geofencePolicyTerminateDesc"),
+                }[exam.lockdown?.geofenceExitPolicy ?? "warn"]}
+              </p>
+            </div>
           </div>
         )}
       </div>
@@ -1119,21 +1358,24 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-const CODE_LANGS = ["python", "javascript", "typescript", "c", "cpp", "java", "go", "ruby", "php", "rust", "csharp"] as const;
+const CODE_LANGS = ["python", "javascript", "typescript", "c", "cpp", "java", "go", "ruby", "php", "rust", "csharp", "html", "css"] as const;
 const CODE_LANG_LABEL: Record<string, string> = {
   python: "Python", javascript: "JavaScript", typescript: "TypeScript", c: "C", cpp: "C++",
   java: "Java", go: "Go", ruby: "Ruby", php: "PHP", rust: "Rust", csharp: "C#",
+  html: "HTML", css: "CSS",
 };
 
 function CodeQuestionFields({ q, patch }: { q: Question; patch: (p: Partial<Question>) => void }) {
   const t = useT();
+  const lang = q.codeLanguage ?? "python";
+  const isMarkup = lang === "html" || lang === "css";
   const tests = q.testCases ?? [];
   const setTest = (i: number, key: "input" | "expected", val: string) => patch({ testCases: tests.map((tc, idx) => (idx === i ? { ...tc, [key]: val } : tc)) });
   return (
     <div className="space-y-3 rounded-lg border border-[var(--border)] p-3">
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t("eb.language")}</span>
-        <select className="input h-8 w-auto" value={q.codeLanguage ?? "python"} onChange={(e) => patch({ codeLanguage: e.target.value })}>
+        <select className="input h-8 w-auto" value={lang} onChange={(e) => patch({ codeLanguage: e.target.value })}>
           {CODE_LANGS.map((l) => <option key={l} value={l}>{CODE_LANG_LABEL[l]}</option>)}
         </select>
       </div>
@@ -1141,23 +1383,27 @@ function CodeQuestionFields({ q, patch }: { q: Question; patch: (p: Partial<Ques
         <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t("eb.starterCodeOptional")}</span>
         <textarea className="input mt-1 min-h-[70px] resize-y font-mono text-xs" value={q.starterCode ?? ""} onChange={(e) => patch({ starterCode: e.target.value })} placeholder={t("eb.starterCodePlaceholder")} />
       </label>
-      <div>
-        <div className="flex items-center justify-between">
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t("eb.sampleTestCases")}{tests.length > 0 ? ` · ${tests.length}` : ""}</span>
-          <button type="button" onClick={() => patch({ testCases: [...tests, { input: "", expected: "" }] })} className="inline-flex items-center gap-1 text-xs text-[#c6ff34] hover:underline"><Plus className="h-3.5 w-3.5" /> {t("eb.testCase")}</button>
-        </div>
-        {tests.length > 0 && (
-          <div className="mt-2 space-y-2">
-            {tests.map((tc, i) => (
-              <div key={i} className="flex items-start gap-2">
-                <textarea className="input min-h-[38px] flex-1 resize-y font-mono text-xs" value={tc.input} onChange={(e) => setTest(i, "input", e.target.value)} placeholder={t("eb.stdinPlaceholder")} />
-                <textarea className="input min-h-[38px] flex-1 resize-y font-mono text-xs" value={tc.expected} onChange={(e) => setTest(i, "expected", e.target.value)} placeholder={t("eb.expectedStdoutPlaceholder")} />
-                <button type="button" title={t("eb.remove")} onClick={() => patch({ testCases: tests.filter((_, idx) => idx !== i) })} className="mt-1 rounded-lg p-1.5 text-[var(--muted)] hover:bg-[var(--card-2)] hover:text-[var(--fg)]"><Trash2 className="h-4 w-4" /></button>
-              </div>
-            ))}
+      {isMarkup ? (
+        <p className="text-xs text-[var(--muted)]">{t("eb.markupGradingHint")}</p>
+      ) : (
+        <div>
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t("eb.sampleTestCases")}{tests.length > 0 ? ` · ${tests.length}` : ""}</span>
+            <button type="button" onClick={() => patch({ testCases: [...tests, { input: "", expected: "" }] })} className="inline-flex items-center gap-1 text-xs text-[#c6ff34] hover:underline"><Plus className="h-3.5 w-3.5" /> {t("eb.testCase")}</button>
           </div>
-        )}
-      </div>
+          {tests.length > 0 && (
+            <div className="mt-2 space-y-2">
+              {tests.map((tc, i) => (
+                <div key={i} className="flex items-start gap-2">
+                  <textarea className="input min-h-[38px] flex-1 resize-y font-mono text-xs" value={tc.input} onChange={(e) => setTest(i, "input", e.target.value)} placeholder={t("eb.stdinPlaceholder")} />
+                  <textarea className="input min-h-[38px] flex-1 resize-y font-mono text-xs" value={tc.expected} onChange={(e) => setTest(i, "expected", e.target.value)} placeholder={t("eb.expectedStdoutPlaceholder")} />
+                  <button type="button" title={t("eb.remove")} onClick={() => patch({ testCases: tests.filter((_, idx) => idx !== i) })} className="mt-1 rounded-lg p-1.5 text-[var(--muted)] hover:bg-[var(--card-2)] hover:text-[var(--fg)]"><Trash2 className="h-4 w-4" /></button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

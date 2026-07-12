@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
 import {
-  Camera, Mic, Wifi, ScanFace, CheckCircle2, XCircle, Loader2, ArrowRight, ArrowLeft, ShieldCheck, ShieldAlert, FileCheck,
+  Camera, Mic, Wifi, ScanFace, CheckCircle2, XCircle, Loader2, ArrowRight, ArrowLeft, ShieldCheck, ShieldAlert, FileCheck, MapPin,
 } from "lucide-react";
 import { Shell } from "@/components/Shell";
 import { api } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useProctoring } from "@/lib/proctoring";
+import { useGeofence } from "@/lib/geofence";
 import { detectIncognito } from "@/lib/incognito";
 import { isRunningInSeb, sebLaunchHref } from "@/lib/seb";
 import type { Attempt, Exam, PublicQuestion, Registration } from "@shared/types";
@@ -53,6 +54,9 @@ export function Checkin() {
   const ld = data?.exam.lockdown;
   const webcamRule = ld?.webcam ?? true;
   const { videoRef, cameraReady, micReady, error: mediaError, faceStatus, retry: retryCamera } = useProctoring({ active: !!data && proctored && webcamRule });
+
+  const requireGeofence = ld?.requireGeofence ?? false;
+  const { state: geoState, error: geoError, distanceMeters: geoDistance, retry: retryGeo } = useGeofence({ active: !!data && requireGeofence, registrationId: data?.registration.id });
 
   const [idPhoto, setIdPhoto] = useState<string | null>(null);
 
@@ -152,6 +156,7 @@ export function Checkin() {
   const sebOk = !sebRequired || isRunningInSeb();
   const sebHref = sebLaunchHref(ld?.sebLaunchUrl);
   const checks = proctored ? [camState, micState, netState, faceState, incognito] : [netState];
+  if (requireGeofence) checks.push(geoState);
   const allReady = checks.every((s) => s === "ok") && identityOk && idDocOk && roomScanOk && agreementOk && privateOk && sebOk;
 
   const start = async () => {
@@ -201,6 +206,19 @@ export function Checkin() {
     </div>
   );
 
+  // ---- Location verification block (shared) ----
+  const geoBlock = requireGeofence && (
+    <>
+      <Row icon={MapPin} label={t("chk.location")} hint={geoState === "ok" && geoDistance != null ? t("chk.locationVerifiedHint", { distance: geoDistance }) : t("chk.locationHint")} state={geoState} />
+      {geoState === "fail" && geoError && (
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-rose-500/30 bg-rose-500/15 px-4 py-3 text-xs text-rose-400">
+          <span>{geoError}</span>
+          <button onClick={retryGeo} className="btn btn-outline h-8 shrink-0 text-xs">{t("chk.retry")}</button>
+        </div>
+      )}
+    </>
+  );
+
   const startButton = (
     <>
       {sebRequired && !sebOk && (
@@ -244,6 +262,7 @@ export function Checkin() {
               <span>{t("chk.notProctored")}</span>
             </div>
             <Row icon={Wifi} label={t("chk.network")} hint={t("chk.stableConnection")} state={netState} />
+            {geoBlock}
             {agreementBlock}
             {startButton}
           </div>
@@ -269,6 +288,7 @@ export function Checkin() {
             <Row icon={Wifi} label={t("chk.network")} hint={t("chk.stableConnection")} state={netState} />
             <Row icon={ScanFace} label={t("chk.identityFace")} hint={faceStatus === "unsupported" ? "Face analytics unavailable on this browser" : t("chk.faceVisible")} state={faceState} />
             <Row icon={ShieldAlert} label={t("chk.browserMode")} hint={incognito === "fail" ? "Private/incognito window detected — reopen in a normal window" : "Normal (non-private) browsing window"} state={incognito} />
+            {geoBlock}
 
             {incognito === "fail" && (
               <div className="flex items-center justify-between gap-3 rounded-xl border border-rose-500/30 bg-rose-500/15 px-4 py-3 text-xs text-rose-400">

@@ -18,19 +18,32 @@ describe("loginSchema", () => {
 });
 
 describe("teamCreateSchema", () => {
-  it("accepts a valid staff invite", () => {
-    expect(teamCreateSchema.safeParse({ name: "Grace", email: "g@x.com", password: "Str0ng-Passphrase!", role: "facilitator" }).success).toBe(true);
+  // The password field's breach check calls the HIBP API (fails OPEN on any
+  // network error, so these assertions hold whether or not the network call
+  // actually succeeds in the test environment) — hence safeParseAsync here.
+  it("accepts a valid staff invite", async () => {
+    const r = await teamCreateSchema.safeParseAsync({ name: "Grace", email: "g@x.com", password: "Str0ng-Passphrase!", role: "facilitator" });
+    expect(r.success).toBe(true);
   });
 
-  it("rejects an unknown role", () => {
-    expect(teamCreateSchema.safeParse({ name: "G", email: "g@x.com", password: "Str0ng-Passphrase!", role: "superuser" }).success).toBe(false);
+  it("rejects an unknown role", async () => {
+    const r = await teamCreateSchema.safeParseAsync({ name: "G", email: "g@x.com", password: "Str0ng-Passphrase!", role: "superuser" });
+    expect(r.success).toBe(false);
   });
 
-  it("rejects a short password", () => {
-    expect(teamCreateSchema.safeParse({ name: "G", email: "g@x.com", password: "123", role: "proctor" }).success).toBe(false);
+  it("rejects a short password", async () => {
+    const r = await teamCreateSchema.safeParseAsync({ name: "G", email: "g@x.com", password: "123", role: "proctor" });
+    expect(r.success).toBe(false);
   });
 
-  it("rejects a long but too-simple password", () => {
-    expect(teamCreateSchema.safeParse({ name: "G", email: "g@x.com", password: "aaaaaaaaaaaaaa", role: "proctor" }).success).toBe(false);
+  it("rejects a long but too-simple password", async () => {
+    const r = await teamCreateSchema.safeParseAsync({ name: "G", email: "g@x.com", password: "aaaaaaaaaaaaaa", role: "proctor" });
+    expect(r.success).toBe(false);
+  });
+
+  it("rejects a known breached password even if it meets length/variety rules", async () => {
+    // "correcthorsebatterystaple" is a famously breached password (xkcd 936), guaranteed in HIBP's corpus.
+    const r = await teamCreateSchema.safeParseAsync({ name: "G", email: "g@x.com", password: "correcthorsebatterystaple", role: "proctor" });
+    expect(r.success).toBe(false);
   });
 });

@@ -5,11 +5,14 @@ import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { randomBytes, createHash } from "node:crypto";
+import { gunzip } from "node:zlib";
+import { promisify } from "node:util";
 import { encryptString } from "./crypto.ts";
+import { BCRYPT_COST } from "./env.ts";
 import type {
   User, Exam, Question, Registration, Attempt, Answer, ProctorEvent, Certificate, Snapshot, EmailMessage, Announcement, AnnouncementRead, OrgSettings, AuditLog,
   Faculty, Department, Program, Campus, AcademicYear, ClassGroup, RegradeRequest, Book, ReadingProgress,
-  ResourceVersion, ResourceBookmark, ResourceRating, ResourceDownloadLog,
+  ResourceVersion, ResourceBookmark, ResourceRating, ResourceDownloadLog, GeofenceLog,
 } from "../shared/types.ts";
 import { DEFAULT_LOCKDOWN, DEFAULT_LEARNING_STRUCTURE } from "../shared/types.ts";
 
@@ -28,6 +31,7 @@ export interface Schema {
   //   answers       → answerStore    (per-attempt submitted answers)
   //   emails        → emailStore     (delivery log)
   //   auditLogs     → auditStore     (admin action trail)
+  //   geofenceLogs  → geofenceStore  (per-registration/attempt GPS checks)
   announcements: Announcement[];
   settings: OrgSettings[];
   faculties: Faculty[];
@@ -47,6 +51,7 @@ export interface Schema {
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const gunzipAsync = promisify(gunzip);
 
 const defaultData: Schema = {
   users: [], exams: [], questions: [], registrations: [],
@@ -270,7 +275,7 @@ export const db: {
 // Off-mirror tables (see the comment on Schema above) — not part of TABLES
 // because they're never held in the in-memory mirror, but a full backup needs
 // every row from every table, mirrored or not.
-const OFF_MIRROR_TABLES = ["snapshots", "answers", "proctor_events", "audit_logs", "emails"];
+const OFF_MIRROR_TABLES = ["snapshots", "answers", "proctor_events", "audit_logs", "emails", "geofence_logs"];
 
 /** Full logical snapshot of every row in every table (mirrored + off-mirror),
  *  keyed by collection/table name. Used for backups — a plain SELECT per table,
@@ -425,6 +430,43 @@ export const proctorStore = {
   },
 };
 
+// Geofence GPS checks — off-mirror, indexed by registration + attempt. Every
+// check (success or failure) is kept for the location audit trail/report.
+export const geofenceStore = {
+  async add(log: GeofenceLog): Promise<void> {
+    await be().query(
+      `insert into geofence_logs(id, registration_id, attempt_id, at, doc) values ($1, $2, $3, $4, $5::jsonb)
+       on conflict (id) do update set doc = excluded.doc, registration_id = excluded.registration_id, attempt_id = excluded.attempt_id, at = excluded.at`,
+      [log.id, log.registrationId, log.attemptId, log.at, JSON.stringify(log)]);
+  },
+  async forRegistration(registrationId: string): Promise<GeofenceLog[]> {
+    const { rows } = await be().query<{ doc: GeofenceLog }>(
+      `select doc from geofence_logs where registration_id = $1 order by at asc`, [registrationId]);
+    return rows.map((r) => r.doc);
+  },
+  async forAttempt(attemptId: string): Promise<GeofenceLog[]> {
+    const { rows } = await be().query<{ doc: GeofenceLog }>(
+      `select doc from geofence_logs where attempt_id = $1 order by at asc`, [attemptId]);
+    return rows.map((r) => r.doc);
+  },
+  async forAttempts(attemptIds: string[]): Promise<Map<string, GeofenceLog[]>> {
+    const map = new Map<string, GeofenceLog[]>();
+    if (attemptIds.length === 0) return map;
+    const { rows } = await be().query<{ doc: GeofenceLog }>(
+      `select doc from geofence_logs where attempt_id = any($1::text[]) order by at asc`, [attemptIds]);
+    for (const r of rows) {
+      const arr = map.get(r.doc.attemptId!) ?? [];
+      arr.push(r.doc);
+      map.set(r.doc.attemptId!, arr);
+    }
+    return map;
+  },
+  async totalCount(): Promise<number> {
+    const { rows } = await be().query<{ n: string }>(`select count(*)::text as n from geofence_logs`);
+    return Number(rows[0]?.n ?? 0);
+  },
+};
+
 // Admin action trail — append-only, off-mirror, indexed by time.
 // Tamper-evident: every entry hash-chains to the previous one, so any later edit
 // or deletion of a row breaks chain verification.
@@ -491,23 +533,52 @@ export const emailStore = {
   },
 };
 
-async function importLegacyJson(): Promise<boolean> {
-  const legacy = path.join(__dirname, "data.json");
-  if (!fs.existsSync(legacy)) return false;
-  try {
-    const parsed = JSON.parse(fs.readFileSync(legacy, "utf8")) as Partial<Schema>;
-    for (const { key } of TABLES) {
-      if (Array.isArray(parsed[key])) (db.data[key] as unknown[]) = parsed[key] as unknown[];
-    }
-    fs.renameSync(legacy, legacy + ".migrated"); // keep a backup, don't re-import
-    return true;
-  } catch {
-    return false;
+// Mirrors backup.ts's backupDir() (duplicated rather than imported to avoid a
+// db.ts <-> backup.ts circular import in the startup-critical recovery path).
+function resolveBackupDir(): string {
+  if (process.env.BACKUP_DIR) return process.env.BACKUP_DIR;
+  const dataDir = process.env.PGLITE_DIR;
+  if (dataDir && dataDir !== "memory://") return path.join(path.dirname(dataDir), "backups");
+  return path.join(process.cwd(), "backups");
+}
+
+// Signatures of the one PGlite failure mode we can self-heal: on-disk data
+// corruption (as opposed to a stale lock, handled separately by openPglite,
+// or a genuine schema/query bug, which should keep crashing loudly).
+function looksLikeCorruption(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /missing chunk number|invalid page in block|could not read block|unexpected data beyond eof|invalid memory alloc request|xx001/i.test(msg);
+}
+
+const OFF_MIRROR_RESTORERS: [string, (row: never) => Promise<void>][] = [
+  ["snapshots", (r) => snapshotStore.add(r)],
+  ["answers", (r) => answerStore.upsert(r)],
+  ["proctor_events", (r) => proctorStore.add(r)],
+  ["audit_logs", (r) => auditStore.add(r)],
+  ["emails", (r) => emailStore.add(r)],
+  ["geofence_logs", (r) => geofenceStore.add(r)],
+];
+
+/** Loads a full dump (as produced by dumpAll/runBackup) into the current
+ *  (already-empty, already-schema'd) database. Shared by the manual CLI
+ *  restore script and the automatic corruption recovery path below. */
+async function restoreFromDump(data: Record<string, unknown[]>) {
+  for (const { key } of TABLES) {
+    (db.data[key] as unknown[]) = Array.isArray(data[key]) ? data[key] : [];
+  }
+  await db.write();
+  // Off-mirror tables restore in original order — required for auditStore's
+  // hash-chain to verify correctly.
+  for (const [name, addFn] of OFF_MIRROR_RESTORERS) {
+    const rows = Array.isArray(data[name]) ? data[name] : [];
+    for (const row of rows) await addFn(row as never);
   }
 }
 
-export async function initDb() {
-  backend = await createBackend();
+/** Idempotent: creates every table (mirrored + off-mirror) and applies the
+ *  in-place backfill SQL. Safe to call again against a freshly recreated,
+ *  empty backend after a corruption quarantine. */
+async function ensureSchema() {
   await be().exec(TABLES.map((t) => `CREATE TABLE IF NOT EXISTS ${t.table} (id text primary key, doc jsonb not null);`).join("\n"));
 
   // Dedicated, indexed snapshots table (not part of the mirror). The ALTER/UPDATE
@@ -542,6 +613,10 @@ export async function initDb() {
     "UPDATE proctor_events SET attempt_id = doc->>'attemptId', severity = doc->>'severity', at = doc->>'at' WHERE attempt_id IS NULL;",
     "CREATE INDEX IF NOT EXISTS proctor_events_attempt_idx ON proctor_events(attempt_id);",
     "CREATE INDEX IF NOT EXISTS proctor_events_severity_idx ON proctor_events(severity);",
+    // Geofence GPS checks — off-mirror, indexed by registration + attempt.
+    "CREATE TABLE IF NOT EXISTS geofence_logs (id text primary key, registration_id text, attempt_id text, at text, doc jsonb not null);",
+    "CREATE INDEX IF NOT EXISTS geofence_logs_registration_idx ON geofence_logs(registration_id);",
+    "CREATE INDEX IF NOT EXISTS geofence_logs_attempt_idx ON geofence_logs(attempt_id);",
     // Submitted answers — off-mirror, indexed by attempt.
     "CREATE TABLE IF NOT EXISTS answers (id text primary key, attempt_id text, doc jsonb not null);",
     "ALTER TABLE answers ADD COLUMN IF NOT EXISTS attempt_id text;",
@@ -551,11 +626,77 @@ export async function initDb() {
     // from their correctness × the question's points, and are marked auto-graded.
     "UPDATE answers a SET doc = jsonb_set(jsonb_set(jsonb_set(a.doc, '{awardedPoints}', to_jsonb(CASE WHEN a.doc->>'correct' = 'true' THEN COALESCE(NULLIF(q.doc->>'points','')::int, 0) ELSE 0 END)), '{gradedBy}', '\"auto\"'), '{needsReview}', 'false') FROM questions q WHERE a.doc->>'questionId' = q.id AND NOT (a.doc ? 'awardedPoints');",
   ].join("\n"));
+}
 
-  await db.read();
+/** Only reachable for the embedded PGlite backend (see looksLikeCorruption
+ *  call site). Quarantines the corrupted data directory, opens a fresh empty
+ *  one, and restores the most recent automatic backup into it — so a host
+ *  that SIGKILLed the process mid-write self-heals on the next boot instead
+ *  of crash-looping forever. Returns the backup filename that was restored. */
+async function recoverFromLatestBackup(): Promise<string> {
+  const dataDir = process.env.PGLITE_DIR || path.join(__dirname, ".pgdata");
+  const dir = resolveBackupDir();
+  const files = fs.existsSync(dir)
+    ? fs.readdirSync(dir).filter((f) => f.startsWith("orcalis-backup-") && f.endsWith(".json.gz")).sort()
+    : [];
+  const latest = files[files.length - 1];
+  if (!latest) {
+    throw new Error(`Embedded database is corrupted and no backup was found in ${dir} to auto-recover from — manual intervention required.`);
+  }
+  const backupPath = path.join(dir, latest);
+  console.error(`💥 Embedded database appears corrupted — auto-recovering from latest backup: ${backupPath}`);
 
-  // One-time migration from the previous lowdb JSON file, if the database is empty.
-  const empty = TABLES.every((t) => (db.data[t.key] as unknown[]).length === 0);
+  await backend!.close();
+  backend = null;
+  const quarantine = `${dataDir}.corrupted-${Date.now()}`;
+  fs.renameSync(dataDir, quarantine);
+  console.error(`   Corrupted data quarantined at: ${quarantine}`);
+
+  backend = await createBackend();
+  await ensureSchema();
+
+  const raw = await gunzipAsync(fs.readFileSync(backupPath));
+  const { takenAt, data } = JSON.parse(raw.toString("utf8")) as { takenAt: string; data: Record<string, unknown[]> };
+  console.error(`   Restoring backup taken at ${takenAt}...`);
+  await restoreFromDump(data);
+  console.error(`   Auto-recovery complete — restored ${latest}.`);
+  return latest;
+}
+
+async function importLegacyJson(): Promise<boolean> {
+  const legacy = path.join(__dirname, "data.json");
+  if (!fs.existsSync(legacy)) return false;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(legacy, "utf8")) as Partial<Schema>;
+    for (const { key } of TABLES) {
+      if (Array.isArray(parsed[key])) (db.data[key] as unknown[]) = parsed[key] as unknown[];
+    }
+    fs.renameSync(legacy, legacy + ".migrated"); // keep a backup, don't re-import
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function initDb() {
+  backend = await createBackend();
+  await ensureSchema();
+
+  // On the embedded backend, a corrupted on-disk file surfaces here (the first
+  // real read after connecting). Self-heal by restoring the latest automatic
+  // backup rather than crash-looping — see recoverFromLatestBackup().
+  let recoveredFrom: string | null = null;
+  try {
+    await db.read();
+  } catch (err) {
+    if (be().kind !== "pglite" || !looksLikeCorruption(err)) throw err;
+    recoveredFrom = await recoverFromLatestBackup();
+  }
+
+  // One-time migration from the previous lowdb JSON file, if the database is
+  // empty (never applies after a backup recovery — that database isn't empty,
+  // it's freshly restored).
+  const empty = !recoveredFrom && TABLES.every((t) => (db.data[t.key] as unknown[]).length === 0);
   let imported = false;
   if (empty) imported = await importLegacyJson();
 
@@ -646,7 +787,8 @@ export async function initDb() {
   // changed later in-app is preserved.
   const adminEmail = (process.env.ADMIN_EMAIL || "jevisexcell024@gmail.com").trim();
   const adminName = process.env.ADMIN_NAME || "Administrator";
-  if (!db.data.users.some((u) => u.email.toLowerCase() === adminEmail.toLowerCase())) {
+  const existingAdmin = db.data.users.find((u) => u.email.toLowerCase() === adminEmail.toLowerCase());
+  if (!existingAdmin) {
     // Never ship a hardcoded password. Use ADMIN_PASSWORD when provided, otherwise
     // generate a strong random one and print it ONCE so the operator can sign in
     // and change it immediately.
@@ -657,7 +799,7 @@ export async function initDb() {
       email: adminEmail,
       name: adminName,
       role: "admin",
-      passwordHash: bcrypt.hashSync(adminPassword, 10),
+      passwordHash: bcrypt.hashSync(adminPassword, BCRYPT_COST),
     } as User);
     changed = true;
     console.log(`👤 Bootstrapped admin account: ${adminEmail}`);
@@ -665,6 +807,14 @@ export async function initDb() {
       console.log(`🔑 One-time admin password (set ADMIN_PASSWORD to choose your own): ${adminPassword}`);
       console.log("   Sign in and change it right away.");
     }
+  } else if (process.env.ADMIN_RESET_PASSWORD === "1" && process.env.ADMIN_PASSWORD) {
+    // Explicit emergency reset — locked behind a second env var (ADMIN_RESET_PASSWORD=1)
+    // on top of ADMIN_PASSWORD alone, so a stale ADMIN_PASSWORD left over from initial
+    // setup can never silently overwrite a password changed later in-app. Meant to be
+    // set for exactly one restart, then removed.
+    existingAdmin.passwordHash = bcrypt.hashSync(process.env.ADMIN_PASSWORD, BCRYPT_COST);
+    changed = true;
+    console.log(`🔑 Admin password for ${adminEmail} force-reset via ADMIN_RESET_PASSWORD. Remove that env var now.`);
   }
 
   if (changed) await db.write();

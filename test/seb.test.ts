@@ -20,7 +20,7 @@ function mkExam(lockdown: Partial<Exam["lockdown"]>): Exam {
 
 const CONFIG_KEY = "a".repeat(64);
 const BEK = "b".repeat(64);
-const HOST = "lockdown.jevislab.com";
+const HOST = "oriole.jevislab.com";
 
 describe("verifySeb", () => {
   it("passes through when the exam doesn't require SEB", () => {

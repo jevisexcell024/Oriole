@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { Skeleton, EmptyState } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useT, type TFn } from "@/lib/i18n";
+import { useLearningStructure } from "@/lib/learningStructure";
 import { clsx } from "clsx";
 
 const initials = (n: string) => n.split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase();
@@ -17,20 +18,42 @@ const CLASS_COLORS = ["#fe3bed", "#c6ff34", "#ffffff"] as const;
 const classColor = (id: string) => CLASS_COLORS[id.split("").reduce((h, c) => h + c.charCodeAt(0), 0) % CLASS_COLORS.length];
 
 // ------------------------------------------------------------ List
-interface ClassRow { id: string; name: string; code: string; description: string; members: number; assignments: number; }
+interface ClassRow { id: string; name: string; code: string; description: string; members: number; assignments: number; academicYearId: string | null; academicYearName: string | null; }
+interface CohortOption { id: string; name: string; }
 
 export function AdminClasses() {
   const t = useT();
+  // The Cohort/Academic Year concept a class can optionally belong to — same entity,
+  // relabeled per Learning Structure mode (see ClassGroup.academicYearId). The class
+  // itself keeps its own plain name/wording in every mode; only this parent link's
+  // label changes.
+  const { mode, academicYearLabel, cohortLabel } = useLearningStructure();
+  const cohortConceptLabel = mode === "cohort" ? cohortLabel : academicYearLabel;
   const [rows, setRows] = useState<ClassRow[] | null>(null);
+  const [cohorts, setCohorts] = useState<CohortOption[]>([]);
+  const [cohortFilter, setCohortFilter] = useState("");
   const [create, setCreate] = useState(false);
   const load = () => api.get<{ classes: ClassRow[] }>("/admin/classes").then((d) => setRows(d.classes)).catch(() => setRows([]));
   useEffect(() => { load(); }, []);
+  useEffect(() => { api.get<{ academicYears: CohortOption[] }>("/admin/institution").then((d) => setCohorts(d.academicYears)).catch(() => {}); }, []);
+
+  const visibleRows = cohortFilter ? (rows ?? []).filter((c) => c.academicYearId === cohortFilter) : rows;
 
   return (
     <AdminShell wide>
       <div className="fade-in">
         <PageHeader title={t("acls.title")} subtitle={t("acls.subtitle")}
           actions={<button onClick={() => setCreate(true)} className="btn btn-on-teal"><Plus className="h-4 w-4" /> {t("acls.createClass")}</button>} />
+
+        {cohorts.length > 0 && rows && rows.length > 0 && (
+          <div className="mt-4 flex items-center gap-2">
+            <span className="text-xs font-medium text-[var(--muted)]">{cohortConceptLabel}:</span>
+            <select className="input h-9 w-auto text-sm" value={cohortFilter} onChange={(e) => setCohortFilter(e.target.value)}>
+              <option value="">{t("acls.allCohorts", { label: cohortConceptLabel })}</option>
+              {cohorts.map((y) => <option key={y.id} value={y.id}>{y.name}</option>)}
+            </select>
+          </div>
+        )}
 
         {!rows ? (
           <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -53,7 +76,7 @@ export function AdminClasses() {
           />
         ) : (
           <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {rows.map((c) => {
+            {visibleRows!.map((c) => {
               const color = classColor(c.id);
               return (
                 <Link key={c.id} to={`/admin/classes/${c.id}`}
@@ -68,6 +91,7 @@ export function AdminClasses() {
                   </div>
                   <h3 className="mt-3 font-semibold leading-snug">{c.name}</h3>
                   {c.code && <p className="text-xs text-[var(--muted)]">{c.code}</p>}
+                  {c.academicYearName && <p className="mt-0.5 text-[11px] text-[var(--muted)]">{cohortConceptLabel}: {c.academicYearName}</p>}
                   <div className="mt-4 flex items-center gap-4 border-t pt-3 text-xs text-[var(--muted)]"
                     style={{ borderColor: `${color}33` }}>
                     <span className="inline-flex items-center gap-1"><Users2 className="h-3.5 w-3.5" style={{ color }} /> {t("adash.nStudents", { n: c.members })}</span>
@@ -79,19 +103,20 @@ export function AdminClasses() {
           </div>
         )}
       </div>
-      {create && <CreateModal onClose={() => setCreate(false)} onCreated={() => { setCreate(false); load(); }} />}
+      {create && <CreateModal cohorts={cohorts} cohortConceptLabel={cohortConceptLabel} onClose={() => setCreate(false)} onCreated={() => { setCreate(false); load(); }} />}
     </AdminShell>
   );
 }
 
-function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+function CreateModal({ cohorts, cohortConceptLabel, onClose, onCreated }: { cohorts: CohortOption[]; cohortConceptLabel: string; onClose: () => void; onCreated: () => void }) {
   const t = useT();
   const [name, setName] = useState(""); const [code, setCode] = useState(""); const [description, setDescription] = useState("");
+  const [academicYearId, setAcademicYearId] = useState("");
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
   async function save() {
     if (!name.trim()) { setErr(t("acls.errName")); return; }
     setBusy(true);
-    try { await api.post("/admin/classes", { name, code, description }); onCreated(); } catch (e) { setErr((e as Error).message); setBusy(false); }
+    try { await api.post("/admin/classes", { name, code, description, academicYearId: academicYearId || null }); onCreated(); } catch (e) { setErr((e as Error).message); setBusy(false); }
   }
   return (
     <Modal title={t("acls.createClass")} onClose={onClose}>
@@ -99,6 +124,14 @@ function CreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
         <Field label={t("acls.className")}><input className="input h-10" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. CS Year 1 — Section A" /></Field>
         <Field label={t("acls.codeOptional")}><input className="input h-10" value={code} onChange={(e) => setCode(e.target.value)} placeholder="e.g. CS1-A" /></Field>
         <Field label={t("acls.descOptional")}><input className="input h-10" value={description} onChange={(e) => setDescription(e.target.value)} /></Field>
+        {cohorts.length > 0 && (
+          <Field label={t("acls.cohortOptional", { label: cohortConceptLabel })}>
+            <select className="input h-10" value={academicYearId} onChange={(e) => setAcademicYearId(e.target.value)}>
+              <option value="">{t("acls.noCohort")}</option>
+              {cohorts.map((y) => <option key={y.id} value={y.id}>{y.name}</option>)}
+            </select>
+          </Field>
+        )}
         {err && <p className="text-sm text-rose-500">{err}</p>}
       </div>
       <ModalActions onClose={onClose}><button onClick={save} disabled={busy} className="btn btn-primary disabled:opacity-50">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null} {t("acls.create")}</button></ModalActions>
@@ -112,10 +145,12 @@ interface Assignment {
   examId: string; examTitle: string; scheduledStart: string | null; assignedAt: string;
   memberCount: number; submitted: number; avgScore: number | null; passRate: number | null;
 }
-interface Detail { class: { id: string; name: string; code: string; description: string }; members: Member[]; assignments: Assignment[]; }
+interface Detail { class: { id: string; name: string; code: string; description: string; academicYearId: string | null; academicYearName: string | null }; members: Member[]; assignments: Assignment[]; }
 
 export function ClassDetail() {
   const t = useT();
+  const { mode, academicYearLabel, cohortLabel } = useLearningStructure();
+  const cohortConceptLabel = mode === "cohort" ? cohortLabel : academicYearLabel;
   const { id } = useParams();
   const navigate = useNavigate();
   const [d, setD] = useState<Detail | null>(null);
@@ -156,6 +191,9 @@ export function ClassDetail() {
             <div>
               <h1 className="text-xl font-bold tracking-tight">{d.class.name}</h1>
               <p className="text-sm text-[var(--muted)]">{d.class.code || t("acls.noCode")} · {t("adash.nStudents", { n: d.members.length })}</p>
+              {d.class.academicYearName && (
+                <p className="mt-0.5 text-xs text-[var(--muted)]">{cohortConceptLabel}: <span className="font-medium text-[var(--fg)]">{d.class.academicYearName}</span></p>
+              )}
             </div>
           </div>
           <button onClick={() => setDelClass(true)} title={t("acls.deleteClassTitle")} className="rounded-lg p-2 text-[var(--muted)] hover:bg-rose-500/10 hover:text-rose-400"><Trash2 className="h-4 w-4" /></button>
