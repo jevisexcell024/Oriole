@@ -376,8 +376,6 @@ export const messages: Record<string, Record<Lang, string>> = {
   "auth.signInMicrosoft": { en: "Sign in with Microsoft", fr: "Se connecter avec Microsoft", es: "Iniciar sesión con Microsoft", pt: "Entrar com a Microsoft", ar: "تسجيل الدخول عبر Microsoft" },
   "auth.ssoNoUser": { en: "No Oriole account found for that Microsoft account. Ask your administrator.", fr: "Aucun compte Oriole trouvé pour ce compte Microsoft. Contactez votre administrateur.", es: "No se encontró una cuenta de Oriole para esa cuenta de Microsoft. Pregunta a tu administrador.", pt: "Nenhuma conta Oriole encontrada para essa conta Microsoft. Fale com o administrador.", ar: "لا يوجد حساب Oriole مرتبط بحساب Microsoft هذا. تواصل مع المسؤول." },
   "auth.ssoError": { en: "Microsoft sign-in failed. Please try again.", fr: "La connexion Microsoft a échoué. Veuillez réessayer.", es: "Error al iniciar sesión con Microsoft. Inténtalo de nuevo.", pt: "Falha ao entrar com a Microsoft. Tente novamente.", ar: "فشل تسجيل الدخول عبر Microsoft. حاول مرة أخرى." },
-  "auth.heroBadgeTitle": { en: "AI-Proctored", fr: "Surveillé par IA", es: "Supervisado por IA", pt: "Monitorado por IA", ar: "مراقبة بالذكاء الاصطناعي" },
-  "auth.heroBadgeSubtitle": { en: "Real-time integrity monitoring", fr: "Suivi de l'intégrité en temps réel", es: "Monitoreo de integridad en tiempo real", pt: "Monitoramento de integridade em tempo real", ar: "مراقبة النزاهة في الوقت الفعلي" },
   "auth.heroHeadline": { en: "Secure exams, wherever your students are.", fr: "Des examens sécurisés, où que soient vos étudiants.", es: "Exámenes seguros, estén donde estén tus estudiantes.", pt: "Exames seguros, onde quer que seus alunos estejam.", ar: "امتحانات آمنة، أينما كان طلابك." },
 
   // ── Greeting ──

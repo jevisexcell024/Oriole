@@ -62,8 +62,8 @@ export function Login() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-black px-4 py-6 lg:p-8">
-      <div className="grid w-full max-w-6xl grid-cols-1 overflow-hidden rounded-[28px] border border-white/10 shadow-2xl lg:grid-cols-[440px_1fr] lg:min-h-[680px]">
+    <div className="flex h-screen items-center justify-center overflow-hidden bg-black px-4 py-6 lg:p-8">
+      <div className="grid h-full w-full max-w-6xl grid-cols-1 overflow-hidden rounded-[28px] border border-white/10 shadow-2xl lg:grid-cols-[440px_1fr]">
         {/* Left — form panel */}
         <div className="relative flex flex-col bg-[#0E0E0D] px-8 py-8 sm:px-10">
           {/* Brand lockup + language */}
@@ -182,35 +182,53 @@ export function Login() {
   );
 }
 
+const HERO_SLIDES = ["/book.png", "/pattern.png"];
+const HERO_SLIDE_MS = 5000;
+
 /**
- * Right-side login hero — brand illustration with a floating proctoring
- * badge and headline overlaid, matching the split login-card reference the
- * user provided. Decorative (aria-hidden on the image).
+ * Right-side login hero — a small auto-advancing image carousel (brand
+ * illustration + pattern) with a scrim for text legibility and a headline
+ * overlaid. Dots are real, clickable slide controls. Decorative image
+ * (aria-hidden); the carousel region itself is a labeled group for a11y.
  */
 function LoginHero() {
   const t = useT();
-  return (
-    <div className="relative hidden overflow-hidden lg:block">
-      <img className="absolute inset-0 h-full w-full object-cover" src="/book.png" alt="" aria-hidden="true" />
-      <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/10 to-black/35" />
+  const [slide, setSlide] = useState(0);
 
-      {/* Floating proctoring badge */}
-      <div className="absolute left-8 top-8 flex items-center gap-2.5 rounded-2xl bg-black/60 px-4 py-3 ring-1 ring-white/10 backdrop-blur-md">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#c6ff34]/15">
-          <ShieldCheck className="h-4 w-4 text-[#c6ff34]" />
-        </span>
-        <span className="leading-tight">
-          <span className="block text-sm font-bold text-white">{t("auth.heroBadgeTitle")}</span>
-          <span className="block text-[11px] text-white/60">{t("auth.heroBadgeSubtitle")}</span>
-        </span>
-      </div>
+  useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const id = setInterval(() => setSlide((s) => (s + 1) % HERO_SLIDES.length), HERO_SLIDE_MS);
+    return () => clearInterval(id);
+  }, []);
+
+  return (
+    <div className="relative hidden overflow-hidden lg:block" role="group" aria-label="Oriole">
+      {HERO_SLIDES.map((src, i) => (
+        <img
+          key={src}
+          className="absolute inset-0 h-full w-full object-cover transition-opacity duration-700"
+          style={{ opacity: i === slide ? 1 : 0 }}
+          src={src}
+          alt=""
+          aria-hidden="true"
+        />
+      ))}
+      <div className="absolute inset-0 bg-black/20" />
+      <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/10 to-transparent" />
 
       {/* Dots + headline */}
       <div className="absolute inset-x-0 bottom-0 p-8">
-        <div className="mb-4 flex items-center gap-1.5" aria-hidden="true">
-          <span className="h-1.5 w-6 rounded-full bg-[#c6ff34]" />
-          <span className="h-1.5 w-1.5 rounded-full bg-white/30" />
-          <span className="h-1.5 w-1.5 rounded-full bg-white/30" />
+        <div className="mb-4 flex items-center gap-1.5">
+          {HERO_SLIDES.map((_, i) => (
+            <button
+              key={i}
+              type="button"
+              onClick={() => setSlide(i)}
+              aria-label={`Go to slide ${i + 1}`}
+              aria-current={i === slide}
+              className={`h-1.5 rounded-full transition-all ${i === slide ? "w-6 bg-[#c6ff34]" : "w-1.5 bg-white/30 hover:bg-white/50"}`}
+            />
+          ))}
         </div>
         <p className="max-w-sm text-2xl font-extrabold leading-snug tracking-tight text-white">{t("auth.heroHeadline")}</p>
       </div>
