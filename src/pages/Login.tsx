@@ -182,27 +182,18 @@ export function Login() {
 }
 
 /**
- * Right-side login hero — the Oriole reveal video on a pure-black canvas.
- * Autoplays muted + looped (required for browser autoplay), plays inline on
- * mobile, and is decorative (aria-hidden). Honors prefers-reduced-motion by
- * not relying on the video for any meaning.
+ * Right-side login hero — the Oriole brand pattern on a pure-black canvas.
+ * Decorative (aria-hidden).
  */
 function LoginHero() {
   return (
-    <div className="relative hidden items-center justify-center overflow-hidden px-10 lg:flex" style={{ background: "#000000" }}>
-      <div className="relative z-10 w-full">
-        <video
-          className="mx-auto block w-full max-h-[70vh] object-contain"
-          src="/oriole-reveal.mp4"
-          autoPlay
-          loop
-          muted
-          playsInline
-          preload="auto"
-          aria-hidden="true"
-        />
-        <p className="mt-6 text-center text-[11px] font-semibold uppercase tracking-[0.35em] text-[#c6ff34]">Secure Online Examinations</p>
-      </div>
+    <div className="relative hidden items-center justify-center overflow-hidden lg:flex" style={{ background: "#000000" }}>
+      <img
+        className="h-full w-full object-cover"
+        src="/oriole-log.png"
+        alt=""
+        aria-hidden="true"
+      />
     </div>
   );
 }
