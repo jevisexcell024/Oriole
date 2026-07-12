@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ShieldCheck, Loader2, Mail, Lock, ArrowRight, Eye, EyeOff } from "lucide-react";
 import { useAuth } from "@/lib/auth";
@@ -182,36 +182,74 @@ export function Login() {
   );
 }
 
-const HERO_SLIDES = ["/book.png", "/pattern.png"];
+type HeroSlide =
+  | { type: "image"; src: string; scale?: boolean }
+  | { type: "video"; src: string };
+
+// book.png has a thin white card-frame baked into the pixels; the hero panel's
+// aspect ratio is taller than the source image, so object-cover only crops the
+// sides and leaves that frame visible top/bottom — `scale` zooms past it.
+const HERO_SLIDES: HeroSlide[] = [
+  { type: "image", src: "/book.png", scale: true },
+  { type: "image", src: "/pattern.png" },
+  { type: "video", src: "/water.mp4" },
+];
 const HERO_SLIDE_MS = 5000;
 
 /**
- * Right-side login hero — a small auto-advancing image carousel (brand
- * illustration + pattern) with a scrim for text legibility and a headline
- * overlaid. Dots are real, clickable slide controls. Decorative image
- * (aria-hidden); the carousel region itself is a labeled group for a11y.
+ * Right-side login hero — a small auto-advancing carousel (brand
+ * illustration, pattern, and a looping water clip) with a scrim for text
+ * legibility and a headline overlaid. Dots are real, clickable slide
+ * controls. The video slide waits for its own playback to finish before
+ * advancing, instead of the fixed timer. Decorative media (aria-hidden);
+ * the carousel region itself is a labeled group for a11y.
  */
 function LoginHero() {
   const t = useT();
   const [slide, setSlide] = useState(0);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const reducedMotion = useMemo(() => window.matchMedia("(prefers-reduced-motion: reduce)").matches, []);
+  const next = () => setSlide((s) => (s + 1) % HERO_SLIDES.length);
 
+  // Timed advance for image slides only — the video slide advances itself
+  // via its "ended" event once it has actually finished playing.
   useEffect(() => {
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    const id = setInterval(() => setSlide((s) => (s + 1) % HERO_SLIDES.length), HERO_SLIDE_MS);
-    return () => clearInterval(id);
-  }, []);
+    if (reducedMotion || HERO_SLIDES[slide].type === "video") return;
+    const id = setTimeout(next, HERO_SLIDE_MS);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slide, reducedMotion]);
+
+  // Play the video from the start exactly while it's the active slide.
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (HERO_SLIDES[slide].type === "video") {
+      v.currentTime = 0;
+      if (!reducedMotion) void v.play().catch(() => {});
+    } else {
+      v.pause();
+    }
+  }, [slide, reducedMotion]);
 
   return (
     <div className="relative hidden overflow-hidden lg:block" role="group" aria-label="Oriole">
-      {HERO_SLIDES.map((src, i) => (
-        <img
-          key={src}
-          className="absolute inset-0 h-full w-full object-cover transition-opacity duration-700"
-          style={{ opacity: i === slide ? 1 : 0 }}
-          src={src}
-          alt=""
-          aria-hidden="true"
-        />
+      {HERO_SLIDES.map((s, i) => (
+        <div key={s.src} className="absolute inset-0 transition-opacity duration-700" style={{ opacity: i === slide ? 1 : 0 }}>
+          {s.type === "image" ? (
+            <img className={`h-full w-full object-cover ${s.scale ? "scale-125" : ""}`} src={s.src} alt="" aria-hidden="true" />
+          ) : (
+            <video
+              ref={videoRef}
+              className="h-full w-full object-cover"
+              src={s.src}
+              muted
+              playsInline
+              aria-hidden="true"
+              onEnded={next}
+            />
+          )}
+        </div>
       ))}
       <div className="absolute inset-0 bg-black/20" />
       <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/10 to-transparent" />
