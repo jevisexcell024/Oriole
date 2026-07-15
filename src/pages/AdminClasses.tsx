@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import {
   Users2, Plus, ArrowLeft, Trash2, UserPlus, CalendarPlus, X, Clock, BookOpen, Loader2, ArrowRight, Search, CheckCircle2,
+  Upload, AlertTriangle, Download,
 } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
 import { PageHeader } from "@/components/PageHeader";
@@ -9,6 +10,7 @@ import { Skeleton, EmptyState } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useT, type TFn } from "@/lib/i18n";
 import { useLearningStructure } from "@/lib/learningStructure";
+import { IMPORT_ACCEPT, parseStudentFile } from "@/lib/importTable";
 import { clsx } from "clsx";
 
 const initials = (n: string) => n.split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase();
@@ -156,6 +158,7 @@ export function ClassDetail() {
   const [d, setD] = useState<Detail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
   const [delClass, setDelClass] = useState(false);
 
@@ -202,7 +205,10 @@ export function ClassDetail() {
         {/* Members */}
         <div className="mt-5 flex items-center justify-between">
           <h2 className="text-sm font-semibold">{t("acls.members")}</h2>
-          <button onClick={() => setAddOpen(true)} className="btn btn-outline h-9"><UserPlus className="h-4 w-4" /> {t("acls.addStudents")}</button>
+          <div className="flex gap-2">
+            <button onClick={() => setImportOpen(true)} className="btn btn-outline h-9"><Upload className="h-4 w-4" /> {t("acls.importRoster")}</button>
+            <button onClick={() => setAddOpen(true)} className="btn btn-outline h-9"><UserPlus className="h-4 w-4" /> {t("acls.addStudents")}</button>
+          </div>
         </div>
         <div className="card mt-3 overflow-hidden">
           {d.members.length === 0 ? (
@@ -265,6 +271,7 @@ export function ClassDetail() {
       </div>
 
       {addOpen && <AddMembersModal classId={id!} existing={d.members.map((m) => m.id)} onClose={() => setAddOpen(false)} onDone={() => { setAddOpen(false); load(); }} />}
+      {importOpen && <ImportRosterModal classId={id!} currentMembers={d.members} onClose={() => setImportOpen(false)} onDone={() => { setImportOpen(false); load(); }} />}
       {assignOpen && <AssignExamModal classId={id!} memberCount={d.members.length} onClose={() => setAssignOpen(false)} onDone={() => { setAssignOpen(false); load(); }} />}
       {delClass && <Modal title={t("acls.deleteClassQ")} onClose={() => setDelClass(false)}>
         <p className="mt-3 text-sm text-[var(--muted)]">{t("acls.deleteClassWarn", { name: d.class.name })}</p>
@@ -299,6 +306,115 @@ function AddMembersModal({ classId, existing, onClose, onDone }: { classId: stri
         ))}
       </div>
       <ModalActions onClose={onClose}><button onClick={add} disabled={busy || sel.size === 0} className="btn btn-primary disabled:opacity-50">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserPlus className="h-4 w-4" />} {t("acls.add")} {sel.size || ""}</button></ModalActions>
+    </Modal>
+  );
+}
+
+interface RosterSyncResult {
+  created: { name: string; email: string }[];
+  addedExisting: number;
+  removed: { id: string; name: string; email: string }[];
+  skipped: { email: string; reason: string }[];
+  memberCount: number;
+}
+
+/**
+ * Import a student list into this class's roster. Unlike the plain "Add
+ * students" picker, this is an ongoing sync: re-uploading a roster later adds
+ * anyone new and removes anyone no longer listed. Because removal is real
+ * (it edits this class's membership), the "will be removed" set is previewed
+ * client-side — by comparing the parsed file's emails against the class's
+ * current members — before the admin commits, so a stale/wrong file doesn't
+ * silently drop real students.
+ */
+function ImportRosterModal({ classId, currentMembers, onClose, onDone }: {
+  classId: string; currentMembers: Member[]; onClose: () => void; onDone: () => void;
+}) {
+  const t = useT();
+  const [rows, setRows] = useState<{ name?: string; email?: string }[] | null>(null);
+  const [result, setResult] = useState<RosterSyncResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0]; e.target.value = "";
+    if (!f) return;
+    try {
+      const parsed = await parseStudentFile(f);
+      if (!parsed.length) { setErr(t("acan.errNoRows")); return; }
+      setRows(parsed); setErr(null); setResult(null);
+    } catch { setErr(t("acan.errReadFile")); }
+  };
+
+  const willRemove = useMemo(() => {
+    if (!rows) return [];
+    const fileEmails = new Set(rows.map((r) => (r.email ?? "").trim().toLowerCase()).filter(Boolean));
+    return currentMembers.filter((m) => !fileEmails.has(m.email.toLowerCase()));
+  }, [rows, currentMembers]);
+
+  const submit = async () => {
+    if (!rows) return;
+    setBusy(true); setErr(null);
+    try { setResult(await api.post<RosterSyncResult>(`/admin/classes/${classId}/import`, { rows })); }
+    catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+
+  return (
+    <Modal title={t("acls.importRoster")} onClose={onClose}>
+      {!result ? (
+        <div className="mt-4 space-y-3">
+          <p className="text-sm text-[var(--muted)]">{t("acls.importRosterDesc")}</p>
+          <label className="flex cursor-pointer flex-col items-center gap-2 rounded-xl border border-dashed border-[var(--border)] p-6 text-center hover:bg-[var(--card-2)]">
+            <Upload className="h-6 w-6 text-[var(--muted)]" />
+            <span className="text-sm font-medium">{rows ? t("acan.readyToImport", { n: rows.length }) : t("acan.chooseFile")}</span>
+            <span className="text-xs text-[var(--muted)]">{t("acan.colsHint")}</span>
+            <input type="file" accept={IMPORT_ACCEPT} className="hidden" onChange={onFile} />
+          </label>
+          {rows && willRemove.length > 0 && (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-xs text-amber-500">
+              <p className="flex items-center gap-1.5 font-semibold"><AlertTriangle className="h-3.5 w-3.5 shrink-0" /> {t("acls.willRemoveN", { n: willRemove.length })}</p>
+              <ul className="mt-1.5 max-h-28 space-y-0.5 overflow-y-auto">
+                {willRemove.map((m) => <li key={m.id}>{m.name} — {m.email}</li>)}
+              </ul>
+            </div>
+          )}
+          {err && <p className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-400">{err}</p>}
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <a href="/templates/Student-Import-Template.xlsx" download className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--muted)] hover:text-[var(--fg)]" title="Download the student import template (.xlsx)">
+              <Download className="h-3.5 w-3.5" /> Download template
+            </a>
+            <div className="flex gap-2">
+              <button onClick={onClose} className="rounded-lg px-3 py-2 text-sm font-medium text-[var(--muted)] hover:text-[var(--fg)]">{t("acan.cancel")}</button>
+              <button onClick={submit} disabled={busy || !rows} className="btn btn-primary disabled:opacity-50">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />} {t("acls.importAndSync")}</button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-4 space-y-3">
+          <div className="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2.5 text-sm text-emerald-400">
+            <CheckCircle2 className="h-4 w-4 shrink-0" /> {t("acls.syncSummary", { created: result.created.length, existing: result.addedExisting, removed: result.removed.length })}
+          </div>
+          {result.removed.length > 0 && (
+            <div className="rounded-lg border border-[var(--border)] p-3">
+              <p className="text-xs font-semibold text-[var(--muted)]">{t("acls.removedN", { n: result.removed.length })}</p>
+              <ul className="mt-1.5 max-h-32 space-y-1 overflow-y-auto text-xs text-[var(--muted)]">
+                {result.removed.map((m) => <li key={m.id}>{m.name} — {m.email}</li>)}
+              </ul>
+            </div>
+          )}
+          {result.skipped.length > 0 && (
+            <div className="rounded-lg border border-[var(--border)] p-3">
+              <p className="text-xs font-semibold text-[var(--muted)]">{t("acan.skippedN", { n: result.skipped.length })}</p>
+              <ul className="mt-1.5 max-h-32 space-y-1 overflow-y-auto text-xs text-[var(--muted)]">
+                {result.skipped.map((s, i) => <li key={i} className="flex items-center gap-1.5"><AlertTriangle className="h-3 w-3 shrink-0 text-amber-500" /> {s.email} — {s.reason}</li>)}
+              </ul>
+            </div>
+          )}
+          <div className="flex justify-end">
+            <button onClick={() => { onDone(); onClose(); }} className="btn btn-primary">{t("acan.done")}</button>
+          </div>
+        </div>
+      )}
     </Modal>
   );
 }

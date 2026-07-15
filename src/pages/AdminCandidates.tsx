@@ -9,7 +9,7 @@ import { AdminShell } from "@/components/AdminShell";
 import { PageHeader } from "@/components/PageHeader";
 import { TableSkeleton, EmptyState } from "@/components/ui";
 import { api } from "@/lib/api";
-import { parseTableFile, IMPORT_ACCEPT } from "@/lib/importTable";
+import { IMPORT_ACCEPT, parseStudentFile, type ImportRow } from "@/lib/importTable";
 import { useT } from "@/lib/i18n";
 import { clsx } from "clsx";
 
@@ -247,39 +247,6 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
   );
 }
 
-interface ImportRow { name?: string; email?: string; studentClass?: string; gender?: string; age?: string; phone?: string }
-
-/** Header-aware CSV → student rows. Falls back to name,email,class column order if no header. */
-function parseStudentCsv(text: string): ImportRow[] {
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  if (!lines.length) return [];
-  const split = (l: string) => l.split(",").map((s) => s.trim().replace(/^"|"$/g, ""));
-  const first = split(lines[0]).map((h) => h.toLowerCase());
-  const hasHeader = first.includes("email") || first.includes("name");
-  const headers = hasHeader ? first : ["name", "email", "class"];
-  const body = (hasHeader ? lines.slice(1) : lines).map(split);
-  const at = (...names: string[]) => headers.findIndex((h) => names.includes(h));
-  const iN = at("name", "full name", "fullname"), iE = at("email", "e-mail"), iC = at("class", "studentclass", "student class", "cohort"), iG = at("gender", "sex"), iA = at("age"), iP = at("phone", "mobile", "tel");
-  return body.map((c) => ({
-    name: iN >= 0 ? c[iN] : c[0], email: iE >= 0 ? c[iE] : c[1],
-    studentClass: iC >= 0 ? c[iC] : undefined, gender: iG >= 0 ? c[iG] : undefined,
-    age: iA >= 0 ? c[iA] : undefined, phone: iP >= 0 ? c[iP] : undefined,
-  })).filter((r) => r.name || r.email);
-}
-
-/** Map a header-keyed row (from Excel / Word) to a student row, honouring column aliases. */
-function rowToStudent(o: Record<string, string>): ImportRow {
-  const get = (...keys: string[]) => { for (const k of keys) { const v = o[k]; if (v != null && String(v).trim() !== "") return String(v).trim(); } return undefined; };
-  return {
-    name: get("name", "full name", "fullname"),
-    email: get("email", "e-mail"),
-    studentClass: get("class", "studentclass", "student class", "cohort"),
-    gender: get("gender", "sex"),
-    age: get("age"),
-    phone: get("phone", "mobile", "tel"),
-  };
-}
-
 function ImportModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const t = useT();
   const [rows, setRows] = useState<ImportRow[] | null>(null);
@@ -291,12 +258,7 @@ function ImportModal({ onClose, onDone }: { onClose: () => void; onDone: () => v
     const f = e.target.files?.[0]; e.target.value = "";
     if (!f) return;
     try {
-      // CSV keeps its flexible (header-optional) parser; Excel/Word go through the
-      // shared table parser, which requires a header row.
-      const isSheetOrDoc = /\.(xlsx|xls|docx)$/i.test(f.name);
-      const parsed = isSheetOrDoc
-        ? (await parseTableFile(f)).map(rowToStudent).filter((r) => r.name || r.email)
-        : parseStudentCsv(await f.text());
+      const parsed = await parseStudentFile(f);
       if (!parsed.length) { setErr(t("acan.errNoRows")); return; }
       setRows(parsed); setErr(null); setResult(null);
     } catch { setErr(t("acan.errReadFile")); }

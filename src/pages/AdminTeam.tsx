@@ -1,24 +1,79 @@
 ﻿import { useEffect, useState } from "react";
-import { Users, Loader2, UserPlus, Trash2, X, ShieldCheck, ClipboardCheck, Radio } from "lucide-react";
+import { Users, Loader2, UserPlus, Trash2, X, ShieldCheck, ClipboardCheck, Radio, Check, CheckCircle2, Lock } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
 import { PageHeader } from "@/components/PageHeader";
 import { TableSkeleton } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
-import { useT } from "@/lib/i18n";
+import { useT, type TFn } from "@/lib/i18n";
 import { clsx } from "clsx";
 
 interface Member { id: string; name: string; email: string; role: string; }
 
+// Each role's responsibility list is one pipe-separated i18n string (rather than
+// N separate keys) so the localized copy stays easy to maintain per language.
 const ROLES = [
-  { value: "admin", labelKey: "ateam.roleAdmin", descKey: "ateam.roleAdminDesc", icon: ShieldCheck },
-  { value: "facilitator", labelKey: "ateam.roleFacilitator", descKey: "ateam.roleFacilitatorDesc", icon: ClipboardCheck },
-  { value: "proctor", labelKey: "ateam.roleProctor", descKey: "ateam.roleProctorDesc", icon: Radio },
+  { value: "admin", labelKey: "ateam.roleAdmin", descKey: "ateam.roleAdminDesc", respKey: "ateam.roleAdminResp", accessKey: "ateam.accessFull", icon: ShieldCheck },
+  { value: "facilitator", labelKey: "ateam.roleFacilitator", descKey: "ateam.roleFacilitatorDesc", respKey: "ateam.roleFacilitatorResp", accessKey: "ateam.accessAcademic", icon: ClipboardCheck },
+  { value: "proctor", labelKey: "ateam.roleProctor", descKey: "ateam.roleProctorDesc", respKey: "ateam.roleProctorResp", accessKey: "ateam.accessMonitoring", icon: Radio },
 ];
 const initials = (n: string) => n.split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase();
 const ROLE_PILL: Record<string, string> = {
   admin: "bg-[#c6ff34]/15 text-[#c6ff34]", facilitator: "bg-[#06B6D4]/15 text-[#06B6D4]", proctor: "bg-[#F59E0B]/15 text-[#F59E0B]",
 };
+const PREVIEW_COUNT = 4;
+
+/**
+ * A role's full card: icon, description, a short responsibility preview with
+ * an expandable "+N more", permission count, and access-level badge. Used both
+ * as a read-only legend (no onSelect) and as the interactive picker in the
+ * invite form (onSelect + selected).
+ */
+function RoleCard({ role, t, selected, onSelect }: {
+  role: (typeof ROLES)[number]; t: TFn; selected?: boolean; onSelect?: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const resp = t(role.respKey).split("|");
+  const shown = expanded ? resp : resp.slice(0, PREVIEW_COUNT);
+  const hiddenCount = resp.length - PREVIEW_COUNT;
+  return (
+    <div
+      onClick={onSelect}
+      className={clsx(
+        "group relative rounded-2xl border p-4 transition-all duration-150",
+        onSelect && "cursor-pointer hover:-translate-y-0.5 hover:shadow-lg",
+        selected ? "border-[#c6ff34] bg-[#c6ff34]/[0.06] ring-1 ring-[#c6ff34]/40" : "border-[var(--border)] hover:border-[var(--border-strong)]",
+      )}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-center gap-2.5">
+          <span className={clsx("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl", ROLE_PILL[role.value])}><role.icon className="h-5 w-5" /></span>
+          <div>
+            <p className="text-sm font-bold">{t(role.labelKey)}</p>
+            <p className="text-xs text-[var(--muted)]">{t(role.descKey)}</p>
+          </div>
+        </div>
+        {selected ? (
+          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#c6ff34] text-[#111110]"><Check className="h-3.5 w-3.5" /></span>
+        ) : (
+          <span title={t("ateam.systemRoleTitle")} className="flex shrink-0 items-center gap-1 rounded-full bg-white/[0.04] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted)]"><Lock className="h-2.5 w-2.5" /> {t("ateam.systemRole")}</span>
+        )}
+      </div>
+      <ul className="mt-3 space-y-1">
+        {shown.map((r, i) => <li key={i} className="flex items-start gap-1.5 text-xs text-[var(--muted)]"><CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-[#c6ff34]" /> {r}</li>)}
+      </ul>
+      <div className="mt-3 flex items-center justify-between border-t border-[var(--border)] pt-2.5">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t("ateam.permissionsN", { n: resp.length })}</span>
+        {hiddenCount > 0 && (
+          <button type="button" onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }} className="text-[11px] font-medium text-[#c6ff34] hover:underline">
+            {expanded ? t("ateam.showLess") : t("ateam.showMoreN", { n: hiddenCount })}
+          </button>
+        )}
+      </div>
+      <p className="mt-2 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t(role.accessKey)}</p>
+    </div>
+  );
+}
 
 export function AdminTeam() {
   const t = useT();
@@ -56,14 +111,13 @@ export function AdminTeam() {
 
         {error && <p className="mt-4 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">{error}</p>}
 
-        {/* Role legend */}
-        <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
-          {ROLES.map((r) => (
-            <div key={r.value} className="card flex items-start gap-2.5 p-3">
-              <span className={clsx("flex h-8 w-8 items-center justify-center rounded-lg", ROLE_PILL[r.value])}><r.icon className="h-4 w-4" /></span>
-              <div><p className="text-sm font-semibold">{t(r.labelKey)}</p><p className="text-xs text-[var(--muted)]">{t(r.descKey)}</p></div>
-            </div>
-          ))}
+        {/* System roles */}
+        <div className="mt-6 flex items-center gap-2">
+          <h2 className="text-sm font-semibold">{t("ateam.systemRoles")}</h2>
+          <span className="text-xs text-[var(--muted)]">{t("ateam.systemRolesDesc")}</span>
+        </div>
+        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+          {ROLES.map((r) => <RoleCard key={r.value} role={r} t={t} />)}
         </div>
 
         <div className="card mt-5 overflow-hidden">
@@ -150,15 +204,9 @@ function InviteModal({ onClose, onDone }: { onClose: () => void; onDone: () => v
           {password.length > 0 && (!pwLongEnough || !pwVaried) && <span className="mt-1 block text-xs text-rose-400">{t("ateam.atLeast6")}</span>}
         </Field>
         <div>
-          <span className="mb-1 block text-sm font-medium">{t("ateam.role")}</span>
-          <div className="space-y-2">
-            {ROLES.map((r) => (
-              <label key={r.value} className={clsx("flex cursor-pointer items-center gap-2.5 rounded-xl border p-3", role === r.value ? "border-brand-500 bg-brand-600/10" : "border-[var(--border)]")}>
-                <input type="radio" checked={role === r.value} onChange={() => setRole(r.value)} />
-                <span className={clsx("flex h-7 w-7 items-center justify-center rounded-lg", ROLE_PILL[r.value])}><r.icon className="h-4 w-4" /></span>
-                <span><span className="block text-sm font-medium">{t(r.labelKey)}</span><span className="block text-xs text-[var(--muted)]">{t(r.descKey)}</span></span>
-              </label>
-            ))}
+          <span className="mb-1.5 block text-sm font-medium">{t("ateam.role")}</span>
+          <div className="space-y-2.5">
+            {ROLES.map((r) => <RoleCard key={r.value} role={r} t={t} selected={role === r.value} onSelect={() => setRole(r.value)} />)}
           </div>
         </div>
         {err && <p className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-400">{err}</p>}

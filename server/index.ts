@@ -5569,6 +5569,102 @@ app.delete("/api/admin/classes/:id/members/:candidateId", requireRole("admin"), 
   res.json({ ok: true });
 });
 
+// Import a student list into a class roster: matches existing students by email
+// (added if not already a member), creates a new account for any unmatched row
+// (same as /admin/candidates/bulk), and — since this is an ongoing sync, not a
+// one-time add — removes any current member whose email isn't in this import.
+// Removing only ever edits this class's memberIds; it never deletes the
+// underlying account or touches any other class/registration.
+app.post("/api/admin/classes/:id/import", requireRole("admin"), async (req, res) => {
+  const cls = db.data!.classes.find((c) => c.id === req.params.id);
+  if (!cls) return res.status(404).json({ error: "Class not found." });
+  type Row = { name?: string; email?: string; studentClass?: string; gender?: string; age?: unknown; phone?: string };
+  const rows: Row[] = Array.isArray(req.body?.rows) ? req.body.rows : [];
+
+  const created: { name: string; email: string; tempPassword: string }[] = [];
+  const createdUsers: User[] = [];
+  const matchedIds: string[] = [];
+  const skipped: { email: string; reason: string }[] = [];
+  const seenEmails = new Set<string>();
+
+  for (const row of rows.slice(0, 1000)) {
+    const name = (row?.name ?? "").trim();
+    const email = (row?.email ?? "").trim();
+    if (!email || !email.includes("@")) { skipped.push({ email: email || "(blank)", reason: "Invalid email" }); continue; }
+    const emailLower = email.toLowerCase();
+    if (seenEmails.has(emailLower)) { skipped.push({ email, reason: "Duplicate in file" }); continue; }
+    seenEmails.add(emailLower);
+
+    const existingUser = db.data!.users.find((u) => u.email.toLowerCase() === emailLower);
+    if (existingUser) {
+      if (existingUser.role !== "candidate") { skipped.push({ email, reason: "Not a student account" }); continue; }
+      matchedIds.push(existingUser.id);
+      continue;
+    }
+    if (!name) { skipped.push({ email, reason: "New student needs a name" }); continue; }
+    const tempPassword = "dti-" + nanoid(6);
+    const ageNum = Number(row?.age);
+    const user: User = {
+      id: nanoid(10), email, passwordHash: await bcrypt.hash(tempPassword, BCRYPT_COST), name, role: "candidate",
+      gender: typeof row?.gender === "string" && row.gender.trim() ? row.gender.trim() : undefined,
+      age: row?.age !== undefined && row?.age !== "" && Number.isFinite(ageNum) ? ageNum : undefined,
+      studentClass: typeof row?.studentClass === "string" && row.studentClass.trim() ? row.studentClass.trim() : (cls.name || undefined),
+      phone: typeof row?.phone === "string" && row.phone.trim() ? encryptString(row.phone.trim()) : undefined,
+    };
+    db.data!.users.push(user);
+    createdUsers.push(user);
+    created.push({ name, email, tempPassword });
+    matchedIds.push(user.id);
+  }
+  for (const user of createdUsers) await db.upsert("users", user);
+
+  // Reconcile membership to exactly this import's matched set.
+  const newMemberSet = new Set(matchedIds);
+  const previousMembers = new Set(cls.memberIds);
+  const toAdd = matchedIds.filter((id) => !previousMembers.has(id));
+  const removed = cls.memberIds
+    .filter((id) => !newMemberSet.has(id))
+    .map((id) => { const u = db.data!.users.find((x) => x.id === id); return { id, name: u?.name ?? "Unknown", email: u?.email ?? "" }; });
+
+  let enrolled = 0;
+  for (const id of toAdd) {
+    cls.memberIds.push(id);
+    for (const assignment of cls.assignments) {
+      const alreadyReg = db.data!.registrations.some((r) => r.examId === assignment.examId && r.candidateId === id);
+      if (!alreadyReg) {
+        db.data!.registrations.push({
+          id: nanoid(10), examId: assignment.examId, candidateId: id,
+          status: "registered", approval: "confirmed",
+          scheduledStart: assignment.scheduledStart, systemCheckPassed: false, createdAt: now(),
+        });
+        enrolled++;
+      }
+    }
+  }
+  cls.memberIds = cls.memberIds.filter((id) => newMemberSet.has(id));
+  await db.upsert("classes", cls);
+
+  const addedExisting = toAdd.length - created.length;
+  if (created.length || addedExisting || removed.length) {
+    await recordAudit(req, "class.roster_synced", `${cls.name}: +${created.length} new, +${addedExisting} existing, -${removed.length}`);
+  }
+
+  res.json({ created, addedExisting, removed, skipped, enrolled, memberCount: cls.memberIds.length });
+
+  // Onboarding emails for newly created accounts only — matched existing
+  // students already have a real password and don't need a new temp one.
+  // Sent after responding so a large roster can't stall the request (see the
+  // identical pattern in /admin/candidates/bulk).
+  for (const c of created) {
+    try {
+      const mail = invitationEmail(c.name, c.email, c.tempPassword);
+      await sendMail(c.email, mail.subject, mail.text, mail.html);
+    } catch (e) {
+      logger.error({ err: e, email: c.email }, "class-import invitation email failed");
+    }
+  }
+});
+
 // Assign an exam to the whole class at a scheduled time → confirmed registrations for every member.
 app.post("/api/admin/classes/:id/assign-exam", requireRole("admin"), async (req, res) => {
   const cls = db.data!.classes.find((c) => c.id === req.params.id);
