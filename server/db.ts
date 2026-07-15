@@ -542,12 +542,16 @@ function resolveBackupDir(): string {
   return path.join(process.cwd(), "backups");
 }
 
-// Signatures of the one PGlite failure mode we can self-heal: on-disk data
-// corruption (as opposed to a stale lock, handled separately by openPglite,
-// or a genuine schema/query bug, which should keep crashing loudly).
+// Signatures of the PGlite failure modes we can self-heal: on-disk data
+// corruption, whether it surfaces as a normal Postgres error on read
+// ("missing chunk number...") or as a hard WASM-runtime abort during
+// Postgres's own startup/WAL-recovery (seen after a stale postmaster.pid
+// retry — the lock is gone but the underlying data is still inconsistent).
+// A stale lock alone (handled separately by openPglite's own retry) or a
+// genuine schema/query bug should keep crashing loudly instead.
 function looksLikeCorruption(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
-  return /missing chunk number|invalid page in block|could not read block|unexpected data beyond eof|invalid memory alloc request|xx001/i.test(msg);
+  return /missing chunk number|invalid page in block|could not read block|unexpected data beyond eof|invalid memory alloc request|xx001|aborted\(|runtimeerror/i.test(msg);
 }
 
 const OFF_MIRROR_RESTORERS: [string, (row: never) => Promise<void>][] = [
@@ -646,10 +650,11 @@ async function recoverFromLatestBackup(): Promise<string> {
   const backupPath = path.join(dir, latest);
   console.error(`💥 Embedded database appears corrupted — auto-recovering from latest backup: ${backupPath}`);
 
-  await backend!.close();
-  backend = null;
+  // backend may be null here — a hard WASM abort during PGlite's own startup
+  // (e.g. corrupt WAL replay) can throw before createBackend() ever returns.
+  if (backend) { await backend.close(); backend = null; }
   const quarantine = `${dataDir}.corrupted-${Date.now()}`;
-  fs.renameSync(dataDir, quarantine);
+  if (fs.existsSync(dataDir)) fs.renameSync(dataDir, quarantine);
   console.error(`   Corrupted data quarantined at: ${quarantine}`);
 
   backend = await createBackend();
@@ -679,17 +684,22 @@ async function importLegacyJson(): Promise<boolean> {
 }
 
 export async function initDb() {
-  backend = await createBackend();
-  await ensureSchema();
-
-  // On the embedded backend, a corrupted on-disk file surfaces here (the first
-  // real read after connecting). Self-heal by restoring the latest automatic
-  // backup rather than crash-looping — see recoverFromLatestBackup().
+  // Corrupted on-disk data can surface at any point in this sequence — as a
+  // hard WASM abort while PGlite/Postgres is still starting up and replaying
+  // its WAL (openPglite's stale-lock retry gets past a false-positive lock,
+  // but the data underneath can still be broken), or as a normal Postgres
+  // error the first time a table is actually read. Either way, self-heal by
+  // restoring the latest automatic backup rather than crash-looping — see
+  // recoverFromLatestBackup(). Only attempted for the embedded backend;
+  // managed Postgres failures should keep crashing loudly.
+  const usingEmbedded = !process.env.DATABASE_URL;
   let recoveredFrom: string | null = null;
   try {
+    backend = await createBackend();
+    await ensureSchema();
     await db.read();
   } catch (err) {
-    if (be().kind !== "pglite" || !looksLikeCorruption(err)) throw err;
+    if (!usingEmbedded || !looksLikeCorruption(err)) throw err;
     recoveredFrom = await recoverFromLatestBackup();
   }
 
