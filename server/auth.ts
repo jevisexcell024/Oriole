@@ -4,6 +4,7 @@ import type { SafeUser, User } from "../shared/types.ts";
 import { db } from "./db.ts";
 import { env } from "./env.ts";
 import { decryptString } from "./crypto.ts";
+import { type PermissionKey, SYSTEM_ROLE_PERMISSIONS, parseSystemParentId } from "../shared/permissions.ts";
 
 const JWT_SECRET = env.jwtSecret;
 const COOKIE = "orcalis_session";
@@ -14,6 +15,8 @@ export function toSafeUser(u: User): SafeUser {
     id: u.id, email: u.email, name: u.name, role: u.role, avatarUrl: u.avatarUrl ? (decryptString(u.avatarUrl) ?? undefined) : undefined,
     gender: u.gender, phone: u.phone ? (decryptString(u.phone) ?? undefined) : undefined, studentClass: u.studentClass, notificationPrefs: u.notificationPrefs,
     twoFactorEnabled: !!u.twoFactorEnabled,
+    customRoleId: u.customRoleId ?? null,
+    permissions: resolvePermissions(u),
   };
 }
 
@@ -88,6 +91,58 @@ export function requireRoles(...roles: User["role"][]) {
     const user = currentUser(req);
     if (!user) return res.status(401).json({ error: "Not authenticated" });
     if (!roles.includes(user.role)) return res.status(403).json({ error: "Forbidden" });
+    (req as Request & { user: User }).user = user;
+    next();
+  };
+}
+
+// ── Fine-grained permissions (custom roles) ──
+// Additive on top of requireRole()/requireRoles() above: those two keep gating
+// every existing endpoint on the base `role` field, untouched. This layer only
+// backs new endpoints that opt into requirePermission() (starting with role
+// management itself). See shared/permissions.ts for the catalog and rationale.
+
+function isStaffRole(role: User["role"]): role is "admin" | "facilitator" | "proctor" {
+  return role === "admin" || role === "facilitator" || role === "proctor";
+}
+
+function isExpired(iso: string | null | undefined): boolean {
+  return !!iso && new Date(iso).getTime() < Date.now();
+}
+
+/** Resolves a CustomRole's own + inherited permissions. `seen` guards against a
+ *  parentRoleId cycle (which the create/update endpoints should already reject,
+ *  but this keeps resolution safe even if bad data ever slips in). */
+function resolveCustomRolePermissions(roleId: string, seen: Set<string> = new Set()): PermissionKey[] {
+  if (seen.has(roleId)) return [];
+  seen.add(roleId);
+  const sysParent = parseSystemParentId(roleId);
+  if (sysParent) return SYSTEM_ROLE_PERMISSIONS[sysParent];
+  const role = db.data!.customRoles.find((r) => r.id === roleId);
+  if (!role) return [];
+  const inherited = role.parentRoleId ? resolveCustomRolePermissions(role.parentRoleId, seen) : [];
+  return Array.from(new Set([...inherited, ...role.permissions])) as PermissionKey[];
+}
+
+/** Every permission a user currently has: their base role's default bundle,
+ *  plus (while not expired) whatever their assigned custom role grants. */
+export function resolvePermissions(user: User): PermissionKey[] {
+  const base = isStaffRole(user.role) ? SYSTEM_ROLE_PERMISSIONS[user.role] : [];
+  if (user.customRoleId && !isExpired(user.roleExpiresAt)) {
+    return Array.from(new Set([...base, ...resolveCustomRolePermissions(user.customRoleId)]));
+  }
+  return base;
+}
+
+export function hasPermission(user: User, key: PermissionKey): boolean {
+  return resolvePermissions(user).includes(key);
+}
+
+export function requirePermission(key: PermissionKey) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const user = currentUser(req);
+    if (!user) return res.status(401).json({ error: "Not authenticated" });
+    if (!hasPermission(user, key)) return res.status(403).json({ error: "Forbidden" });
     (req as Request & { user: User }).user = user;
     next();
   };

@@ -45,6 +45,37 @@ export interface User {
    *  successfully logged in from before, newest first, capped at 10. A login
    *  from an unrecognized fingerprint triggers a "new sign-in" email alert. */
   knownDevices?: { fingerprint: string; lastSeenAt: string }[];
+  /** Optional custom role (see CustomRole below), assignable on top of the base
+   *  `role`. Additive only: existing requireRole()/requireRoles() checks still
+   *  gate on `role` alone, unaffected by this field. */
+  customRoleId?: string | null;
+  /** If set and in the past, the custom role assignment above is treated as
+   *  expired (falls back to no extra permissions) without needing a cron job —
+   *  checked lazily wherever permissions are resolved. */
+  roleExpiresAt?: string | null;
+}
+
+/** A named, admin-defined bundle of fine-grained permissions (see
+ *  shared/permissions.ts) that can be assigned to a staff member via
+ *  User.customRoleId, on top of their base `role`. */
+export interface CustomRole {
+  id: string;
+  name: string;
+  description?: string;
+  /** Permission keys from shared/permissions.ts granted directly by this role
+   *  (in addition to whatever it inherits via parentRoleId). */
+  permissions: string[];
+  /** Either another CustomRole's id, or a synthetic "system:admin" /
+   *  "system:facilitator" / "system:proctor" id (see systemParentId in
+   *  shared/permissions.ts) to inherit a system role's default bundle. */
+  parentRoleId?: string | null;
+  /** Optional organizational scope this role is intended for (informational —
+   *  shown in the UI to help admins pick the right role; not yet enforced as a
+   *  data-access boundary by any endpoint). */
+  scope?: { facultyId?: string | null; departmentId?: string | null; campusId?: string | null } | null;
+  createdAt: string;
+  updatedAt: string;
+  createdBy?: string;
 }
 
 export interface NotificationPrefs {
@@ -844,6 +875,9 @@ export interface SafeUser {
   studentClass?: string;
   notificationPrefs?: NotificationPrefs;
   twoFactorEnabled?: boolean;
+  customRoleId?: string | null;
+  /** Resolved permission keys (own role + inherited), for staff users only. */
+  permissions?: string[];
 }
 
 /** A question delivered to the candidate — never includes the correct answer. */

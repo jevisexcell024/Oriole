@@ -1,5 +1,6 @@
 ﻿import { useEffect, useState } from "react";
-import { Users, Loader2, UserPlus, Trash2, X, ShieldCheck, ClipboardCheck, Radio, Check, CheckCircle2, Lock } from "lucide-react";
+import { Users, Loader2, UserPlus, Trash2, X, ShieldCheck, ClipboardCheck, Radio, Check, CheckCircle2, Lock, Shield, Clock } from "lucide-react";
+import { Link } from "react-router-dom";
 import { AdminShell } from "@/components/AdminShell";
 import { PageHeader } from "@/components/PageHeader";
 import { TableSkeleton } from "@/components/ui";
@@ -8,7 +9,8 @@ import { api } from "@/lib/api";
 import { useT, type TFn } from "@/lib/i18n";
 import { clsx } from "clsx";
 
-interface Member { id: string; name: string; email: string; role: string; }
+interface Member { id: string; name: string; email: string; role: string; customRoleId?: string | null; roleExpiresAt?: string | null; }
+interface CustomRoleOption { id: string; name: string; }
 
 // Each role's responsibility list is one pipe-separated i18n string (rather than
 // N separate keys) so the localized copy stays easy to maintain per language.
@@ -79,12 +81,17 @@ export function AdminTeam() {
   const t = useT();
   const { user } = useAuth();
   const [rows, setRows] = useState<Member[] | null>(null);
+  const [customRoles, setCustomRoles] = useState<CustomRoleOption[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [invite, setInvite] = useState(false);
   const [del, setDel] = useState<Member | null>(null);
+  const [assign, setAssign] = useState<Member | null>(null);
 
   const load = () => api.get<{ team: Member[] }>("/admin/team").then((d) => setRows(d.team)).catch((e) => setError(e.message));
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    api.get<{ roles: CustomRoleOption[] }>("/admin/roles").then((d) => setCustomRoles(d.roles)).catch(() => { /* optional layer — team page still works without it */ });
+  }, []);
 
   const adminCount = (rows ?? []).filter((r) => r.role === "admin").length;
 
@@ -106,7 +113,10 @@ export function AdminTeam() {
           <div className="flex items-center gap-2.5">
             <PageHeader title={t("ateam.title")} subtitle={t("ateam.subtitle")} />
           </div>
-          <button onClick={() => setInvite(true)} className="btn btn-primary"><UserPlus className="h-4 w-4" /> {t("ateam.invite")}</button>
+          <div className="flex items-center gap-2">
+            <Link to="/admin/roles" className="btn btn-outline"><Shield className="h-4 w-4" /> {t("anav.roles")}</Link>
+            <button onClick={() => setInvite(true)} className="btn btn-primary"><UserPlus className="h-4 w-4" /> {t("ateam.invite")}</button>
+          </div>
         </div>
 
         {error && <p className="mt-4 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">{error}</p>}
@@ -122,13 +132,14 @@ export function AdminTeam() {
 
         <div className="card mt-5 overflow-hidden">
           {!rows ? (
-            <TableSkeleton rows={4} cells={2} />
+            <TableSkeleton rows={4} cells={3} />
           ) : (
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-[var(--border)] text-left text-[11px] uppercase tracking-wide text-[var(--muted)]">
                   <th className="px-4 py-3 font-semibold">{t("ateam.colMember")}</th>
                   <th className="px-3 py-3 font-semibold">{t("ateam.colRole")}</th>
+                  <th className="px-3 py-3 font-semibold">{t("ateam.colCustomRole")}</th>
                   <th className="px-3 py-3 text-right font-semibold">{t("ateam.colActions")}</th>
                 </tr>
               </thead>
@@ -149,6 +160,15 @@ export function AdminTeam() {
                         className={clsx("rounded-lg border-0 px-2 py-1 text-xs font-semibold outline-none", ROLE_PILL[m.role])}>
                         {ROLES.map((r) => <option key={r.value} value={r.value} className="bg-[var(--card)] text-[var(--fg)]">{t(r.labelKey)}</option>)}
                       </select>
+                    </td>
+                    <td className="px-3 py-3">
+                      <button onClick={() => setAssign(m)} className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-[var(--muted)] hover:bg-white/[0.05] hover:text-[var(--fg)]">
+                        <Shield className="h-3.5 w-3.5" />
+                        {m.customRoleId ? (customRoles.find((r) => r.id === m.customRoleId)?.name ?? t("ateam.customRoleUnknown")) : t("ateam.customRoleNone")}
+                        {m.customRoleId && m.roleExpiresAt && (
+                          <span className="inline-flex items-center gap-0.5 text-[10px] text-amber-400"><Clock className="h-2.5 w-2.5" /> {new Date(m.roleExpiresAt).toLocaleDateString()}</span>
+                        )}
+                      </button>
                     </td>
                     <td className="px-3 py-3 text-right">
                       {(() => {
@@ -174,7 +194,48 @@ export function AdminTeam() {
 
       {invite && <InviteModal onClose={() => setInvite(false)} onDone={() => { setInvite(false); load(); }} />}
       {del && <DeleteModal member={del} onClose={() => setDel(null)} onDone={() => { setDel(null); load(); }} />}
+      {assign && <AssignRoleModal member={assign} customRoles={customRoles} onClose={() => setAssign(null)} onDone={() => { setAssign(null); load(); }} />}
     </AdminShell>
+  );
+}
+
+function AssignRoleModal({ member, customRoles, onClose, onDone }: { member: Member; customRoles: CustomRoleOption[]; onClose: () => void; onDone: () => void }) {
+  const t = useT();
+  const [customRoleId, setCustomRoleId] = useState<string>(member.customRoleId ?? "");
+  const [expiresAt, setExpiresAt] = useState<string>(member.roleExpiresAt ? member.roleExpiresAt.slice(0, 10) : "");
+  const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
+  async function save() {
+    setBusy(true); setErr(null);
+    try {
+      await api.patch(`/admin/team/${member.id}/custom-role`, {
+        customRoleId: customRoleId || null,
+        expiresAt: customRoleId && expiresAt ? new Date(expiresAt).toISOString() : null,
+      });
+      onDone();
+    } catch (e) { setErr((e as Error).message); setBusy(false); }
+  }
+  return (
+    <Modal title={t("ateam.assignRoleTitle")} onClose={onClose}>
+      <div className="mt-4 space-y-3">
+        <p className="text-sm text-[var(--muted)]">{t("ateam.assignRoleDesc", { name: member.name })}</p>
+        <Field label={t("arole.title")}>
+          <select className="input h-10" value={customRoleId} onChange={(e) => setCustomRoleId(e.target.value)}>
+            <option value="">{t("ateam.customRoleNone")}</option>
+            {customRoles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+          </select>
+        </Field>
+        {customRoleId && (
+          <Field label={t("ateam.expiresOn")}>
+            <input type="date" className="input h-10" value={expiresAt} onChange={(e) => setExpiresAt(e.target.value)} />
+          </Field>
+        )}
+        {err && <p className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-400">{err}</p>}
+      </div>
+      <div className="mt-5 flex justify-end gap-2">
+        <button onClick={onClose} className="rounded-lg px-3 py-2 text-sm font-medium text-[var(--muted)] hover:text-[var(--fg)]">{t("ateam.cancel")}</button>
+        <button onClick={save} disabled={busy} className="btn btn-primary disabled:opacity-50">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} {t("ateam.save")}</button>
+      </div>
+    </Modal>
   );
 }
 

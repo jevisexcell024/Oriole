@@ -12,7 +12,7 @@ import { BCRYPT_COST } from "./env.ts";
 import type {
   User, Exam, Question, Registration, Attempt, Answer, ProctorEvent, Certificate, Snapshot, EmailMessage, Announcement, AnnouncementRead, OrgSettings, AuditLog,
   Faculty, Department, Program, Campus, AcademicYear, ClassGroup, RegradeRequest, Book, ReadingProgress,
-  ResourceVersion, ResourceBookmark, ResourceRating, ResourceDownloadLog, GeofenceLog,
+  ResourceVersion, ResourceBookmark, ResourceRating, ResourceDownloadLog, GeofenceLog, CustomRole,
 } from "../shared/types.ts";
 import { DEFAULT_LOCKDOWN, DEFAULT_LEARNING_STRUCTURE } from "../shared/types.ts";
 
@@ -48,6 +48,7 @@ export interface Schema {
   resourceRatings: ResourceRating[];
   resourceDownloadLogs: ResourceDownloadLog[];
   announcementReads: AnnouncementRead[];
+  customRoles: CustomRole[];
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -61,6 +62,7 @@ const defaultData: Schema = {
   books: [], readingProgress: [],
   resourceVersions: [], resourceBookmarks: [], resourceRatings: [], resourceDownloadLogs: [],
   announcementReads: [],
+  customRoles: [],
 };
 
 // Each collection is stored in a Postgres table as (id, doc jsonb). This keeps a
@@ -89,6 +91,7 @@ const TABLES: { key: keyof Schema; table: string; idField: string }[] = [
   { key: "resourceRatings", table: "resource_ratings", idField: "id" },
   { key: "resourceDownloadLogs", table: "resource_download_logs", idField: "id" },
   { key: "announcementReads", table: "announcement_reads", idField: "id" },
+  { key: "customRoles", table: "custom_roles", idField: "id" },
 ];
 
 const TABLE_BY_KEY = new Map(TABLES.map((t) => [t.key, t]));

@@ -60,6 +60,7 @@ const AdminDashboard = lazy(() => import("@/pages/AdminDashboard").then((m) => (
 import { AdminClasses, ClassDetail } from "@/pages/AdminClasses";
 import { AdminLibrary } from "@/pages/AdminLibrary";
 import { AdminTeam } from "@/pages/AdminTeam";
+import { AdminRoles } from "@/pages/AdminRoles";
 import { can, isStaff, landingFor, type Cap } from "@/lib/roles";
 
 function Protected({ children, cap, staff }: { children: ReactNode; cap?: Cap; staff?: boolean }) {
@@ -148,6 +149,7 @@ function App() {
         <Route path="/admin/settings" element={<Protected cap="org"><AdminSettings /></Protected>} />
         <Route path="/admin/account" element={<Protected staff><AdminAccount /></Protected>} />
         <Route path="/admin/team" element={<Protected cap="org"><AdminTeam /></Protected>} />
+        <Route path="/admin/roles" element={<Protected cap="org"><AdminRoles /></Protected>} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
       </Suspense>

@@ -68,3 +68,28 @@ export const twoFaDisableSchema = z.object({
   password: z.string().max(200).optional(),
   code: z.string().trim().max(20).optional(),
 });
+
+// Custom role CRUD (see shared/permissions.ts for the permission catalog and
+// shared/types.ts for the CustomRole shape). `permissions` is validated as a
+// plain string array here — membership in the actual catalog is checked in the
+// handler (server/index.ts) so the error message can list the specific bad keys.
+const roleScopeSchema = z.object({
+  facultyId: z.string().trim().max(60).nullable().optional(),
+  departmentId: z.string().trim().max(60).nullable().optional(),
+  campusId: z.string().trim().max(60).nullable().optional(),
+}).nullable().optional();
+
+export const customRoleCreateSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  description: z.string().trim().max(400).optional(),
+  permissions: z.array(z.string().trim().min(1).max(60)).max(200).default([]),
+  parentRoleId: z.string().trim().max(60).nullable().optional(),
+  scope: roleScopeSchema,
+});
+
+export const customRoleUpdateSchema = customRoleCreateSchema.partial();
+
+export const roleAssignSchema = z.object({
+  customRoleId: z.string().trim().max(60).nullable(),
+  expiresAt: z.string().trim().max(40).nullable().optional(),
+});

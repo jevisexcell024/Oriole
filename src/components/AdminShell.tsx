@@ -1,6 +1,6 @@
 ﻿import { type ReactNode, useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { LogOut, BookOpen, BarChart3, Radio, CalendarClock, CalendarDays, LineChart, Award, Users, ClipboardCheck, GraduationCap, CalendarCheck, Bell, ShieldAlert, FileText, HeartPulse, Building2, ScrollText, Settings, LayoutDashboard, Users2, Menu, X, ChevronsLeft, MessageSquareWarning, Webhook, Library } from "lucide-react";
+import { LogOut, BookOpen, BarChart3, Radio, CalendarClock, CalendarDays, LineChart, Award, Users, ClipboardCheck, GraduationCap, CalendarCheck, Bell, ShieldAlert, FileText, HeartPulse, Building2, ScrollText, Settings, LayoutDashboard, Users2, Menu, X, ChevronsLeft, MessageSquareWarning, Webhook, Library, ShieldCheck } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { useT } from "@/lib/i18n";
 import { can, type Cap } from "@/lib/roles";
@@ -51,6 +51,7 @@ const SECTIONS: { labelKey: string; items: NavItem[] }[] = [
     items: [
       { to: "/admin/organization", labelKey: "anav.organization", icon: Building2, cap: "org" },
       { to: "/admin/team", labelKey: "anav.team", icon: Users, cap: "org" },
+      { to: "/admin/roles", labelKey: "anav.roles", icon: ShieldCheck, cap: "org" },
       { to: "/admin/integrations", labelKey: "anav.integrations", icon: Webhook, cap: "org" },
       { to: "/admin/audit-logs", labelKey: "anav.auditLogs", icon: ScrollText, cap: "org" },
       { to: "/admin/settings", labelKey: "anav.settings", icon: Settings, cap: "org" },

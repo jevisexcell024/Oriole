@@ -13,7 +13,7 @@ import { sendMail, mailerStatus, verifySmtp, buildHtml, ctaButton, esc } from ".
 import { sendSms, smsEnabled, smsStatus, recentSms } from "./sms.ts";
 import {
   clearSession, currentUser, issueSession, requireAuth, requireRole, requireRoles, toSafeUser,
-  issuePending2fa, pending2faUserId, clearPending2fa,
+  issuePending2fa, pending2faUserId, clearPending2fa, requirePermission, resolvePermissions,
 } from "./auth.ts";
 import { generateSecret, verifyTotp, verifyTotpStep, otpauthUrl, generateBackupCodes } from "./totp.ts";
 import { microsoftEnabled, authorizeUrl, exchangeCode } from "./sso.ts";
@@ -25,7 +25,10 @@ import { encryptString, decryptString, encryptionEnabled } from "./crypto.ts";
 import { scheduleRetention, stopRetention } from "./retention.ts";
 import { scheduleBackup, stopBackup, runBackup, backupStatus } from "./backup.ts";
 import { validate } from "./validate.ts";
-import { loginSchema, teamCreateSchema, passwordChangeSchema, passwordResetSchema, twoFaCodeSchema, twoFaDisableSchema } from "./schemas.ts";
+import {
+  loginSchema, teamCreateSchema, passwordChangeSchema, passwordResetSchema, twoFaCodeSchema, twoFaDisableSchema,
+  customRoleCreateSchema, customRoleUpdateSchema, roleAssignSchema,
+} from "./schemas.ts";
 import { verifySeb } from "./seb.ts";
 import { nextStreak, displayStreak } from "./streak.ts";
 import { studentCanSeeBook, studentsInScope, ratingSummary, audiencesFor } from "./library.ts";
@@ -44,8 +47,9 @@ const GRADERS: ("admin" | "facilitator")[] = ["admin", "facilitator"];
 import type {
   Answer, Attempt, Certificate, Exam, ExamListItem, ProctorEvent, PublicQuestion, Question, Registration, RubricCriterion, RegradeRequest, WebhookEvent,
   Book, BookGenre, ReadingProgress, ResourceType, ResourceDifficulty, ResourceVersion, ResourceBookmark, ResourceRating, ResourceDownloadLog, User,
-  LearningStructureMode, AnnouncementRead,
+  LearningStructureMode, AnnouncementRead, CustomRole,
 } from "../shared/types.ts";
+import { PERMISSIONS, PERMISSION_KEYS, isPermissionKey, SYSTEM_ROLE_PERMISSIONS, systemParentId, parseSystemParentId } from "../shared/permissions.ts";
 import {
   DEFAULT_LOCKDOWN, WEBHOOK_EVENTS, PROCTOR_EVENT_TYPES, BOOK_GENRES, RESOURCE_TYPES, RESOURCE_DIFFICULTIES,
   LEARNING_STRUCTURE_MODES, DEFAULT_LEARNING_STRUCTURE,
@@ -685,7 +689,12 @@ app.post("/api/attempts/:id/geofence-ping", requireAuth, async (req, res) => {
 });
 
 /** A proctor/facilitator confirms (or clears) that a candidate's photo-ID matches them. */
-app.post("/api/admin/registrations/:id/verify-id", requireRoles(...STAFF), async (req, res) => {
+// Batch 7 of the permission migration (see test/permissions.test.ts):
+// monitor.view covers the STAFF-gated reads, monitor.control the STAFF-gated
+// intervention actions (facilitator's bundle was widened to include it, to
+// match the real gate on pause/terminate/message/etc.). The aggregate
+// integrity dashboard is GRADERS-only, so it uses results.view instead.
+app.post("/api/admin/registrations/:id/verify-id", requirePermission("monitor.control"), async (req, res) => {
   const actor = currentUser(req)!;
   const reg = db.data!.registrations.find((r) => r.id === req.params.id);
   if (!reg) return res.status(404).json({ error: "Registration not found." });
@@ -1666,7 +1675,11 @@ function questionDefaults(type: Question["type"]): QDefaults {
   return base;
 }
 
-app.get("/api/admin/exams", requireRoles(...GRADERS), (_req, res) => {
+// Batch 5 of the permission migration (see test/permissions.test.ts): the
+// list/overview reads match GRADERS via exams.view; every mutation below
+// (create/duplicate/edit/assign/questions/publish/delete) was
+// requireRole("admin") alone and maps to exams.edit/create/publish/delete.
+app.get("/api/admin/exams", requirePermission("exams.view"), (_req, res) => {
   const items = db.data!.exams.map((exam) => ({
     exam,
     questionCount: db.data!.questions.filter((q) => q.examId === exam.id).length,
@@ -1676,7 +1689,7 @@ app.get("/api/admin/exams", requireRoles(...GRADERS), (_req, res) => {
 });
 
 // Aggregated data for the Manage-Exams dashboard (cards, charts, exam cards).
-app.get("/api/admin/exams-overview", requireRoles(...GRADERS), (_req, res) => {
+app.get("/api/admin/exams-overview", requirePermission("exams.view"), (_req, res) => {
   const d = db.data!;
   const realExams = d.exams.filter((e) => !e.practice);
   const candidateIds = new Set(d.users.filter((u) => u.role === "candidate").map((u) => u.id));
@@ -1746,7 +1759,7 @@ app.get("/api/admin/exams-overview", requireRoles(...GRADERS), (_req, res) => {
   });
 });
 
-app.post("/api/admin/exams", requireRole("admin"), async (req, res) => {
+app.post("/api/admin/exams", requirePermission("exams.create"), async (req, res) => {
   const settings = getSettings();
   const exam: Exam = {
     id: nanoid(10),
@@ -1774,7 +1787,7 @@ app.post("/api/admin/exams", requireRole("admin"), async (req, res) => {
 });
 
 // Duplicate an exam as a template — clones the exam and all its questions (draft).
-app.post("/api/admin/exams/:id/duplicate", requireRole("admin"), async (req, res) => {
+app.post("/api/admin/exams/:id/duplicate", requirePermission("exams.create"), async (req, res) => {
   const src = db.data!.exams.find((e) => e.id === req.params.id);
   if (!src) return res.status(404).json({ error: "Exam not found." });
   const clone: Exam = JSON.parse(JSON.stringify(src));
@@ -1800,7 +1813,7 @@ app.post("/api/admin/exams/:id/duplicate", requireRole("admin"), async (req, res
   res.json({ exam: clone });
 });
 
-app.get("/api/admin/exams/:id", requireRole("admin"), (req, res) => {
+app.get("/api/admin/exams/:id", requirePermission("exams.edit"), (req, res) => {
   const exam = db.data!.exams.find((e) => e.id === req.params.id);
   if (!exam) return res.status(404).json({ error: "Exam not found." });
   const questions = db.data!.questions.filter((q) => q.examId === exam.id);
@@ -1809,14 +1822,18 @@ app.get("/api/admin/exams/:id", requireRole("admin"), (req, res) => {
 });
 
 // ---- admin: candidates & assignment ----
-app.get("/api/admin/candidates", requireRoles(...GRADERS), (_req, res) => {
+// Batch 3 of the permission migration (see test/permissions.test.ts): the
+// directory list stays GRADERS-equivalent via students.view; every write
+// below was requireRole("admin") alone and maps to students.manage (or
+// students.delete for the one actual account-deletion route).
+app.get("/api/admin/candidates", requirePermission("students.view"), (_req, res) => {
   const candidates = db.data!.users
     .filter((u) => u.role === "candidate")
     .map((u) => ({ id: u.id, name: u.name, email: u.email }));
   res.json({ candidates });
 });
 
-app.post("/api/admin/candidates", requireRole("admin"), async (req, res) => {
+app.post("/api/admin/candidates", requirePermission("students.manage"), async (req, res) => {
   const { name, email, password } = req.body ?? {};
   if (!name?.trim() || !email?.trim() || !password || String(password).length < 6) {
     return res.status(400).json({ error: "Name, email and a password (min 6 characters) are required." });
@@ -1847,7 +1864,7 @@ app.post("/api/admin/candidates", requireRole("admin"), async (req, res) => {
 // the original invitation never arrived (e.g. an SMTP outage). We only ever
 // store a bcrypt hash, so there's no original password to resend as-is; this
 // issues a fresh temporary one and invalidates the old one.
-app.post("/api/admin/candidates/:id/resend-invite", requireRole("admin"), async (req, res) => {
+app.post("/api/admin/candidates/:id/resend-invite", requirePermission("students.manage"), async (req, res) => {
   const user = db.data!.users.find((u) => u.id === req.params.id && u.role === "candidate");
   if (!user) return res.status(404).json({ error: "Student not found." });
   const tempPassword = "dti-" + nanoid(6);
@@ -1859,7 +1876,7 @@ app.post("/api/admin/candidates/:id/resend-invite", requireRole("admin"), async 
   res.json({ ok: result.delivery !== "failed", delivery: result.delivery, error: result.error });
 });
 
-app.post("/api/admin/candidates/bulk", requireRole("admin"), async (req, res) => {
+app.post("/api/admin/candidates/bulk", requirePermission("students.manage"), async (req, res) => {
   type Row = { name?: string; email?: string; studentRef?: string; studentClass?: string; gender?: string; age?: unknown; phone?: string };
   let rows: Row[] = Array.isArray(req.body?.rows) ? req.body.rows : [];
   if (typeof req.body?.csv === "string") {
@@ -1909,7 +1926,11 @@ app.post("/api/admin/candidates/bulk", requireRole("admin"), async (req, res) =>
   }
 });
 
-app.get("/api/admin/emails", requireRoles(...GRADERS), async (_req, res) => {
+// Batch 8 of the permission migration (see test/permissions.test.ts): every
+// mapping here reuses an established key against its already-correct default
+// bundle. communication.view_log is the email delivery log (should have been
+// part of Batch 2's communication group, caught here instead).
+app.get("/api/admin/emails", requirePermission("communication.view_log"), async (_req, res) => {
   res.json({ emails: await emailStore.recent(100) });
 });
 
@@ -1946,7 +1967,7 @@ app.post("/api/admin/dev/purge-load-test-data", requireRole("admin"), async (_re
   res.json({ ok: true, removed: removedCounts });
 });
 
-app.patch("/api/admin/candidates/:id/password", requireRole("admin"), validate(passwordResetSchema), async (req, res) => {
+app.patch("/api/admin/candidates/:id/password", requirePermission("students.manage"), validate(passwordResetSchema), async (req, res) => {
   const user = db.data!.users.find((u) => u.id === req.params.id && u.role === "candidate");
   if (!user) return res.status(404).json({ error: "Candidate not found." });
   const { password } = req.body ?? {};
@@ -1959,7 +1980,7 @@ app.patch("/api/admin/candidates/:id/password", requireRole("admin"), validate(p
   res.json({ ok: true });
 });
 
-app.delete("/api/admin/candidates/:id", requireRole("admin"), async (req, res) => {
+app.delete("/api/admin/candidates/:id", requirePermission("students.delete"), async (req, res) => {
   const id = req.params.id;
   const user = db.data!.users.find((u) => u.id === id && u.role === "candidate");
   if (!user) return res.status(404).json({ error: "Candidate not found." });
@@ -1975,7 +1996,7 @@ app.delete("/api/admin/candidates/:id", requireRole("admin"), async (req, res) =
   res.json({ ok: true });
 });
 
-app.post("/api/admin/exams/:id/assignments", requireRole("admin"), async (req, res) => {
+app.post("/api/admin/exams/:id/assignments", requirePermission("exams.edit"), async (req, res) => {
   const exam = db.data!.exams.find((e) => e.id === req.params.id);
   if (!exam) return res.status(404).json({ error: "Exam not found." });
   const candidateId: string = req.body?.candidateId;
@@ -1992,7 +2013,7 @@ app.post("/api/admin/exams/:id/assignments", requireRole("admin"), async (req, r
   res.json({ ok: true });
 });
 
-app.post("/api/admin/exams/:id/assign-bulk", requireRole("admin"), async (req, res) => {
+app.post("/api/admin/exams/:id/assign-bulk", requirePermission("exams.edit"), async (req, res) => {
   const exam = db.data!.exams.find((e) => e.id === req.params.id);
   if (!exam) return res.status(404).json({ error: "Exam not found." });
   const candidateIds: string[] = Array.isArray(req.body?.candidateIds) ? req.body.candidateIds : [];
@@ -2020,7 +2041,7 @@ app.post("/api/admin/exams/:id/assign-bulk", requireRole("admin"), async (req, r
   res.json({ assigned, confirmed });
 });
 
-app.delete("/api/admin/exams/:id/assignments/:candidateId", requireRole("admin"), async (req, res) => {
+app.delete("/api/admin/exams/:id/assignments/:candidateId", requirePermission("exams.edit"), async (req, res) => {
   const { id, candidateId } = req.params;
   // Don't unassign a candidate who already has an attempt (preserve their record).
   const hasAttempt = db.data!.attempts.some((a) => a.examId === id && a.candidateId === candidateId);
@@ -2032,7 +2053,7 @@ app.delete("/api/admin/exams/:id/assignments/:candidateId", requireRole("admin")
   res.json({ ok: true });
 });
 
-app.patch("/api/admin/exams/:id", requireRole("admin"), async (req, res) => {
+app.patch("/api/admin/exams/:id", requirePermission("exams.edit"), async (req, res) => {
   const exam = db.data!.exams.find((e) => e.id === req.params.id);
   if (!exam) return res.status(404).json({ error: "Exam not found." });
   const b = req.body ?? {};
@@ -2120,7 +2141,7 @@ app.patch("/api/admin/exams/:id", requireRole("admin"), async (req, res) => {
   res.json({ exam });
 });
 
-app.delete("/api/admin/exams/:id", requireRole("admin"), async (req, res) => {
+app.delete("/api/admin/exams/:id", requirePermission("exams.delete"), async (req, res) => {
   const examId = req.params.id;
   // Cascade: remove the exam and everything tied to it (no orphaned records).
   const attemptIds = db.data!.attempts.filter((a) => a.examId === examId).map((a) => a.id);
@@ -2137,7 +2158,7 @@ app.delete("/api/admin/exams/:id", requireRole("admin"), async (req, res) => {
   res.json({ ok: true });
 });
 
-app.post("/api/admin/exams/:id/questions", requireRole("admin"), async (req, res) => {
+app.post("/api/admin/exams/:id/questions", requirePermission("exams.edit"), async (req, res) => {
   const exam = db.data!.exams.find((e) => e.id === req.params.id);
   if (!exam) return res.status(404).json({ error: "Exam not found." });
   const type: Question["type"] = req.body?.type ?? "mcq";
@@ -2148,7 +2169,7 @@ app.post("/api/admin/exams/:id/questions", requireRole("admin"), async (req, res
 });
 
 // Bulk-import questions into an exam (client parses CSV → array of drafts).
-app.post("/api/admin/exams/:id/questions/import", requireRole("admin"), async (req, res) => {
+app.post("/api/admin/exams/:id/questions/import", requirePermission("exams.edit"), async (req, res) => {
   const exam = db.data!.exams.find((e) => e.id === req.params.id);
   if (!exam) return res.status(404).json({ error: "Exam not found." });
   const rows = Array.isArray(req.body?.questions) ? req.body.questions : [];
@@ -2182,7 +2203,7 @@ app.post("/api/admin/exams/:id/questions/import", requireRole("admin"), async (r
 });
 
 // Clone existing bank questions into this exam (reuse across exams — "pick from bank").
-app.post("/api/admin/exams/:id/questions/clone", requireRole("admin"), async (req, res) => {
+app.post("/api/admin/exams/:id/questions/clone", requirePermission("exams.edit"), async (req, res) => {
   const exam = db.data!.exams.find((e) => e.id === req.params.id);
   if (!exam) return res.status(404).json({ error: "Exam not found." });
   const ids: string[] = Array.isArray(req.body?.questionIds) ? req.body.questionIds.map(String) : [];
@@ -2203,7 +2224,7 @@ app.post("/api/admin/exams/:id/questions/clone", requireRole("admin"), async (re
   res.json({ created });
 });
 
-app.patch("/api/admin/questions/:id", requireRole("admin"), async (req, res) => {
+app.patch("/api/admin/questions/:id", requirePermission("exams.edit"), async (req, res) => {
   const q = db.data!.questions.find((x) => x.id === req.params.id);
   if (!q) return res.status(404).json({ error: "Question not found." });
   const b = req.body ?? {};
@@ -2262,14 +2283,14 @@ app.patch("/api/admin/questions/:id", requireRole("admin"), async (req, res) => 
   res.json({ question: q });
 });
 
-app.delete("/api/admin/questions/:id", requireRole("admin"), async (req, res) => {
+app.delete("/api/admin/questions/:id", requirePermission("exams.edit"), async (req, res) => {
   db.data!.questions = db.data!.questions.filter((q) => q.id !== req.params.id);
   await db.write();
   res.json({ ok: true });
 });
 
 // AI difficulty checker: estimate a question's difficulty band via Claude.
-app.post("/api/admin/questions/:id/assess-difficulty", requireRole("admin"), async (req, res) => {
+app.post("/api/admin/questions/:id/assess-difficulty", requirePermission("exams.edit"), async (req, res) => {
   if (!aiEnabled()) return res.status(503).json({ error: "AI is not configured. Set ANTHROPIC_API_KEY on the server to enable difficulty suggestions." });
   const q = db.data!.questions.find((x) => x.id === req.params.id);
   if (!q) return res.status(404).json({ error: "Question not found." });
@@ -2283,7 +2304,7 @@ app.post("/api/admin/questions/:id/assess-difficulty", requireRole("admin"), asy
   }
 });
 
-app.post("/api/admin/exams/:id/questions/reorder", requireRole("admin"), async (req, res) => {
+app.post("/api/admin/exams/:id/questions/reorder", requirePermission("exams.edit"), async (req, res) => {
   const examId = req.params.id;
   const orderedIds: string[] = req.body?.orderedIds ?? [];
   const others = db.data!.questions.filter((q) => q.examId !== examId);
@@ -2299,7 +2320,7 @@ app.post("/api/admin/exams/:id/questions/reorder", requireRole("admin"), async (
   res.json({ ok: true });
 });
 
-app.post("/api/admin/exams/:id/publish", requireRole("admin"), async (req, res) => {
+app.post("/api/admin/exams/:id/publish", requirePermission("exams.publish"), async (req, res) => {
   const exam = db.data!.exams.find((e) => e.id === req.params.id);
   if (!exam) return res.status(404).json({ error: "Exam not found." });
   const publish = req.body?.publish !== false;
@@ -2373,7 +2394,7 @@ app.post("/api/admin/exams/:id/publish", requireRole("admin"), async (req, res) 
 });
 
 // ---- admin: question bank (every question across all exams) ----
-app.get("/api/admin/questions", requireRole("admin"), (_req, res) => {
+app.get("/api/admin/questions", requirePermission("exams.edit"), (_req, res) => {
   const questions = db.data!.questions.map((q) => {
     const exam = db.data!.exams.find((e) => e.id === q.examId);
     return { ...q, examTitle: exam?.title ?? "—", examCode: exam?.code ?? "", examStatus: exam?.status ?? "draft" };
@@ -2382,7 +2403,10 @@ app.get("/api/admin/questions", requireRole("admin"), (_req, res) => {
 });
 
 // ---- admin: results & analytics ----
-app.get("/api/admin/results", requireRoles(...GRADERS), async (_req, res) => {
+// Batch 4 of the permission migration (see test/permissions.test.ts):
+// results.view/release/export and grading.regrade already matched GRADERS
+// exactly; results.manage (new) covers the one admin-only recompute action.
+app.get("/api/admin/results", requirePermission("results.view"), async (_req, res) => {
   const userName = (id: string) => db.data!.users.find((u) => u.id === id)?.name ?? "Candidate";
   const examOf = (id: string) => db.data!.exams.find((e) => e.id === id);
   const submitted = db.data!.attempts.filter((a) => a.status === "submitted" && !examOf(a.examId)?.practice);
@@ -2452,7 +2476,7 @@ app.get("/api/admin/results", requireRoles(...GRADERS), async (_req, res) => {
 });
 
 // Results grouped by cohort (class) — each class's assigned exams with member-scoped stats.
-app.get("/api/admin/results-by-cohort", requireRoles(...GRADERS), async (_req, res) => {
+app.get("/api/admin/results-by-cohort", requirePermission("results.view"), async (_req, res) => {
   const examOf = (id: string) => db.data!.exams.find((e) => e.id === id);
   const cohorts = db.data!.classes.map((cls) => {
     const memberSet = new Set(cls.memberIds);
@@ -2481,7 +2505,7 @@ app.get("/api/admin/results-by-cohort", requireRoles(...GRADERS), async (_req, r
 });
 
 // Item analysis: per-question correct-rate, difficulty and discrimination for an exam.
-app.get("/api/admin/exams/:id/item-analysis", requireRoles(...GRADERS), async (req, res) => {
+app.get("/api/admin/exams/:id/item-analysis", requirePermission("results.view"), async (req, res) => {
   const exam = db.data!.exams.find((e) => e.id === req.params.id);
   if (!exam) return res.status(404).json({ error: "Exam not found." });
   const questions = db.data!.questions.filter((q) => q.examId === exam.id);
@@ -2550,7 +2574,7 @@ app.get("/api/admin/exams/:id/item-analysis", requireRoles(...GRADERS), async (r
 });
 
 // Essay similarity: flag pairs of candidates whose written answers are highly similar.
-app.get("/api/admin/exams/:id/similarity", requireRoles(...GRADERS), async (req, res) => {
+app.get("/api/admin/exams/:id/similarity", requirePermission("results.view"), async (req, res) => {
   const exam = db.data!.exams.find((e) => e.id === req.params.id);
   if (!exam) return res.status(404).json({ error: "Exam not found." });
   const questions = db.data!.questions.filter((q) => q.examId === exam.id && (q.type === "essay" || q.type === "short" || q.type === "code"));
@@ -2579,7 +2603,7 @@ app.get("/api/admin/exams/:id/similarity", requireRoles(...GRADERS), async (req,
 });
 
 // Cohort & term-over-term comparison + at-risk student flagging.
-app.get("/api/admin/analytics/cohorts", requireRoles(...GRADERS), (_req, res) => {
+app.get("/api/admin/analytics/cohorts", requirePermission("results.view"), (_req, res) => {
   const examOf = (id: string) => db.data!.exams.find((e) => e.id === id);
   const submitted = db.data!.attempts.filter((a) => a.status === "submitted" && !examOf(a.examId)?.practice);
   const sc = (a: Attempt) => a.score ?? 0;
@@ -2729,7 +2753,7 @@ function buildStudentTrend(candidateId: string): import("../shared/types.ts").St
 
 // Per-student progress report (aggregated; rendered as a printable PDF on the
 // client, and as the richer AdminStudentReport bento view on screen).
-app.get("/api/admin/students/:id/report", requireRoles(...STAFF), async (req, res) => {
+app.get("/api/admin/students/:id/report", requirePermission("students.report_view"), async (req, res) => {
   const student = db.data!.users.find((u) => u.id === req.params.id && u.role === "candidate");
   if (!student) return res.status(404).json({ error: "Student not found." });
   const examOf = (id: string) => db.data!.exams.find((e) => e.id === id);
@@ -2827,7 +2851,7 @@ app.get("/api/admin/students/:id/report", requireRoles(...STAFF), async (req, re
 });
 
 // Set a student's accommodation (extra minutes added to every exam deadline).
-app.patch("/api/admin/candidates/:id/accommodations", requireRole("admin"), async (req, res) => {
+app.patch("/api/admin/candidates/:id/accommodations", requirePermission("students.manage"), async (req, res) => {
   const u = db.data!.users.find((x) => x.id === req.params.id && x.role === "candidate");
   if (!u) return res.status(404).json({ error: "Student not found." });
   const m = Number(req.body?.extraMinutes);
@@ -2838,7 +2862,7 @@ app.patch("/api/admin/candidates/:id/accommodations", requireRole("admin"), asyn
 });
 
 // AI natural-language narrative of a student's cross-subject trend.
-app.post("/api/admin/students/:id/trend-narrative", requireRole("admin"), async (req, res) => {
+app.post("/api/admin/students/:id/trend-narrative", requirePermission("students.manage"), async (req, res) => {
   if (!aiEnabled()) return res.status(503).json({ error: "AI is not configured. Set ANTHROPIC_API_KEY or AI_BASE_URL+AI_API_KEY on the server." });
   const student = db.data!.users.find((u) => u.id === req.params.id && u.role === "candidate");
   if (!student) return res.status(404).json({ error: "Student not found." });
@@ -2859,7 +2883,7 @@ app.post("/api/admin/students/:id/trend-narrative", requireRole("admin"), async 
   }
 });
 
-app.get("/api/admin/attempts/:id", requireRoles(...STAFF), async (req, res) => {
+app.get("/api/admin/attempts/:id", requirePermission("monitor.view"), async (req, res) => {
   const attempt = db.data!.attempts.find((a) => a.id === req.params.id);
   if (!attempt) return res.status(404).json({ error: "Attempt not found." });
   const exam = db.data!.exams.find((e) => e.id === attempt.examId)!;
@@ -2916,7 +2940,9 @@ app.get("/api/admin/attempts/:id", requireRoles(...STAFF), async (req, res) => {
 
 // ---------------------------------------------------------------- MANUAL GRADING
 // Review queue: submitted attempts that still have short answers awaiting a human grade.
-app.get("/api/admin/grading/queue", requireRoles(...GRADERS), async (_req, res) => {
+// Batch 6 of the permission migration (see test/permissions.test.ts):
+// grading.view/grading.grade already matched GRADERS exactly.
+app.get("/api/admin/grading/queue", requirePermission("grading.view"), async (_req, res) => {
   const pendingAttempts = db.data!.attempts.filter((a) => a.gradingStatus === "pending_review");
   const ansMap = await answerStore.forAttempts(pendingAttempts.map((a) => a.id));
   const queue = pendingAttempts
@@ -2941,7 +2967,7 @@ app.get("/api/admin/grading/queue", requireRoles(...GRADERS), async (_req, res) 
 });
 
 // Award points (and optional feedback) to a single answer, then recompute the attempt.
-app.patch("/api/admin/answers/:id/grade", requireRoles(...GRADERS), async (req, res) => {
+app.patch("/api/admin/answers/:id/grade", requirePermission("grading.grade"), async (req, res) => {
   const ans = await answerStore.byId(String(req.params.id));
   if (!ans) return res.status(404).json({ error: "Answer not found." });
   const question = db.data!.questions.find((q) => q.id === ans.questionId);
@@ -2979,7 +3005,7 @@ app.patch("/api/admin/answers/:id/grade", requireRoles(...GRADERS), async (req, 
 });
 
 // Publish a graded result: finalize score, issue certificate on pass, mark released.
-app.post("/api/admin/attempts/:id/release", requireRoles(...GRADERS), async (req, res) => {
+app.post("/api/admin/attempts/:id/release", requirePermission("results.release"), async (req, res) => {
   const attempt = db.data!.attempts.find((a) => a.id === req.params.id);
   if (!attempt) return res.status(404).json({ error: "Attempt not found." });
   const answers = await answerStore.forAttempt(attempt.id);
@@ -3000,7 +3026,7 @@ app.post("/api/admin/attempts/:id/release", requireRoles(...GRADERS), async (req
 });
 
 // Bulk release: publish every fully-graded pending-review attempt for an exam at once.
-app.post("/api/admin/exams/:id/release-all", requireRoles(...GRADERS), async (req, res) => {
+app.post("/api/admin/exams/:id/release-all", requirePermission("results.release"), async (req, res) => {
   const exam = db.data!.exams.find((e) => e.id === req.params.id);
   if (!exam) return res.status(404).json({ error: "Exam not found." });
   const pending = db.data!.attempts.filter((a) => a.examId === exam.id && a.gradingStatus === "pending_review");
@@ -3022,7 +3048,7 @@ app.post("/api/admin/exams/:id/release-all", requireRoles(...GRADERS), async (re
 });
 
 // Re-apply the current grade scale to every submitted attempt for an exam.
-app.post("/api/admin/exams/:id/recompute-results", requireRole("admin"), async (req, res) => {
+app.post("/api/admin/exams/:id/recompute-results", requirePermission("results.manage"), async (req, res) => {
   const exam = db.data!.exams.find((e) => e.id === req.params.id);
   if (!exam) return res.status(404).json({ error: "Exam not found." });
   const submitted = db.data!.attempts.filter((a) => a.examId === exam.id && a.status === "submitted");
@@ -3036,7 +3062,7 @@ app.post("/api/admin/exams/:id/recompute-results", requireRole("admin"), async (
 });
 
 // Record an independent second-marker score for reconciliation (double-blind grading).
-app.post("/api/admin/attempts/:id/second-mark", requireRoles(...GRADERS), async (req, res) => {
+app.post("/api/admin/attempts/:id/second-mark", requirePermission("grading.grade"), async (req, res) => {
   const attempt = db.data!.attempts.find((a) => a.id === req.params.id);
   if (!attempt) return res.status(404).json({ error: "Attempt not found." });
   const user = currentUser(req)!;
@@ -3050,7 +3076,7 @@ app.post("/api/admin/attempts/:id/second-mark", requireRoles(...GRADERS), async 
 });
 
 // ---- admin: regrade / appeals queue ----
-app.get("/api/admin/regrades", requireRoles(...GRADERS), (_req, res) => {
+app.get("/api/admin/regrades", requirePermission("grading.regrade"), (_req, res) => {
   const rows = db.data!.regradeRequests
     .map((r) => {
       const exam = db.data!.exams.find((e) => e.id === r.examId);
@@ -3062,7 +3088,7 @@ app.get("/api/admin/regrades", requireRoles(...GRADERS), (_req, res) => {
   res.json({ requests: rows, open: rows.filter((r) => r.status === "open").length });
 });
 
-app.post("/api/admin/regrades/:id/resolve", requireRoles(...GRADERS), async (req, res) => {
+app.post("/api/admin/regrades/:id/resolve", requirePermission("grading.regrade"), async (req, res) => {
   const r = db.data!.regradeRequests.find((x) => x.id === req.params.id);
   if (!r) return res.status(404).json({ error: "Request not found." });
   const user = currentUser(req)!;
@@ -3092,7 +3118,7 @@ app.post("/api/admin/regrades/:id/resolve", requireRoles(...GRADERS), async (req
 });
 
 // ---- admin: live monitor ----
-app.get("/api/admin/live", requireRoles(...STAFF), async (_req, res) => {
+app.get("/api/admin/live", requirePermission("monitor.view"), async (_req, res) => {
   const userName = (id: string) => db.data!.users.find((u) => u.id === id)?.name ?? "Candidate";
   const inProgress = db.data!.attempts.filter((a) => a.status === "in_progress");
   const evMap = await proctorStore.forAttempts(inProgress.map((a) => a.id));
@@ -3138,7 +3164,7 @@ app.get("/api/admin/live", requireRoles(...STAFF), async (_req, res) => {
 });
 
 // Live detail for the intervene drawer: full event timeline + snapshot strip + state.
-app.get("/api/admin/attempts/:id/live", requireRoles(...STAFF), async (req, res) => {
+app.get("/api/admin/attempts/:id/live", requirePermission("monitor.view"), async (req, res) => {
   const a = db.data!.attempts.find((x) => x.id === req.params.id);
   if (!a) return res.status(404).json({ error: "Attempt not found." });
   const exam = db.data!.exams.find((e) => e.id === a.examId);
@@ -3184,7 +3210,7 @@ app.get("/api/admin/attempts/:id/live", requireRoles(...STAFF), async (req, res)
 // Proctor override: clear an auto-applied geofence pause/lock (e.g. a GPS glitch), letting
 // the candidate continue without needing to physically return first. Does not touch a
 // manual proctor pause, and cannot undo an auto-submit/terminate (the exam has already ended).
-app.post("/api/admin/attempts/:id/geofence-override", requireRoles(...STAFF), async (req, res) => {
+app.post("/api/admin/attempts/:id/geofence-override", requirePermission("monitor.control"), async (req, res) => {
   const a = db.data!.attempts.find((x) => x.id === req.params.id);
   if (!a) return res.status(404).json({ error: "Attempt not found." });
   if (a.status !== "in_progress") return res.status(409).json({ error: "Attempt is not in progress." });
@@ -3200,7 +3226,7 @@ app.post("/api/admin/attempts/:id/geofence-override", requireRoles(...STAFF), as
 });
 
 // Proctor → candidate message.
-app.post("/api/admin/attempts/:id/message", requireRoles(...STAFF), async (req, res) => {
+app.post("/api/admin/attempts/:id/message", requirePermission("monitor.control"), async (req, res) => {
   const a = db.data!.attempts.find((x) => x.id === req.params.id);
   if (!a) return res.status(404).json({ error: "Attempt not found." });
   const text = String(req.body?.text ?? "").trim().slice(0, 500);
@@ -3212,7 +3238,7 @@ app.post("/api/admin/attempts/:id/message", requireRoles(...STAFF), async (req, 
 });
 
 // Pause / resume an attempt (freezes the candidate's timer).
-app.post("/api/admin/attempts/:id/pause", requireRoles(...STAFF), async (req, res) => {
+app.post("/api/admin/attempts/:id/pause", requirePermission("monitor.control"), async (req, res) => {
   const a = db.data!.attempts.find((x) => x.id === req.params.id);
   if (!a) return res.status(404).json({ error: "Attempt not found." });
   if (a.status !== "in_progress") return res.status(409).json({ error: "Attempt is not in progress." });
@@ -3228,7 +3254,7 @@ app.post("/api/admin/attempts/:id/pause", requireRoles(...STAFF), async (req, re
 });
 
 // Terminate (force-submit) an attempt.
-app.post("/api/admin/attempts/:id/terminate", requireRoles(...STAFF), async (req, res) => {
+app.post("/api/admin/attempts/:id/terminate", requirePermission("monitor.control"), async (req, res) => {
   const a = db.data!.attempts.find((x) => x.id === req.params.id);
   if (!a) return res.status(404).json({ error: "Attempt not found." });
   if (a.status === "submitted") return res.json({ ok: true, alreadySubmitted: true });
@@ -3239,7 +3265,7 @@ app.post("/api/admin/attempts/:id/terminate", requireRoles(...STAFF), async (req
 });
 
 // ---- admin: analytics ----
-app.get("/api/admin/analytics", requireRoles(...GRADERS), async (_req, res) => {
+app.get("/api/admin/analytics", requirePermission("results.view"), async (_req, res) => {
   const submitted = db.data!.attempts.filter((a) => a.status === "submitted");
   const scores = submitted.map((a) => a.score ?? 0);
   const evMap = await proctorStore.forAttempts(submitted.map((a) => a.id));
@@ -3293,7 +3319,7 @@ app.get("/api/admin/analytics", requireRoles(...GRADERS), async (_req, res) => {
 // "Bloom taxonomy" concept exists in this app's data model, so those mockup
 // sections were mapped onto the closest real equivalents instead — see
 // CHANGELOG.md for the mapping notes).
-app.get("/api/admin/analytics-overview", requireRoles(...GRADERS), async (_req, res) => {
+app.get("/api/admin/analytics-overview", requirePermission("results.view"), async (_req, res) => {
   const d = db.data!;
   const submitted = d.attempts.filter((a) => a.status === "submitted" && !examById(a.examId)?.practice);
   const avg = (xs: number[]) => (xs.length ? Math.round(xs.reduce((p, c) => p + c, 0) / xs.length) : 0);
@@ -3434,7 +3460,7 @@ app.get("/api/admin/analytics-overview", requireRoles(...GRADERS), async (_req, 
 });
 
 // ---- admin: certificates ----
-app.get("/api/admin/certificates", requireRoles(...GRADERS), (_req, res) => {
+app.get("/api/admin/certificates", requirePermission("results.view"), (_req, res) => {
   const certificates = db.data!.certificates
     .map((c) => ({
       certNumber: c.certNumber,
@@ -3448,7 +3474,7 @@ app.get("/api/admin/certificates", requireRoles(...GRADERS), (_req, res) => {
 });
 
 // ---- admin: registrations (one row per candidate↔exam enrolment) ----
-app.get("/api/admin/registrations", requireRole("admin"), (_req, res) => {
+app.get("/api/admin/registrations", requirePermission("students.manage"), (_req, res) => {
   const candidateIds = new Set(db.data!.users.filter((u) => u.role === "candidate").map((u) => u.id));
   const rows = db.data!.registrations
     .filter((r) => candidateIds.has(r.candidateId))
@@ -3486,7 +3512,7 @@ app.get("/api/admin/registrations", requireRole("admin"), (_req, res) => {
   res.json({ totals, registrations: rows });
 });
 
-app.patch("/api/admin/registrations/:id/status", requireRole("admin"), async (req, res) => {
+app.patch("/api/admin/registrations/:id/status", requirePermission("students.manage"), async (req, res) => {
   const reg = db.data!.registrations.find((r) => r.id === req.params.id);
   if (!reg) return res.status(404).json({ error: "Registration not found." });
   const approval = req.body?.approval;
@@ -3508,7 +3534,7 @@ app.patch("/api/admin/registrations/:id/status", requireRole("admin"), async (re
 });
 
 // ---- admin: candidate directory ----
-app.get("/api/admin/candidate-stats", requireRole("admin"), (_req, res) => {
+app.get("/api/admin/candidate-stats", requirePermission("students.manage"), (_req, res) => {
   const candidates = db.data!.users
     .filter((u) => u.role === "candidate")
     .map((u) => {
@@ -3531,7 +3557,7 @@ app.get("/api/admin/candidate-stats", requireRole("admin"), (_req, res) => {
 
 // ---- admin: Students (SIS) — student-centric records ----
 // One row per student, aggregating their whole record (vs. registrations = per-exam rows).
-app.get("/api/admin/students", requireRole("admin"), async (_req, res) => {
+app.get("/api/admin/students", requirePermission("students.manage"), async (_req, res) => {
   const evMap = await proctorStore.forAttempts(db.data!.attempts.filter((a) => a.status === "submitted").map((a) => a.id));
   const students = db.data!.users
     .filter((u) => u.role === "candidate")
@@ -3578,7 +3604,7 @@ app.get("/api/admin/students", requireRole("admin"), async (_req, res) => {
   });
 });
 
-app.patch("/api/admin/students/:id", requireRole("admin"), async (req, res) => {
+app.patch("/api/admin/students/:id", requirePermission("students.manage"), async (req, res) => {
   const u = db.data!.users.find((x) => x.id === req.params.id && x.role === "candidate");
   if (!u) return res.status(404).json({ error: "Student not found." });
   const b = req.body ?? {};
@@ -3597,7 +3623,7 @@ app.patch("/api/admin/students/:id", requireRole("admin"), async (req, res) => {
   res.json({ ok: true });
 });
 
-app.get("/api/admin/students/:id", requireRole("admin"), async (req, res) => {
+app.get("/api/admin/students/:id", requirePermission("students.manage"), async (req, res) => {
   const u = db.data!.users.find((x) => x.id === req.params.id && x.role === "candidate");
   if (!u) return res.status(404).json({ error: "Student not found." });
   const examOf = (id: string) => db.data!.exams.find((e) => e.id === id);
@@ -3684,7 +3710,7 @@ function attendanceFor(reg: Registration, exam: Exam | undefined): AttendanceSta
   return "expected";
 }
 
-app.get("/api/admin/attendance", requireRole("admin"), (_req, res) => {
+app.get("/api/admin/attendance", requirePermission("students.manage"), (_req, res) => {
   const candidateIds = new Set(db.data!.users.filter((u) => u.role === "candidate").map((u) => u.id));
   const sessions = db.data!.exams
     .map((exam) => {
@@ -3710,7 +3736,7 @@ app.get("/api/admin/attendance", requireRole("admin"), (_req, res) => {
   res.json({ sessions });
 });
 
-app.get("/api/admin/attendance/:examId", requireRole("admin"), (req, res) => {
+app.get("/api/admin/attendance/:examId", requirePermission("students.manage"), (req, res) => {
   const exam = db.data!.exams.find((e) => e.id === req.params.examId);
   if (!exam) return res.status(404).json({ error: "Exam not found." });
   const roster = db.data!.registrations
@@ -3755,7 +3781,11 @@ app.get("/api/admin/attendance/:examId", requireRole("admin"), (req, res) => {
 });
 
 // ---- admin: Communication — send messages to candidates (recorded to the mock outbox) ----
-app.post("/api/admin/communication/send", requireRoles(...GRADERS), async (req, res) => {
+// Batch 2 of the permission migration (see test/permissions.test.ts): send/view_log
+// map exactly onto today's GRADERS gate, and the new communication.manage key
+// (admin-only by default) covers the three actions that were requireRole("admin")
+// alone — deleting announcements and sending test emails/SMS.
+app.post("/api/admin/communication/send", requirePermission("communication.send"), async (req, res) => {
   const { audience, examId, candidateIds, subject, body } = req.body ?? {};
   if (!subject || !body) return res.status(400).json({ error: "Subject and body are required." });
 
@@ -3784,10 +3814,10 @@ app.post("/api/admin/communication/send", requireRoles(...GRADERS), async (req, 
   res.json({ ok: true, sent: recipients.length, delivered, failed, mailer: mailerStatus() });
 });
 
-app.get("/api/admin/communication/status", requireRoles(...GRADERS), (_req, res) => {
+app.get("/api/admin/communication/status", requirePermission("communication.view_log"), (_req, res) => {
   res.json(mailerStatus());
 });
-app.post("/api/admin/communication/test", requireRole("admin"), async (req, res) => {
+app.post("/api/admin/communication/test", requirePermission("communication.manage"), async (req, res) => {
   const to = String(req.body?.to ?? "").trim();
   if (!to) return res.status(400).json({ error: "Provide an email address to test." });
   const r = await sendMail(to, "Oriole email test", "This is a test email from Oriole — your SMTP configuration is working.");
@@ -3796,10 +3826,10 @@ app.post("/api/admin/communication/test", requireRole("admin"), async (req, res)
 });
 
 // ---- admin: SMS / WhatsApp reminders ----
-app.get("/api/admin/sms/status", requireRoles(...GRADERS), (_req, res) => {
+app.get("/api/admin/sms/status", requirePermission("communication.view_log"), (_req, res) => {
   res.json({ ...smsStatus(), recent: recentSms(50) });
 });
-app.post("/api/admin/sms/test", requireRole("admin"), async (req, res) => {
+app.post("/api/admin/sms/test", requirePermission("communication.manage"), async (req, res) => {
   const to = String(req.body?.to ?? "").trim();
   if (!to) return res.status(400).json({ error: "Provide a phone number to test." });
   const r = await sendSms(to, "Test message from Oriole — your SMS reminders are working.");
@@ -3816,7 +3846,7 @@ function audienceUsers(audience: string) {
   return users; // everyone
 }
 
-app.get("/api/admin/announcements", requireRoles(...GRADERS), (_req, res) => {
+app.get("/api/admin/announcements", requirePermission("communication.view_log"), (_req, res) => {
   const announcements = [...db.data!.announcements].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   res.json({
     announcements,
@@ -3829,7 +3859,7 @@ app.get("/api/admin/announcements", requireRoles(...GRADERS), (_req, res) => {
   });
 });
 
-app.post("/api/admin/announcements", requireRoles(...GRADERS), async (req, res) => {
+app.post("/api/admin/announcements", requirePermission("communication.send"), async (req, res) => {
   const user = currentUser(req)!;
   const { title, message, audience, priority, channels, scheduledFor, draft, pinned, department } = req.body ?? {};
   if (!title?.trim() || !message?.trim()) return res.status(400).json({ error: "Title and message are required." });
@@ -3875,7 +3905,7 @@ app.post("/api/admin/announcements", requireRoles(...GRADERS), async (req, res) 
   res.json({ announcement: ann, emailedCount });
 });
 
-app.delete("/api/admin/announcements/:id", requireRole("admin"), async (req, res) => {
+app.delete("/api/admin/announcements/:id", requirePermission("communication.manage"), async (req, res) => {
   db.data!.announcements = db.data!.announcements.filter((a) => a.id !== req.params.id);
   await db.remove("announcements", String(req.params.id));
   res.json({ ok: true });
@@ -4137,7 +4167,7 @@ app.get("/api/notifications", requireAuth, (req, res) => {
 });
 
 // ---- admin: Integrity — cross-exam proctoring overview ----
-app.get("/api/admin/integrity", requireRoles(...GRADERS), async (_req, res) => {
+app.get("/api/admin/integrity", requirePermission("results.view"), async (_req, res) => {
   const submitted = db.data!.attempts.filter((a) => a.status === "submitted");
   const userName = (id: string) => db.data!.users.find((u) => u.id === id)?.name ?? "Candidate";
   const examOf = (id: string) => db.data!.exams.find((e) => e.id === id);
@@ -4252,7 +4282,7 @@ async function buildReportCsv(key: string, from?: string, to?: string): Promise<
 
 const REPORT_TITLES: Record<string, string> = { results: "Results report", students: "Student roster", certificates: "Certificate register" };
 
-app.get("/api/admin/reports", requireRoles(...GRADERS), (_req, res) => {
+app.get("/api/admin/reports", requirePermission("results.view"), (_req, res) => {
   const submitted = db.data!.attempts.filter((a) => a.status === "submitted");
   res.json({
     summary: {
@@ -4277,12 +4307,12 @@ const reportCsvHandler = (key: string) => async (req: Request, res: Response) =>
   if (!out) return res.status(404).json({ error: "Unknown report." });
   sendCsv(res, out.filename, out.csv);
 };
-app.get("/api/admin/reports/results.csv", requireRoles(...GRADERS), reportCsvHandler("results"));
-app.get("/api/admin/reports/students.csv", requireRoles(...GRADERS), reportCsvHandler("students"));
-app.get("/api/admin/reports/certificates.csv", requireRoles(...GRADERS), reportCsvHandler("certificates"));
+app.get("/api/admin/reports/results.csv", requirePermission("results.export"), reportCsvHandler("results"));
+app.get("/api/admin/reports/students.csv", requirePermission("results.export"), reportCsvHandler("students"));
+app.get("/api/admin/reports/certificates.csv", requirePermission("results.export"), reportCsvHandler("certificates"));
 
 // ---- admin: scheduled report exports ----
-app.post("/api/admin/reports/schedule", requireRole("admin"), async (req, res) => {
+app.post("/api/admin/reports/schedule", requirePermission("system.settings"), async (req, res) => {
   const b = req.body ?? {};
   const reportKey = b.reportKey;
   if (reportKey !== "results" && reportKey !== "students" && reportKey !== "certificates") return res.status(400).json({ error: "Pick a report." });
@@ -4295,7 +4325,7 @@ app.post("/api/admin/reports/schedule", requireRole("admin"), async (req, res) =
   await recordAudit(req, "report.scheduled", `${reportKey} · ${frequency} → ${recipients.join(", ")}`);
   res.json({ scheduled: s.scheduledReports });
 });
-app.delete("/api/admin/reports/schedule/:id", requireRole("admin"), async (req, res) => {
+app.delete("/api/admin/reports/schedule/:id", requirePermission("system.settings"), async (req, res) => {
   const s = getSettings();
   s.scheduledReports = (s.scheduledReports ?? []).filter((x) => x.id !== req.params.id);
   await db.upsert("settings", s);
@@ -4351,7 +4381,11 @@ function dispatchWebhook(event: WebhookEvent, data: Record<string, unknown>) {
   })).then(() => db.upsert("settings", getSettings())).catch(() => { /* best-effort */ });
 }
 
-app.get("/api/admin/integrations", requireRole("admin"), (_req, res) => {
+// Batch 9 of the permission migration: all 10 routes below were already
+// requireRole("admin") alone with no GRADERS/STAFF mixed in, and
+// system.settings is already admin-only (see Batch 1's tests) — a
+// zero-ambiguity reuse, no new keys or corrections needed.
+app.get("/api/admin/integrations", requirePermission("system.settings"), (_req, res) => {
   const s = getSettings();
   res.json({
     events: WEBHOOK_EVENTS,
@@ -4359,7 +4393,7 @@ app.get("/api/admin/integrations", requireRole("admin"), (_req, res) => {
     apiKeys: (s.apiKeys ?? []).map((k) => ({ id: k.id, name: k.name, prefix: k.prefix, createdAt: k.createdAt, lastUsedAt: k.lastUsedAt ?? null })),
   });
 });
-app.post("/api/admin/webhooks", requireRole("admin"), async (req, res) => {
+app.post("/api/admin/webhooks", requirePermission("system.settings"), async (req, res) => {
   const url = String(req.body?.url ?? "").trim();
   if (!(await assertSafeWebhookUrl(url))) return res.status(400).json({ error: "Enter a valid public https:// URL — private, loopback, and link-local addresses are blocked." });
   const events = Array.isArray(req.body?.events) ? (req.body.events as unknown[]).filter((e): e is WebhookEvent => WEBHOOK_EVENTS.includes(e as WebhookEvent)) : [];
@@ -4372,7 +4406,7 @@ app.post("/api/admin/webhooks", requireRole("admin"), async (req, res) => {
   await recordAudit(req, "webhook.created", url);
   res.json({ webhook: { ...hook, secret: rawSecret } });
 });
-app.patch("/api/admin/webhooks/:id", requireRole("admin"), async (req, res) => {
+app.patch("/api/admin/webhooks/:id", requirePermission("system.settings"), async (req, res) => {
   const s = getSettings();
   const w = (s.webhooks ?? []).find((x) => x.id === req.params.id);
   if (!w) return res.status(404).json({ error: "Webhook not found." });
@@ -4386,20 +4420,20 @@ app.patch("/api/admin/webhooks/:id", requireRole("admin"), async (req, res) => {
   await db.upsert("settings", s);
   res.json({ webhook: { ...w, secret: decryptString(w.secret) ?? w.secret } });
 });
-app.delete("/api/admin/webhooks/:id", requireRole("admin"), async (req, res) => {
+app.delete("/api/admin/webhooks/:id", requirePermission("system.settings"), async (req, res) => {
   const s = getSettings();
   s.webhooks = (s.webhooks ?? []).filter((x) => x.id !== req.params.id);
   await db.upsert("settings", s);
   res.json({ ok: true });
 });
-app.post("/api/admin/webhooks/:id/test", requireRole("admin"), (req, res) => {
+app.post("/api/admin/webhooks/:id/test", requirePermission("system.settings"), (req, res) => {
   const w = (getSettings().webhooks ?? []).find((x) => x.id === req.params.id);
   if (!w) return res.status(404).json({ error: "Webhook not found." });
   dispatchWebhook((w.events[0] as WebhookEvent) || "exam.published", { test: true, message: "Test ping from Oriole." });
   res.json({ ok: true });
 });
 
-app.post("/api/admin/apikeys", requireRole("admin"), async (req, res) => {
+app.post("/api/admin/apikeys", requirePermission("system.settings"), async (req, res) => {
   const name = String(req.body?.name ?? "").trim() || "API key";
   const raw = "ok_live_" + randomBytes(24).toString("hex");
   const rec = { id: nanoid(10), name, prefix: raw.slice(0, 16), keyHash: createHash("sha256").update(raw).digest("hex"), createdAt: now(), lastUsedAt: null as string | null };
@@ -4409,7 +4443,7 @@ app.post("/api/admin/apikeys", requireRole("admin"), async (req, res) => {
   await recordAudit(req, "apikey.created", name);
   res.json({ key: raw, record: { id: rec.id, name: rec.name, prefix: rec.prefix, createdAt: rec.createdAt } }); // raw key shown ONCE
 });
-app.delete("/api/admin/apikeys/:id", requireRole("admin"), async (req, res) => {
+app.delete("/api/admin/apikeys/:id", requirePermission("system.settings"), async (req, res) => {
   const s = getSettings();
   s.apiKeys = (s.apiKeys ?? []).filter((k) => k.id !== req.params.id);
   await db.upsert("settings", s);
@@ -4438,9 +4472,16 @@ app.get("/api/v1/certificates", requireApiKey, (_req, res) => {
 });
 
 // ---- admin: Organization / Settings ----
-app.get("/api/admin/settings", requireRole("admin"), (_req, res) => res.json({ settings: getSettings() }));
+// First batch migrated to the fine-grained permission system (see
+// server/auth.ts, shared/permissions.ts): system.settings and org.view/
+// org.manage are, by default, held by exactly the same roles that
+// requireRole("admin")/requireRoles(...GRADERS) already allowed here — see
+// test/permissions.test.ts, which pins that mapping down. A custom role can
+// now also be granted these, but no existing admin/facilitator/proctor
+// account's access to these 5 routes changes.
+app.get("/api/admin/settings", requirePermission("system.settings"), (_req, res) => res.json({ settings: getSettings() }));
 
-app.patch("/api/admin/settings", requireRole("admin"), async (req, res) => {
+app.patch("/api/admin/settings", requirePermission("system.settings"), async (req, res) => {
   const s = getSettings();
   const b = req.body ?? {};
   if (typeof b.name === "string") s.name = b.name.trim() || s.name;
@@ -4487,7 +4528,9 @@ app.get("/api/learning-structure", requireAuth, (_req, res) => {
 });
 
 // Send the admin summary digest immediately (covers the last 7 days).
-app.post("/api/admin/digest/send-now", requireRole("admin"), async (req, res) => {
+// Final sweep of the permission migration: an operational trigger in the
+// same admin-only bucket as backup/run-now and report scheduling.
+app.post("/api/admin/digest/send-now", requirePermission("system.settings"), async (req, res) => {
   const sent = await sendAdminDigest(Date.now() - 7 * 24 * 3_600_000, "weekly");
   await recordAudit(req, "digest.sent", `${sent} admin(s)`);
   res.json({ sent });
@@ -4498,10 +4541,10 @@ app.post("/api/admin/digest/send-now", requireRole("admin"), async (req, res) =>
 // outside the app's redeployable code and outside the live data directory (see
 // server/backup.ts) so it survives redeploys and is picked up by whatever
 // off-host/whole-account backup mechanism the host runs.
-app.get("/api/admin/backup/status", requireRole("admin"), (_req, res) => {
+app.get("/api/admin/backup/status", requirePermission("system.settings"), (_req, res) => {
   res.json(backupStatus());
 });
-app.post("/api/admin/backup/run-now", requireRole("admin"), async (req, res) => {
+app.post("/api/admin/backup/run-now", requirePermission("system.settings"), async (req, res) => {
   try {
     const { file, bytes } = await runBackup();
     await recordAudit(req, "backup.run", `${path.basename(file)} (${bytes} bytes)`);
@@ -4512,11 +4555,13 @@ app.post("/api/admin/backup/run-now", requireRole("admin"), async (req, res) => 
 });
 
 // ---- admin: reusable rubric library (stored on org settings) ----
-app.get("/api/admin/rubric-library", requireRoles(...GRADERS), (_req, res) => {
+// Batch 11 of the permission migration: grading.view matches the existing
+// GRADERS read gate; grading.manage (new) covers the two admin-only writes.
+app.get("/api/admin/rubric-library", requirePermission("grading.view"), (_req, res) => {
   res.json({ rubrics: getSettings().rubricLibrary ?? [] });
 });
 
-app.post("/api/admin/rubric-library", requireRole("admin"), async (req, res) => {
+app.post("/api/admin/rubric-library", requirePermission("grading.manage"), async (req, res) => {
   const s = getSettings();
   const name = String(req.body?.name ?? "").trim();
   const criteria: RubricCriterion[] = (Array.isArray(req.body?.criteria) ? req.body.criteria : [])
@@ -4530,7 +4575,7 @@ app.post("/api/admin/rubric-library", requireRole("admin"), async (req, res) => 
   res.json({ rubric: entry });
 });
 
-app.delete("/api/admin/rubric-library/:id", requireRole("admin"), async (req, res) => {
+app.delete("/api/admin/rubric-library/:id", requirePermission("grading.manage"), async (req, res) => {
   const s = getSettings();
   s.rubricLibrary = (s.rubricLibrary ?? []).filter((r) => r.id !== req.params.id);
   await db.upsert("settings", s);
@@ -4543,7 +4588,7 @@ const INSTITUTION_KINDS: Record<string, "faculties" | "departments" | "programs"
 };
 const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name);
 
-app.get("/api/admin/institution", requireRoles(...GRADERS), (_req, res) => {
+app.get("/api/admin/institution", requirePermission("org.view"), (_req, res) => {
   const d = db.data!;
   res.json({
     settings: getSettings(),
@@ -4556,7 +4601,7 @@ app.get("/api/admin/institution", requireRoles(...GRADERS), (_req, res) => {
   });
 });
 
-app.post("/api/admin/institution/:kind", requireRole("admin"), async (req, res) => {
+app.post("/api/admin/institution/:kind", requirePermission("org.manage"), async (req, res) => {
   const key = INSTITUTION_KINDS[String(req.params.kind)];
   if (!key) return res.status(404).json({ error: "Unknown type." });
   const name = String(req.body?.name ?? "").trim();
@@ -4577,7 +4622,7 @@ app.post("/api/admin/institution/:kind", requireRole("admin"), async (req, res) 
   res.json({ item });
 });
 
-app.delete("/api/admin/institution/:kind/:id", requireRole("admin"), async (req, res) => {
+app.delete("/api/admin/institution/:kind/:id", requirePermission("org.manage"), async (req, res) => {
   const key = INSTITUTION_KINDS[String(req.params.kind)];
   if (!key) return res.status(404).json({ error: "Unknown type." });
   const store = db.data as unknown as Record<string, { id: string }[]>;
@@ -4587,12 +4632,12 @@ app.delete("/api/admin/institution/:kind/:id", requireRole("admin"), async (req,
 });
 
 // ---- admin: Audit logs ----
-app.get("/api/admin/audit-logs", requireRole("admin"), async (_req, res) => {
+app.get("/api/admin/audit-logs", requirePermission("system.audit_log"), async (_req, res) => {
   res.json({ logs: await auditStore.recent(200), integrity: await auditStore.verifyChain() });
 });
 
 // ---- admin: AI Violations (live integrity-event feed) ----
-app.get("/api/admin/violations", requireRoles(...STAFF), async (_req, res) => {
+app.get("/api/admin/violations", requirePermission("monitor.view"), async (_req, res) => {
   const userName = (id: string) => db.data!.users.find((u) => u.id === id)?.name ?? "Candidate";
   const examTitle = (id: string) => db.data!.exams.find((e) => e.id === id)?.title ?? "Examination";
   const attemptMap = new Map(db.data!.attempts.map((a) => [a.id, a]));
@@ -4620,7 +4665,7 @@ app.get("/api/admin/violations", requireRoles(...STAFF), async (_req, res) => {
 });
 
 // ---- admin: System health / diagnostics ----
-app.get("/api/admin/system-health", requireRole("admin"), async (_req, res) => {
+app.get("/api/admin/system-health", requirePermission("system.settings"), async (_req, res) => {
   const d = db.data!;
   res.json({
     api: "ok",
@@ -4644,7 +4689,7 @@ app.get("/api/admin/system-health", requireRole("admin"), async (_req, res) => {
 });
 
 // ---- admin: Dashboard (aggregated overview) ----
-app.get("/api/admin/dashboard", requireRoles(...STAFF), async (_req, res) => {
+app.get("/api/admin/dashboard", requirePermission("monitor.view"), async (_req, res) => {
   const d = db.data!;
   const candidateIds = new Set(d.users.filter((u) => u.role === "candidate").map((u) => u.id));
   const regs = d.registrations.filter((r) => candidateIds.has(r.candidateId));
@@ -4932,7 +4977,7 @@ app.get("/api/admin/dashboard", requireRoles(...STAFF), async (_req, res) => {
 });
 
 // ---- admin: Classes (cohorts) ----
-app.get("/api/admin/classes", requireRoles(...GRADERS), (req, res) => {
+app.get("/api/admin/classes", requirePermission("students.view"), (req, res) => {
   const yearFilter = typeof req.query.academicYearId === "string" ? req.query.academicYearId : null;
   const yearName = (id?: string | null) => (id ? db.data!.academicYears.find((y) => y.id === id)?.name ?? null : null);
   const classes = [...db.data!.classes]
@@ -4946,7 +4991,7 @@ app.get("/api/admin/classes", requireRoles(...GRADERS), (req, res) => {
   res.json({ classes });
 });
 
-app.post("/api/admin/classes", requireRole("admin"), async (req, res) => {
+app.post("/api/admin/classes", requirePermission("students.manage"), async (req, res) => {
   const name = String(req.body?.name ?? "").trim();
   if (!name) return res.status(400).json({ error: "Class name is required." });
   const academicYearId = typeof req.body?.academicYearId === "string" && req.body.academicYearId
@@ -4960,7 +5005,7 @@ app.post("/api/admin/classes", requireRole("admin"), async (req, res) => {
 });
 
 // Classes that have this exam assigned (for the Exam Builder audience panel).
-app.get("/api/admin/exams/:id/classes", requireRole("admin"), (req, res) => {
+app.get("/api/admin/exams/:id/classes", requirePermission("exams.edit"), (req, res) => {
   const examId = req.params.id;
   const classes = db.data!.classes
     .filter((c) => c.assignments.some((a) => a.examId === examId))
@@ -4971,7 +5016,7 @@ app.get("/api/admin/exams/:id/classes", requireRole("admin"), (req, res) => {
   res.json({ classes });
 });
 
-app.get("/api/admin/classes/:id", requireRole("admin"), (req, res) => {
+app.get("/api/admin/classes/:id", requirePermission("students.manage"), (req, res) => {
   const cls = db.data!.classes.find((c) => c.id === req.params.id);
   if (!cls) return res.status(404).json({ error: "Class not found." });
   const members = cls.memberIds
@@ -4996,7 +5041,7 @@ app.get("/api/admin/classes/:id", requireRole("admin"), (req, res) => {
   res.json({ class: { id: cls.id, name: cls.name, code: cls.code ?? "", description: cls.description ?? "", academicYearId: cls.academicYearId ?? null, academicYearName }, members, assignments });
 });
 
-app.patch("/api/admin/classes/:id", requireRole("admin"), async (req, res) => {
+app.patch("/api/admin/classes/:id", requirePermission("students.manage"), async (req, res) => {
   const cls = db.data!.classes.find((c) => c.id === req.params.id);
   if (!cls) return res.status(404).json({ error: "Class not found." });
   const b = req.body ?? {};
@@ -5010,7 +5055,7 @@ app.patch("/api/admin/classes/:id", requireRole("admin"), async (req, res) => {
   res.json({ ok: true });
 });
 
-app.delete("/api/admin/classes/:id", requireRole("admin"), async (req, res) => {
+app.delete("/api/admin/classes/:id", requirePermission("students.manage"), async (req, res) => {
   db.data!.classes = db.data!.classes.filter((c) => c.id !== req.params.id);
   await db.remove("classes", String(req.params.id));
   res.json({ ok: true });
@@ -5197,12 +5242,16 @@ async function detectPdfPageCount(dataUrl: string): Promise<number | null> {
   }
 }
 
-app.get("/api/admin/books", requireRoles(...GRADERS), (_req, res) => {
+// Batch 12 of the permission migration (see test/permissions.test.ts): a new
+// "library" category — all 7 book/library routes are GRADERS-gated
+// uniformly (view and manage aren't split in the real code), so facilitator
+// gets both library.view and library.manage.
+app.get("/api/admin/books", requirePermission("library.view"), (_req, res) => {
   const books = [...db.data!.books].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   res.json({ books });
 });
 
-app.post("/api/admin/books", requireRoles(...GRADERS), async (req, res) => {
+app.post("/api/admin/books", requirePermission("library.manage"), async (req, res) => {
   const { errors, book: partial, manualTotalPages, duplicateOf } = validateBookBody(req.body ?? {});
   if (errors.length) return res.status(400).json({ errors });
   if (partial.fileData) {
@@ -5241,7 +5290,7 @@ app.post("/api/admin/books", requireRoles(...GRADERS), async (req, res) => {
   res.json({ book, duplicateOf });
 });
 
-app.patch("/api/admin/books/:id", requireRoles(...GRADERS), async (req, res) => {
+app.patch("/api/admin/books/:id", requirePermission("library.manage"), async (req, res) => {
   const book = db.data!.books.find((b) => b.id === req.params.id);
   if (!book) return res.status(404).json({ error: "Book not found." });
   const wasPublished = book.status === "published";
@@ -5277,12 +5326,12 @@ app.patch("/api/admin/books/:id", requireRoles(...GRADERS), async (req, res) => 
   res.json({ book, duplicateOf });
 });
 
-app.get("/api/admin/books/:id/versions", requireRoles(...GRADERS), (req, res) => {
+app.get("/api/admin/books/:id/versions", requirePermission("library.view"), (req, res) => {
   const versions = db.data!.resourceVersions.filter((v) => v.bookId === req.params.id).sort((a, b) => b.version - a.version);
   res.json({ versions });
 });
 
-app.post("/api/admin/books/:id/versions/:versionId/restore", requireRoles(...GRADERS), async (req, res) => {
+app.post("/api/admin/books/:id/versions/:versionId/restore", requirePermission("library.manage"), async (req, res) => {
   const book = db.data!.books.find((b) => b.id === req.params.id);
   if (!book) return res.status(404).json({ error: "Book not found." });
   const version = db.data!.resourceVersions.find((v) => v.id === req.params.versionId && v.bookId === book.id);
@@ -5306,7 +5355,7 @@ app.post("/api/admin/books/:id/versions/:versionId/restore", requireRoles(...GRA
   res.json({ book });
 });
 
-app.delete("/api/admin/books/:id", requireRoles(...GRADERS), async (req, res) => {
+app.delete("/api/admin/books/:id", requirePermission("library.manage"), async (req, res) => {
   const id = String(req.params.id);
   const book = db.data!.books.find((b) => b.id === id);
   db.data!.books = db.data!.books.filter((b) => b.id !== id);
@@ -5321,7 +5370,7 @@ app.delete("/api/admin/books/:id", requireRoles(...GRADERS), async (req, res) =>
   res.json({ ok: true });
 });
 
-app.get("/api/admin/library/dashboard", requireRoles(...GRADERS), (_req, res) => {
+app.get("/api/admin/library/dashboard", requirePermission("library.view"), (_req, res) => {
   const books = db.data!.books;
   const byType: Record<string, number> = {};
   for (const b of books) byType[b.resourceType] = (byType[b.resourceType] ?? 0) + 1;
@@ -5551,7 +5600,7 @@ app.post("/api/books/:id/progress", requireAuth, async (req, res) => {
   res.json({ progress });
 });
 
-app.post("/api/admin/classes/:id/members", requireRole("admin"), async (req, res) => {
+app.post("/api/admin/classes/:id/members", requirePermission("students.manage"), async (req, res) => {
   const cls = db.data!.classes.find((c) => c.id === req.params.id);
   if (!cls) return res.status(404).json({ error: "Class not found." });
   const ids: string[] = Array.isArray(req.body?.candidateIds) ? req.body.candidateIds : [];
@@ -5577,7 +5626,7 @@ app.post("/api/admin/classes/:id/members", requireRole("admin"), async (req, res
   res.json({ ok: true, members: cls.memberIds.length, enrolled });
 });
 
-app.delete("/api/admin/classes/:id/members/:candidateId", requireRole("admin"), async (req, res) => {
+app.delete("/api/admin/classes/:id/members/:candidateId", requirePermission("students.manage"), async (req, res) => {
   const cls = db.data!.classes.find((c) => c.id === req.params.id);
   if (!cls) return res.status(404).json({ error: "Class not found." });
   cls.memberIds = cls.memberIds.filter((m) => m !== req.params.candidateId);
@@ -5591,7 +5640,7 @@ app.delete("/api/admin/classes/:id/members/:candidateId", requireRole("admin"), 
 // one-time add — removes any current member whose email isn't in this import.
 // Removing only ever edits this class's memberIds; it never deletes the
 // underlying account or touches any other class/registration.
-app.post("/api/admin/classes/:id/import", requireRole("admin"), async (req, res) => {
+app.post("/api/admin/classes/:id/import", requirePermission("students.manage"), async (req, res) => {
   const cls = db.data!.classes.find((c) => c.id === req.params.id);
   if (!cls) return res.status(404).json({ error: "Class not found." });
   type Row = { name?: string; email?: string; studentClass?: string; gender?: string; age?: unknown; phone?: string };
@@ -5682,7 +5731,7 @@ app.post("/api/admin/classes/:id/import", requireRole("admin"), async (req, res)
 });
 
 // Assign an exam to the whole class at a scheduled time → confirmed registrations for every member.
-app.post("/api/admin/classes/:id/assign-exam", requireRole("admin"), async (req, res) => {
+app.post("/api/admin/classes/:id/assign-exam", requirePermission("students.manage"), async (req, res) => {
   const cls = db.data!.classes.find((c) => c.id === req.params.id);
   if (!cls) return res.status(404).json({ error: "Class not found." });
   const exam = db.data!.exams.find((e) => e.id === req.body?.examId);
@@ -5711,16 +5760,29 @@ app.post("/api/admin/classes/:id/assign-exam", requireRole("admin"), async (req,
 // ---- admin: Team (staff accounts & roles) ----
 const STAFF_ROLES = ["admin", "facilitator", "proctor"];
 
-app.get("/api/admin/team", requireRole("admin"), (_req, res) => {
+// Batch 10 of the permission migration: the Team account-management routes
+// themselves, migrated to the same roles.team_manage key already used by the
+// custom-role assignment endpoint below. All were requireRole("admin") alone
+// (zero ambiguity), and the internal safety rails — can't grant yourself
+// admin, can't demote/remove the last admin — live inside each handler and
+// are untouched by this change.
+app.get("/api/admin/team", requirePermission("roles.team_manage"), (_req, res) => {
   const team = db.data!.users
     .filter((u) => u.role !== "candidate")
-    .map((u) => ({ id: u.id, name: u.name, email: u.email, role: u.role }))
+    .map((u) => ({ id: u.id, name: u.name, email: u.email, role: u.role, customRoleId: u.customRoleId ?? null, roleExpiresAt: u.roleExpiresAt ?? null }))
     .sort((a, b) => a.name.localeCompare(b.name));
   res.json({ team });
 });
 
-app.post("/api/admin/team", requireRole("admin"), validate(teamCreateSchema), async (req, res) => {
+app.post("/api/admin/team", requirePermission("roles.team_manage"), validate(teamCreateSchema), async (req, res) => {
   const { name, email, password, role } = req.body as { name: string; email: string; password: string; role: "admin" | "facilitator" | "proctor" };
+  // Granting the admin role stays an actual-admin-only action: roles.team_manage
+  // can now be held by a non-admin via a custom role (unlike before this
+  // endpoint was requireRole("admin") alone), and that must not become a path
+  // for a facilitator/proctor to mint themselves or anyone else a full admin.
+  if (role === "admin" && currentUser(req)!.role !== "admin") {
+    return res.status(403).json({ error: "Only administrators can grant the admin role." });
+  }
   if (db.data!.users.some((u) => u.email.toLowerCase() === String(email).trim().toLowerCase())) {
     return res.status(409).json({ error: "An account with that email already exists." });
   }
@@ -5731,13 +5793,18 @@ app.post("/api/admin/team", requireRole("admin"), validate(teamCreateSchema), as
   res.json({ user: { id: user.id, name: user.name, email: user.email, role: user.role } });
 });
 
-app.patch("/api/admin/team/:id", requireRole("admin"), async (req, res) => {
+app.patch("/api/admin/team/:id", requirePermission("roles.team_manage"), async (req, res) => {
   const actor = currentUser(req)!;
   const u = db.data!.users.find((x) => x.id === req.params.id && x.role !== "candidate");
   if (!u) return res.status(404).json({ error: "Staff member not found." });
   const role = req.body?.role;
   if (!STAFF_ROLES.includes(role)) return res.status(400).json({ error: "Invalid role." });
   if (u.id === actor.id && role !== "admin") return res.status(400).json({ error: "You can't change your own admin role." });
+  // Same actual-admin-only rule as the invite endpoint above (see comment
+  // there) — granting admin is not something a custom role can hand out.
+  if (role === "admin" && actor.role !== "admin") {
+    return res.status(403).json({ error: "Only administrators can grant the admin role." });
+  }
   if (u.role === "admin" && role !== "admin" && db.data!.users.filter((x) => x.role === "admin").length <= 1) {
     return res.status(400).json({ error: "There must be at least one admin." });
   }
@@ -5747,7 +5814,7 @@ app.patch("/api/admin/team/:id", requireRole("admin"), async (req, res) => {
   res.json({ ok: true });
 });
 
-app.delete("/api/admin/team/:id", requireRole("admin"), async (req, res) => {
+app.delete("/api/admin/team/:id", requirePermission("roles.team_manage"), async (req, res) => {
   const actor = currentUser(req)!;
   const u = db.data!.users.find((x) => x.id === req.params.id && x.role !== "candidate");
   if (!u) return res.status(404).json({ error: "Staff member not found." });
@@ -5758,6 +5825,155 @@ app.delete("/api/admin/team/:id", requireRole("admin"), async (req, res) => {
   db.data!.users = db.data!.users.filter((x) => x.id !== u.id);
   await db.remove("users", u.id);
   await recordAudit(req, "team.removed", `${u.name} <${u.email}>`);
+  res.json({ ok: true });
+});
+
+// ---- admin: Roles & Permissions ----
+// Additive layer on top of Team above: existing requireRole("admin") endpoints
+// (and every other requireRole()/requireRoles() gate in this file) are untouched.
+// These new endpoints are the first — and so far only — consumers of
+// requirePermission(), which checks a user's base-role bundle plus whatever
+// their assigned CustomRole grants (see server/auth.ts, shared/permissions.ts).
+
+function badPermissionKeys(keys: string[]): string[] {
+  return keys.filter((k) => !isPermissionKey(k));
+}
+
+/** True if assigning `parentId` as roleId's parent would create (or extend) a cycle. */
+function roleParentCycles(roleId: string, parentId: string | null | undefined): boolean {
+  if (!parentId) return false;
+  let cur: string | null | undefined = parentId;
+  const seen = new Set<string>();
+  while (cur) {
+    if (cur === roleId) return true;
+    if (seen.has(cur)) return true;
+    seen.add(cur);
+    if (parseSystemParentId(cur)) return false; // system roles terminate the chain
+    cur = db.data!.customRoles.find((r) => r.id === cur)?.parentRoleId ?? null;
+  }
+  return false;
+}
+
+app.get("/api/admin/permissions", requirePermission("roles.view"), (_req, res) => {
+  res.json({ permissions: PERMISSIONS, systemRoles: SYSTEM_ROLE_PERMISSIONS });
+});
+
+app.get("/api/admin/roles", requirePermission("roles.view"), (_req, res) => {
+  const memberCounts = new Map<string, number>();
+  for (const u of db.data!.users) {
+    if (u.customRoleId) memberCounts.set(u.customRoleId, (memberCounts.get(u.customRoleId) ?? 0) + 1);
+  }
+  const roles = db.data!.customRoles
+    .map((r) => ({ ...r, memberCount: memberCounts.get(r.id) ?? 0 }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  res.json({ roles });
+});
+
+app.post("/api/admin/roles", requirePermission("roles.manage"), validate(customRoleCreateSchema), async (req, res) => {
+  const { name, description, permissions, parentRoleId, scope } = req.body as {
+    name: string; description?: string; permissions: string[]; parentRoleId?: string | null; scope?: CustomRole["scope"];
+  };
+  const bad = badPermissionKeys(permissions);
+  if (bad.length) return res.status(400).json({ error: `Unknown permission key(s): ${bad.join(", ")}` });
+  if (parentRoleId && !parseSystemParentId(parentRoleId) && !db.data!.customRoles.some((r) => r.id === parentRoleId)) {
+    return res.status(400).json({ error: "Parent role not found." });
+  }
+  if (db.data!.customRoles.some((r) => r.name.toLowerCase() === name.trim().toLowerCase())) {
+    return res.status(409).json({ error: "A role with that name already exists." });
+  }
+  const actor = currentUser(req)!;
+  const role: CustomRole = {
+    id: nanoid(10), name: name.trim(), description: description?.trim() || undefined,
+    permissions: Array.from(new Set(permissions)), parentRoleId: parentRoleId || null, scope: scope ?? null,
+    createdAt: now(), updatedAt: now(), createdBy: actor.name,
+  };
+  db.data!.customRoles.push(role);
+  await db.upsert("customRoles", role);
+  await recordAudit(req, "role.created", `${role.name} (${role.permissions.length} permissions)`);
+  res.json({ role });
+});
+
+app.patch("/api/admin/roles/:id", requirePermission("roles.manage"), validate(customRoleUpdateSchema), async (req, res) => {
+  const role = db.data!.customRoles.find((r) => r.id === req.params.id);
+  if (!role) return res.status(404).json({ error: "Role not found." });
+  const { name, description, permissions, parentRoleId, scope } = req.body as Partial<{
+    name: string; description?: string; permissions: string[]; parentRoleId?: string | null; scope?: CustomRole["scope"];
+  }>;
+  if (permissions) {
+    const bad = badPermissionKeys(permissions);
+    if (bad.length) return res.status(400).json({ error: `Unknown permission key(s): ${bad.join(", ")}` });
+  }
+  if (parentRoleId) {
+    if (!parseSystemParentId(parentRoleId) && !db.data!.customRoles.some((r) => r.id === parentRoleId)) {
+      return res.status(400).json({ error: "Parent role not found." });
+    }
+    if (roleParentCycles(role.id, parentRoleId)) return res.status(400).json({ error: "That would create a circular inheritance chain." });
+  }
+  if (name && db.data!.customRoles.some((r) => r.id !== role.id && r.name.toLowerCase() === name.trim().toLowerCase())) {
+    return res.status(409).json({ error: "A role with that name already exists." });
+  }
+  const beforePerms = role.permissions;
+  if (name !== undefined) role.name = name.trim();
+  if (description !== undefined) role.description = description.trim() || undefined;
+  if (permissions !== undefined) role.permissions = Array.from(new Set(permissions));
+  if (parentRoleId !== undefined) role.parentRoleId = parentRoleId || null;
+  if (scope !== undefined) role.scope = scope ?? null;
+  role.updatedAt = now();
+  await db.upsert("customRoles", role);
+  const added = permissions ? permissions.filter((p) => !beforePerms.includes(p)) : [];
+  const removed = permissions ? beforePerms.filter((p) => !permissions.includes(p)) : [];
+  await recordAudit(req, "role.updated", `${role.name}${added.length ? ` +${added.length}` : ""}${removed.length ? ` -${removed.length}` : ""} permission(s)`);
+  res.json({ role });
+});
+
+app.post("/api/admin/roles/:id/clone", requirePermission("roles.manage"), async (req, res) => {
+  const src = db.data!.customRoles.find((r) => r.id === req.params.id);
+  if (!src) return res.status(404).json({ error: "Role not found." });
+  const actor = currentUser(req)!;
+  let name = `${src.name} (copy)`;
+  let n = 2;
+  while (db.data!.customRoles.some((r) => r.name.toLowerCase() === name.toLowerCase())) { name = `${src.name} (copy ${n})`; n++; }
+  const role: CustomRole = {
+    id: nanoid(10), name, description: src.description, permissions: [...src.permissions],
+    parentRoleId: src.parentRoleId ?? null, scope: src.scope ?? null, createdAt: now(), updatedAt: now(), createdBy: actor.name,
+  };
+  db.data!.customRoles.push(role);
+  await db.upsert("customRoles", role);
+  await recordAudit(req, "role.cloned", `${src.name} → ${role.name}`);
+  res.json({ role });
+});
+
+app.delete("/api/admin/roles/:id", requirePermission("roles.manage"), async (req, res) => {
+  const role = db.data!.customRoles.find((r) => r.id === req.params.id);
+  if (!role) return res.status(404).json({ error: "Role not found." });
+  const members = db.data!.users.filter((u) => u.customRoleId === role.id);
+  if (members.length) return res.status(400).json({ error: `${members.length} team member(s) still have this role assigned. Reassign them first.` });
+  if (db.data!.customRoles.some((r) => r.parentRoleId === role.id)) {
+    return res.status(400).json({ error: "Another role inherits from this one. Update that role's parent first." });
+  }
+  db.data!.customRoles = db.data!.customRoles.filter((r) => r.id !== role.id);
+  await db.remove("customRoles", role.id);
+  await recordAudit(req, "role.deleted", role.name);
+  res.json({ ok: true });
+});
+
+app.patch("/api/admin/team/:id/custom-role", requirePermission("roles.team_manage"), validate(roleAssignSchema), async (req, res) => {
+  const u = db.data!.users.find((x) => x.id === req.params.id && x.role !== "candidate");
+  if (!u) return res.status(404).json({ error: "Staff member not found." });
+  const { customRoleId, expiresAt } = req.body as { customRoleId: string | null; expiresAt?: string | null };
+  if (customRoleId && !db.data!.customRoles.some((r) => r.id === customRoleId)) {
+    return res.status(400).json({ error: "Role not found." });
+  }
+  u.customRoleId = customRoleId || null;
+  u.roleExpiresAt = customRoleId ? (expiresAt || null) : null;
+  await db.upsert("users", u);
+  const roleName = customRoleId ? db.data!.customRoles.find((r) => r.id === customRoleId)?.name : null;
+  await recordAudit(
+    req, "team.custom_role_assigned",
+    customRoleId
+      ? `${u.name} → ${roleName}${u.roleExpiresAt ? ` (until ${new Date(u.roleExpiresAt).toLocaleDateString()})` : ""}`
+      : `${u.name} → (cleared)`
+  );
   res.json({ ok: true });
 });
 
