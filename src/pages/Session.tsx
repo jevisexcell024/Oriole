@@ -178,7 +178,16 @@ export function Session() {
         setData((d) => (d && d.deadlineAt !== c.deadlineAt ? { ...d, deadlineAt: c.deadlineAt, serverNow: c.serverNow } : d));
       } catch { /* transient — try again next tick */ }
     };
-    const id = setInterval(poll, 3500);
+    // 7s rather than a tighter interval: this only affects how fast the UI
+    // reflects a pause/message/termination the server has already enforced
+    // (every write endpoint independently checks attempt.status, so a
+    // terminated candidate can't submit further answers regardless of this
+    // interval) — it's pure display latency, not a security boundary. Kept
+    // deliberately calm because many concurrent candidates behind the same
+    // exam-hall NAT'd IP add up in simultaneous-connection count fast enough
+    // to trip a host firewall's per-IP connection-rate limit (seen in
+    // production: 173 connections from one shared IP briefly auto-blocked).
+    const id = setInterval(poll, 7000);
     return () => { alive = false; clearInterval(id); };
   }, [data, attemptId, navigate]);
 
