@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import {
   Users, Loader2, Search, Plus, Download, Upload, Phone, Mail, MoreHorizontal, X, Pencil, Trash2, BookPlus,
-  ChevronLeft, ChevronRight, AlertTriangle, CheckCircle2,
+  ChevronLeft, ChevronRight, AlertTriangle, CheckCircle2, Send,
 } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
 import { PageHeader } from "@/components/PageHeader";
@@ -41,6 +41,7 @@ export function AdminCandidates() {
   const [editing, setEditing] = useState<Student | null>(null);
   const [assigning, setAssigning] = useState<Student | null>(null);
   const [deleting, setDeleting] = useState<Student | null>(null);
+  const [resending, setResending] = useState<Student | null>(null);
 
   const load = () => api.get<{ students: Student[] }>("/admin/students").then((d) => setRows(d.students)).catch((e) => setError(e.message));
   useEffect(() => { load(); }, []);
@@ -213,6 +214,7 @@ export function AdminCandidates() {
           >
             <MenuItem icon={Pencil} onClick={() => { setEditing(r); setMenu(null); }}>{t("acan.edit")}</MenuItem>
             <MenuItem icon={BookPlus} onClick={() => { setAssigning(r); setMenu(null); }}>{t("acan.assignToExam")}</MenuItem>
+            <MenuItem icon={Send} onClick={() => { setResending(r); setMenu(null); }}>{t("acan.resendInvite")}</MenuItem>
             <MenuItem icon={Trash2} danger onClick={() => { setDeleting(r); setMenu(null); }}>{t("acan.delete")}</MenuItem>
           </div>,
           document.body,
@@ -224,6 +226,7 @@ export function AdminCandidates() {
       {editing && <StudentForm title={t("acan.editStudent")} student={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
       {assigning && <AssignModal student={assigning} onClose={() => setAssigning(null)} />}
       {deleting && <DeleteModal student={deleting} onClose={() => setDeleting(null)} onDone={() => { setDeleting(null); setSel(new Set()); load(); }} />}
+      {resending && <ResendInviteModal student={resending} onClose={() => setResending(null)} />}
     </AdminShell>
   );
 }
@@ -406,6 +409,49 @@ function DeleteModal({ student, onClose, onDone }: { student: Student; onClose: 
         <button onClick={onClose} disabled={busy} className="rounded-lg px-3 py-2 text-sm font-medium text-[var(--muted)] hover:text-[var(--fg)]">{t("acan.cancel")}</button>
         <button onClick={del} disabled={busy} className="inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-3 py-2 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />} {t("acan.delete")}</button>
       </div>
+    </Modal>
+  );
+}
+
+/**
+ * Regenerates a student's password and resends the onboarding email — for a
+ * student whose original invitation failed to deliver (e.g. an SMTP outage).
+ * We only ever store a bcrypt hash, so this issues a fresh temporary password
+ * rather than "resending" the original, which the confirmation copy makes clear.
+ */
+function ResendInviteModal({ student, onClose }: { student: Student; onClose: () => void }) {
+  const t = useT();
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; delivery: string; error: string | null } | null>(null);
+  async function resend() {
+    setBusy(true);
+    try { setResult(await api.post(`/admin/candidates/${student.id}/resend-invite`)); }
+    catch (e) { setResult({ ok: false, delivery: "failed", error: (e as Error).message }); }
+    finally { setBusy(false); }
+  }
+  return (
+    <Modal title={t("acan.resendInviteTitle")} onClose={onClose}>
+      {!result ? (
+        <>
+          <p className="mt-3 text-sm text-[var(--muted)]">{t("acan.resendInviteWarn", { name: student.name, email: student.email })}</p>
+          <div className="mt-5 flex justify-end gap-2">
+            <button onClick={onClose} disabled={busy} className="rounded-lg px-3 py-2 text-sm font-medium text-[var(--muted)] hover:text-[var(--fg)]">{t("acan.cancel")}</button>
+            <button onClick={resend} disabled={busy} className="btn btn-primary disabled:opacity-50">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />} {t("acan.resendInvite")}</button>
+          </div>
+        </>
+      ) : (
+        <>
+          {result.ok ? (
+            <div className="mt-3 flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2.5 text-sm text-emerald-400"><CheckCircle2 className="h-4 w-4 shrink-0" /> {t("acan.resendInviteSent", { email: student.email })}</div>
+          ) : (
+            <div className="mt-3 flex items-start gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2.5 text-sm text-rose-400">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{t("acan.resendInviteFailed")}{result.error && <span className="mt-1 block text-xs opacity-80">{result.error}</span>}</span>
+            </div>
+          )}
+          <div className="mt-5 flex justify-end"><button onClick={onClose} className="btn btn-primary">{t("acan.done")}</button></div>
+        </>
+      )}
     </Modal>
   );
 }

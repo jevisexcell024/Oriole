@@ -1843,6 +1843,22 @@ app.post("/api/admin/candidates", requireRole("admin"), async (req, res) => {
   res.json({ user: { id: user.id, name: user.name, email: user.email } });
 });
 
+// Regenerate a candidate's password and resend the onboarding email — for when
+// the original invitation never arrived (e.g. an SMTP outage). We only ever
+// store a bcrypt hash, so there's no original password to resend as-is; this
+// issues a fresh temporary one and invalidates the old one.
+app.post("/api/admin/candidates/:id/resend-invite", requireRole("admin"), async (req, res) => {
+  const user = db.data!.users.find((u) => u.id === req.params.id && u.role === "candidate");
+  if (!user) return res.status(404).json({ error: "Student not found." });
+  const tempPassword = "dti-" + nanoid(6);
+  user.passwordHash = await bcrypt.hash(tempPassword, BCRYPT_COST);
+  await db.upsert("users", user);
+  await recordAudit(req, "candidate.invite_resent", `${user.name} <${user.email}>`);
+  const mail = invitationEmail(user.name, user.email, tempPassword);
+  const result = await sendMail(user.email, mail.subject, mail.text, mail.html);
+  res.json({ ok: result.delivery !== "failed", delivery: result.delivery, error: result.error });
+});
+
 app.post("/api/admin/candidates/bulk", requireRole("admin"), async (req, res) => {
   type Row = { name?: string; email?: string; studentRef?: string; studentClass?: string; gender?: string; age?: unknown; phone?: string };
   let rows: Row[] = Array.isArray(req.body?.rows) ? req.body.rows : [];

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   Megaphone, MessageSquare, Users, Plus, X, Bell, Mail, Phone, MessageCircle,
-  Send, Loader2, CheckCircle2, Zap, FlaskConical, Inbox, Trash2, Clock,
+  Send, Loader2, CheckCircle2, Zap, FlaskConical, Inbox, Trash2, Clock, AlertTriangle,
 } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
 import { PageHeader } from "@/components/PageHeader";
@@ -19,7 +19,7 @@ interface Announcement {
 }
 interface Kpis { total: number; sent: number; scheduled: number; drafts: number; }
 interface MailerStatus { mode: string; live: boolean; from: string; host: string | null; lastError: string | null; }
-interface EmailMsg { id: string; to: string; subject: string; sentAt: string; delivery?: string; }
+interface EmailMsg { id: string; to: string; subject: string; sentAt: string; delivery?: string; error?: string | null; }
 interface ExamOpt { id: string; title: string }
 
 const fmt = (s: string | null) => (s ? new Date(s).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—");
@@ -352,6 +352,12 @@ function BroadcastTab({ t, mailer }: { t: TFn; mailer: MailerStatus | null }) {
             : <span><span className="font-semibold">{t("acom.mockMode1")}</span>{t("acom.mockMode2")}<code>MAIL_TRANSPORT=smtp</code>{t("acom.mockMode3")}</span>}
         </div>
       )}
+      {mailer?.lastError && (
+        <div className="mb-4 flex items-start gap-2 rounded-xl border border-rose-500/30 bg-rose-500/15 px-3.5 py-2.5 text-sm text-rose-400">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span><span className="font-semibold">{t("acom.lastErrorLabel")}</span> {mailer.lastError}</span>
+        </div>
+      )}
       <div className="card p-5">
         <h2 className="flex items-center gap-2 text-sm font-semibold"><Inbox className="h-4 w-4 text-brand-400" /> {t("acom.deliveryLog")} {emails && <span className="text-xs font-normal text-[var(--muted)]">· {emails.length}</span>}</h2>
         {!emails ? <div className="mt-3 flex items-center gap-2 text-sm text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div>
@@ -368,6 +374,7 @@ function BroadcastTab({ t, mailer }: { t: TFn; mailer: MailerStatus | null }) {
                     </span>
                   </div>
                   <p className="text-xs text-[var(--muted)]">{t("acom.toPrefix", { to: m.to })}</p>
+                  {m.delivery === "failed" && m.error && <p className="mt-1 text-xs text-rose-400">{m.error}</p>}
                 </div>
               ))}
             </div>
