@@ -5774,3 +5774,19 @@ async function shutdown(signal: string) {
 }
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
 process.on("SIGINT", () => void shutdown("SIGINT"));
+
+// Express 4 does not catch a rejected promise thrown out of an `async (req, res) => {...}`
+// route handler — with no listener here, Node's default is to crash the whole process on
+// any single such rejection (default since Node 15), taking down every concurrent user at
+// once and, worse, risking exactly the kind of mid-write kill that has corrupted the
+// embedded database before. Logging and continuing keeps the other ~100 concurrent exam
+// sessions alive at the cost of that one request failing to respond (the client sees a
+// timeout, not the whole platform going down). This is a deliberate trade-off for a pure-JS
+// server with no native addons in the request path — not a guarantee the process state is
+// always pristine afterward, just a strong bias toward "keep serving everyone else."
+process.on("unhandledRejection", (reason) => {
+  logger.error({ err: reason }, "unhandled promise rejection — request likely failed, server staying up");
+});
+process.on("uncaughtException", (err) => {
+  logger.error({ err }, "uncaught exception — request likely failed, server staying up");
+});
