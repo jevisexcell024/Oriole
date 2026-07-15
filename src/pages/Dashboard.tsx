@@ -193,6 +193,27 @@ export function Dashboard() {
               </div>
             </div>
 
+            {/* ── Hero banner ── deliberately fixed light card (not theme-tracking) so
+                the illustration's white background reads cleanly in both light and
+                dark mode — same treatment a bright promotional block gets on any
+                site regardless of the page's own theme. ── */}
+            <div className="overflow-hidden rounded-2xl" style={{ background: "linear-gradient(135deg, #EAF1FF 0%, #F4F8FF 100%)" }}>
+              <div className="grid grid-cols-1 items-center gap-4 px-6 py-8 sm:px-10 sm:py-10 md:grid-cols-[1fr_auto] md:gap-10">
+                <div>
+                  <h2 className="uppercase" style={{ fontFamily: BARLOW, fontWeight: 700, fontSize: 30, lineHeight: 1.1, color: "#0f172a", letterSpacing: "0.01em" }}>
+                    Your Study Toolkit
+                  </h2>
+                  <p className="mt-2 max-w-sm" style={{ fontSize: 13.5, color: "#475569", lineHeight: 1.6 }}>
+                    Everything for this term lives here — track your exams, review results, and jump into your study materials whenever you need them.
+                  </p>
+                  <Link to="/library" className="mt-4 inline-flex items-center gap-1.5 text-sm font-semibold transition hover:opacity-70" style={{ color: "#1d4ed8" }}>
+                    Browse the library <ChevronRight className="h-4 w-4" />
+                  </Link>
+                </div>
+                <img src="/Bluen.png" alt="" aria-hidden="true" className="h-[150px] w-auto justify-self-center object-contain sm:h-[190px] md:justify-self-end" />
+              </div>
+            </div>
+
             {/* ── Section 2: New Courses ── */}
             <Panel>
               <div className="flex flex-wrap items-center justify-between gap-3">
