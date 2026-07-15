@@ -246,7 +246,9 @@ export interface Exam {
   gradeScale?: GradeScale;
   /** Letter-grade boundaries (e.g. A ≥ 80). Empty = no letter grades. */
   gradeBands?: GradeBand[];
-  /** Scheduled result release: students can't see scores until this time (ISO). */
+  /** Scheduled result release: students can't see scores until this time (ISO).
+   *  When unset, falls back to `availableUntil` (see resultsHeldUntil in server/index.ts)
+   *  so results are held until the Scheduler window closes by default. */
   resultsReleaseAt?: string | null;
   /** Hide candidate identity from graders while marking (revealed once released). */
   anonymousGrading?: boolean;

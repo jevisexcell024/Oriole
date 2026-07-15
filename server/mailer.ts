@@ -38,6 +38,11 @@ async function getTransporter(): Promise<Transporter | null> {
         auth: process.env.SMTP_USER ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS } : undefined,
         connectionTimeout: 10_000,
         greetingTimeout: 10_000,
+        // Reuse SMTP connections instead of a fresh handshake per message — a bulk
+        // student import can send dozens/hundreds of invitation emails back to back.
+        pool: true,
+        maxConnections: 5,
+        maxMessages: 100,
       }) as unknown as Transporter;
     })().catch((e: unknown) => { lastError = (e as Error).message; return null; });
   }
@@ -181,6 +186,10 @@ export async function sendMail(
     sentAt: now(),
     delivery, error, provider: transporter ? MODE : "mock",
   };
-  await emailStore.add(msg);
+  // A failure here is a logging problem, not a delivery problem — don't let it
+  // turn an otherwise-successful send into a rejected promise for the caller
+  // (a caller looping over many recipients would otherwise abort the rest of
+  // the batch on one transient outbox-write error).
+  try { await emailStore.add(msg); } catch { /* best-effort log */ }
   return { delivery, error, previewUrl };
 }

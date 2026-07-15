@@ -1789,7 +1789,13 @@ function GradingSchemeCard({ exam, patchExam }: { exam: Exam; patchExam: (p: Par
             onChange={(e) => patchExam({ resultsReleaseAt: e.target.value ? new Date(e.target.value).toISOString() : null })} />
           {exam.resultsReleaseAt && <button type="button" onClick={() => patchExam({ resultsReleaseAt: null })} className="text-xs text-[var(--muted)] hover:text-rose-500">{t("eb.clear")}</button>}
         </div>
-        <p className="mt-1 text-[11px] text-[var(--muted)]">{exam.resultsReleaseAt ? t("eb.releaseHeldHint") : t("eb.releaseImmediateHint")}</p>
+        <p className="mt-1 text-[11px] text-[var(--muted)]">
+          {exam.resultsReleaseAt
+            ? t("eb.releaseHeldHint")
+            : exam.availableUntil
+              ? t("eb.releaseAutoHint", { date: new Date(exam.availableUntil).toLocaleString() })
+              : t("eb.releaseImmediateHint")}
+        </p>
       </div>
 
       {/* Anonymous grading */}

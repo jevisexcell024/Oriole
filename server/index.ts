@@ -784,6 +784,14 @@ function scheduledStartIso(reg: Registration | undefined, exam: Exam | undefined
   return reg?.scheduledStart || exam?.availableFrom || null;
 }
 
+/** Effective results-hold deadline (ISO or null): an explicit resultsReleaseAt
+ *  wins; otherwise results are held until the exam's Scheduler window closes,
+ *  so a fast finisher can't see (and leak) their score/answers to candidates
+ *  still testing within the same availability window. */
+function resultsHeldUntil(exam: { resultsReleaseAt?: string | null; availableUntil?: string | null } | null | undefined): string | null {
+  return exam?.resultsReleaseAt ?? exam?.availableUntil ?? null;
+}
+
 /** Hard deadline (epoch ms) for an in-progress attempt.
  *  When the exam is scheduled, the countdown is a FIXED window anchored to the
  *  scheduled start (everyone shares the same end time; a late joiner gets less
@@ -1543,8 +1551,10 @@ app.get("/api/attempts/:id/result", requireAuth, async (req, res) => {
   if (!attempt) return res.status(404).json({ error: "Attempt not found." });
   const exam = db.data!.exams.find((e) => e.id === attempt.examId)!;
   const pendingReview = attempt.gradingStatus === "pending_review";
-  // Scheduled release: hold the score from the student until the release time.
-  const held = !!exam.resultsReleaseAt && new Date(exam.resultsReleaseAt).getTime() > Date.now();
+  // Scheduled release: hold the score from the student until the release time
+  // (an explicit resultsReleaseAt, or else the exam's Scheduler close time).
+  const releaseAt = resultsHeldUntil(exam);
+  const held = !!releaseAt && new Date(releaseAt).getTime() > Date.now();
   const hide = pendingReview || held; // don't reveal marks/answers yet
   const questions = servedQuestions(attempt);
   const answers = await answerStore.forAttempt(attempt.id);
@@ -1576,7 +1586,7 @@ app.get("/api/attempts/:id/result", requireAuth, async (req, res) => {
   res.json({
     attempt: safeAttempt, exam, review, certificate, proctorEvents: events,
     gradingStatus: attempt.gradingStatus ?? "auto_graded",
-    held, releaseAt: held ? exam.resultsReleaseAt : null,
+    held, releaseAt: held ? releaseAt : null,
     letter: hide ? null : letterFor(attempt.score ?? 0, exam.gradeBands),
     // Whether this released result can be appealed, and the status of any existing appeal.
     canAppeal: !hide && attempt.status === "submitted",
@@ -1590,7 +1600,8 @@ app.post("/api/attempts/:id/regrade", requireAuth, async (req, res) => {
   const attempt = db.data!.attempts.find((a) => a.id === req.params.id && a.candidateId === user.id);
   if (!attempt) return res.status(404).json({ error: "Attempt not found." });
   const exam = db.data!.exams.find((e) => e.id === attempt.examId);
-  const held = !!exam?.resultsReleaseAt && new Date(exam.resultsReleaseAt).getTime() > Date.now();
+  const heldUntil = resultsHeldUntil(exam);
+  const held = !!heldUntil && new Date(heldUntil).getTime() > Date.now();
   if (attempt.gradingStatus === "pending_review" || held) return res.status(409).json({ error: "Results aren't available yet." });
   const reason = String(req.body?.reason ?? "").trim();
   if (reason.length < 10) return res.status(400).json({ error: "Please give a reason (at least 10 characters)." });
@@ -1842,6 +1853,7 @@ app.post("/api/admin/candidates/bulk", requireRole("admin"), async (req, res) =>
     });
   }
   const created: { name: string; email: string; tempPassword: string }[] = [];
+  const createdUsers: User[] = [];
   const skipped: { email: string; reason: string }[] = [];
   for (const row of rows.slice(0, 1000)) {
     const name = (row?.name ?? "").trim();
@@ -1851,22 +1863,34 @@ app.post("/api/admin/candidates/bulk", requireRole("admin"), async (req, res) =>
     if (created.some((c) => c.email.toLowerCase() === email.toLowerCase())) { skipped.push({ email, reason: "Duplicate in file" }); continue; }
     const tempPassword = "dti-" + nanoid(6);
     const ageNum = Number(row?.age);
-    db.data!.users.push({
+    const user: User = {
       id: nanoid(10), email, passwordHash: await bcrypt.hash(tempPassword, BCRYPT_COST), name, role: "candidate",
       gender: typeof row?.gender === "string" && row.gender.trim() ? row.gender.trim() : undefined,
       age: row?.age !== undefined && row?.age !== "" && Number.isFinite(ageNum) ? ageNum : undefined,
       studentClass: typeof row?.studentClass === "string" && row.studentClass.trim() ? row.studentClass.trim() : undefined,
       phone: typeof row?.phone === "string" && row.phone.trim() ? encryptString(row.phone.trim()) : undefined,
-    });
+    };
+    db.data!.users.push(user);
+    createdUsers.push(user);
     created.push({ name, email, tempPassword });
   }
-  await db.write();
+  // Targeted per-row writes instead of a full-mirror db.write() flush — a bulk
+  // import of hundreds of students shouldn't re-serialize every other table.
+  for (const user of createdUsers) await db.upsert("users", user);
   if (created.length) await recordAudit(req, "candidates.imported", `${created.length} student${created.length === 1 ? "" : "s"}`);
-  for (const c of created) {
-    const mail = invitationEmail(c.name, c.email, c.tempPassword);
-    await sendMail(c.email, mail.subject, mail.text, mail.html);
-  }
+  // Respond as soon as the accounts exist — don't make the admin's browser wait
+  // on N sequential SMTP sends (which previously could exceed the client's
+  // request timeout for a large import, aborting the connection mid-batch and
+  // silently killing every invitation email after wherever the loop had reached).
   res.json({ created, skipped });
+  for (const c of created) {
+    try {
+      const mail = invitationEmail(c.name, c.email, c.tempPassword);
+      await sendMail(c.email, mail.subject, mail.text, mail.html);
+    } catch (e) {
+      logger.error({ err: e, email: c.email }, "bulk-import invitation email failed");
+    }
+  }
 });
 
 app.get("/api/admin/emails", requireRoles(...GRADERS), async (_req, res) => {
@@ -3893,12 +3917,13 @@ app.get("/api/my/results", requireAuth, async (req, res) => {
     .map((a) => {
       const exam = examById(a.examId);
       const cert = db.data!.certificates.find((c) => c.attemptId === a.id);
-      const held = !!exam?.resultsReleaseAt && new Date(exam.resultsReleaseAt).getTime() > Date.now();
+      const releaseAt = resultsHeldUntil(exam);
+      const held = !!releaseAt && new Date(releaseAt).getTime() > Date.now();
       return {
         attemptId: a.id, examTitle: exam?.title ?? "Examination", examCode: exam?.code ?? "",
         score: held ? null : (a.score ?? 0), passed: held ? null : (a.passed ?? false),
         gradingStatus: a.gradingStatus ?? "auto_graded",
-        held, releaseAt: held ? exam?.resultsReleaseAt ?? null : null,
+        held, releaseAt: held ? releaseAt : null,
         letter: held ? null : letterFor(a.score ?? 0, exam?.gradeBands),
         submittedAt: a.submittedAt, integrity: scoreOf(cleanEvents(evMap.get(a.id) ?? [], a.submittedAt)), passingScore: exam?.passingScore ?? 0,
         certNumber: cert?.certNumber ?? null,
