@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
 import { graceSecondsRemaining } from "@shared/geo";
+import { checkPermissionsPolicy } from "./permissionsPolicyCheck";
 
 export type GeoCheckState = "pending" | "ok" | "fail";
 
@@ -62,15 +63,26 @@ export function useGeofence({ active, registrationId }: Options) {
           if (!cancelled) { setState("fail"); setError(e instanceof Error ? e.message : "Could not verify your location."); }
         }
       },
-      (err) => {
+      async (err) => {
         if (cancelled) return;
         const clientError = err.code === err.PERMISSION_DENIED ? "GPS_PERMISSION_DENIED" : "GPS_DISABLED";
         setState("fail");
-        setError(
-          clientError === "GPS_PERMISSION_DENIED"
-            ? "Location permission is required to take this examination. Please enable location services."
-            : "Location services are turned off or unavailable. Please enable GPS before continuing.",
-        );
+        // A PERMISSION_DENIED here looks identical whether a person clicked
+        // "Block" or the server's Permissions-Policy header is blocking
+        // geolocation outright (no prompt ever shown) — read back the real
+        // header to tell the two apart instead of guessing.
+        let message = clientError === "GPS_PERMISSION_DENIED"
+          ? "Location permission is required to take this examination. Please enable location services."
+          : "Location services are turned off or unavailable. Please enable GPS before continuing.";
+        if (clientError === "GPS_PERMISSION_DENIED") {
+          const policy = await checkPermissionsPolicy();
+          if (!policy.fetchError && policy.geolocation !== "allowed") {
+            message = policy.geolocation === "blocked"
+              ? "This site's server configuration is blocking location access outright (Permissions-Policy: geolocation=()) — no permission prompt was ever shown, and this isn't something you can fix from your device. Contact your administrator."
+              : "This site's server configuration doesn't explicitly allow location access, and the browser may be silently refusing it. Contact your administrator if Retry doesn't work.";
+          }
+        }
+        if (!cancelled) setError(message);
         api.post(`/registrations/${registrationId}/geofence-check`, { clientError, deviceId: getOrCreateDeviceId() }).catch(() => { /* best-effort */ });
       },
       { enableHighAccuracy: true, timeout: 15_000, maximumAge: 0 },

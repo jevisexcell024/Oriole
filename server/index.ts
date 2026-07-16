@@ -5995,10 +5995,15 @@ app.use("/api", (_req, res) => res.status(404).json({ error: "Not found" }));
 // Never cache it, so a redeploy is picked up on the next page load.
 // Permissions-Policy explicitly allows camera + microphone so cPanel/Apache
 // cannot override it with a restrictive default that breaks the webcam check-in.
+// Must also include geolocation (it was dropped here before — res.setHeader()
+// replaces rather than merges with the geolocation=(self) the permissionsPolicy
+// middleware above already set, so every actual page load was silently losing
+// it and breaking geofencing, even though both server/security.ts and
+// public/.htaccess correctly grant it).
 if (servingSpa) {
   app.get(/^\/(?!api\/).*/, (_req, res) => {
     res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-    res.setHeader("Permissions-Policy", "camera=*, microphone=*");
+    res.setHeader("Permissions-Policy", "geolocation=(self), camera=*, microphone=*");
     res.sendFile(path.join(distDir, "index.html"));
   });
 }
@@ -6118,12 +6123,25 @@ async function shutdown(signal: string) {
   clearInterval(geofenceSweepTimer);
   clearInterval(reminderTimer);
   clearInterval(digestTimer);
-  server.close(async () => {
+
+  // Both the graceful path (server.close()'s callback, once every open
+  // connection has drained) and the hard-cap timeout below must close the
+  // database before exiting — a lingering keep-alive connection stalling
+  // server.close() must never turn a polite SIGTERM into a de facto unclean
+  // kill from our own code, which is exactly what has corrupted the embedded
+  // database before (the old fallback here called process.exit() directly,
+  // skipping db.close() entirely).
+  let finished = false;
+  const finish = async (exitCode: number) => {
+    if (finished) return;
+    finished = true;
     try { await db.close(); } catch { /* ignore */ }
-    process.exit(0);
-  });
+    process.exit(exitCode);
+  };
+
+  server.close(() => void finish(0));
   // Hard cap so a hung connection can't block forever.
-  setTimeout(() => process.exit(1), 10_000).unref();
+  setTimeout(() => void finish(1), 10_000).unref();
 }
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
 process.on("SIGINT", () => void shutdown("SIGINT"));

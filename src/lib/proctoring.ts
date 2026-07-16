@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { checkPermissionsPolicy } from "./permissionsPolicyCheck";
 
 export type FaceStatus = "ok" | "no_face" | "multiple" | "unsupported" | "pending";
 
@@ -23,14 +24,31 @@ declare global {
   }
 }
 
-function mediaErrorMessage(err: unknown): string {
+/** For NotAllowedError/SecurityError specifically: a rejection here looks
+ *  identical whether a person clicked "Block" or the *server* is blocking the
+ *  feature outright via its Permissions-Policy header (no prompt is ever shown
+ *  in the latter case, so "click the camera icon to allow" is actively wrong
+ *  advice). Reading back the real header distinguishes the two so the message
+ *  — and who needs to act on it — is actually correct. */
+async function policySpecificReason(feature: "camera" | "microphone"): Promise<string | null> {
+  const policy = await checkPermissionsPolicy();
+  if (policy.fetchError) return null; // can't tell — fall back to the generic message
+  const state = policy[feature];
+  if (state === "allowed") return null; // genuinely a user/device-level denial
+  return state === "blocked"
+    ? `This site's server configuration is blocking ${feature} access outright (Permissions-Policy: ${feature}=()) — no permission prompt was ever shown, and this isn't something you can fix from your device. Contact your administrator.`
+    : `This site's server configuration doesn't explicitly allow ${feature} access, and the browser may be silently refusing it. Contact your administrator if Retry doesn't work.`;
+}
+
+async function mediaErrorMessage(err: unknown): Promise<string> {
   if (!navigator.mediaDevices) {
     return "Camera access requires a secure HTTPS connection. Please contact your administrator.";
   }
   if (err instanceof DOMException) {
     switch (err.name) {
       case "NotAllowedError":
-        return "Camera/microphone access was denied. Click the camera icon in your browser's address bar to allow access, then click Retry.";
+        return (await policySpecificReason("camera"))
+          ?? "Camera/microphone access was denied. Click the camera icon in your browser's address bar to allow access, then click Retry.";
       case "NotFoundError":
         return "No camera or microphone was found. Please connect a webcam and click Retry.";
       case "NotReadableError":
@@ -38,7 +56,8 @@ function mediaErrorMessage(err: unknown): string {
       case "OverconstrainedError":
         return "Your camera doesn't meet the video requirements. Try a different browser or camera, then click Retry.";
       case "SecurityError":
-        return "Camera access is blocked by a browser security policy. Make sure the page is loaded over HTTPS.";
+        return (await policySpecificReason("camera"))
+          ?? "Camera access is blocked by a browser security policy. Make sure the page is loaded over HTTPS.";
       default:
         return `Camera error: ${err.message}. Click Retry to try again.`;
     }
@@ -112,7 +131,7 @@ export function useProctoring({ active, onEvent, audioMonitoring }: Options) {
         }
       } catch (err) {
         if (!cancelled) {
-          setError(mediaErrorMessage(err));
+          setError(await mediaErrorMessage(err));
           setCameraReady(false);
         }
       }

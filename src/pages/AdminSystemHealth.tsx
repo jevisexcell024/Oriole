@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { HeartPulse, Loader2, Database, Mail, Server, Clock, CheckCircle2, Zap, FlaskConical, AlertTriangle, HardDriveDownload } from "lucide-react";
+import { HeartPulse, Loader2, Database, Mail, Server, Clock, CheckCircle2, Zap, FlaskConical, AlertTriangle, HardDriveDownload, ShieldCheck, Camera, MapPin, Mic, RefreshCw } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
 import { api } from "@/lib/api";
 import { PageHeader } from "@/components/PageHeader";
 import { useT } from "@/lib/i18n";
+import { checkPermissionsPolicy, type PermissionsPolicyReport, type PolicyFeatureState } from "@/lib/permissionsPolicyCheck";
 import { clsx } from "clsx";
 
 interface Health {
@@ -41,6 +42,18 @@ export function AdminSystemHealth() {
     return () => clearInterval(id);
   }, []);
 
+  // Client-side, not server-side: this has to run in a real browser hitting the
+  // real public URL, since .htaccess (Apache/cPanel) only applies on that path —
+  // the Node server checking itself over localhost would never see what a real
+  // user's browser actually receives.
+  const [policy, setPolicy] = useState<PermissionsPolicyReport | null>(null);
+  const [checkingPolicy, setCheckingPolicy] = useState(false);
+  const recheckPolicy = (force = false) => {
+    setCheckingPolicy(true);
+    checkPermissionsPolicy({ force }).then(setPolicy).finally(() => setCheckingPolicy(false));
+  };
+  useEffect(() => { recheckPolicy(); }, []);
+
   const runBackupNow = async () => {
     setRunningBackup(true);
     try {
@@ -68,6 +81,15 @@ export function AdminSystemHealth() {
               <Status icon={h.mailer.live ? Zap : FlaskConical} label={t("ahlt.mailer")} ok={!h.mailer.lastError} detail={h.mailer.lastError ? t("ahlt.deliveryError") : h.mailer.live ? t("ahlt.liveHost", { host: h.mailer.host ?? "" }) : t("ahlt.mockMode")} warn={!h.mailer.live && !h.mailer.lastError} />
               <Status icon={HardDriveDownload} label={t("ahlt.backup")} ok={!h.backup.lastBackupError && !!h.backup.lastBackupAt} warn={!h.backup.lastBackupError && !h.backup.lastBackupAt}
                 detail={h.backup.lastBackupError ? t("ahlt.backupError") : h.backup.lastBackupAt ? t("ahlt.backupOk", { when: new Date(h.backup.lastBackupAt).toLocaleString() }) : t("ahlt.backupNone")} />
+              {policy && (() => {
+                const states = [policy.camera, policy.microphone, policy.geolocation];
+                const anyBlocked = states.includes("blocked");
+                const ok = !policy.fetchError && states.every((s) => s === "allowed");
+                return (
+                  <Status icon={ShieldCheck} label={t("ahlt.permPolicy")} ok={ok} warn={!ok && !anyBlocked && !policy.fetchError}
+                    detail={policy.fetchError ? t("ahlt.permPolicyCheckFailed") : ok ? t("ahlt.permPolicyAllowed") : anyBlocked ? t("ahlt.permPolicyBlocked") : t("ahlt.permPolicyMissing")} />
+                );
+              })()}
             </div>
 
             <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-[1.4fr_1fr]">
@@ -122,6 +144,33 @@ export function AdminSystemHealth() {
                 <p className="mt-3 text-xs text-rose-400">{t("ahlt.backupError")}: {h.backup.lastBackupError}</p>
               )}
             </div>
+
+            <div className="mt-5 card p-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h2 className="flex items-center gap-2 text-sm font-semibold"><ShieldCheck className="h-4 w-4 text-brand-400" /> {t("ahlt.permPolicy")}</h2>
+                <button onClick={() => recheckPolicy(true)} disabled={checkingPolicy} className="btn btn-outline h-8 text-xs disabled:opacity-50">
+                  {checkingPolicy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                  {t("ahlt.permPolicyRecheck")}
+                </button>
+              </div>
+              <p className="mt-1.5 text-xs text-[var(--muted)]">{t("ahlt.permPolicyDesc")}</p>
+              {policy ? (
+                <>
+                  <div className="mt-3 grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-3">
+                    <FeatureRow icon={Camera} label={t("ahlt.permPolicyCamera")} state={policy.camera} t={t} />
+                    <FeatureRow icon={Mic} label={t("ahlt.permPolicyMic")} state={policy.microphone} t={t} />
+                    <FeatureRow icon={MapPin} label={t("ahlt.permPolicyGeo")} state={policy.geolocation} t={t} />
+                  </div>
+                  {policy.fetchError ? (
+                    <p className="mt-3 text-xs text-rose-400">{t("ahlt.permPolicyCheckFailed")}: {policy.fetchError}</p>
+                  ) : (
+                    <p className="mt-3 truncate font-mono text-xs text-[var(--muted)]" title={policy.raw ?? undefined}>{policy.raw ?? t("ahlt.permPolicyNoHeader")}</p>
+                  )}
+                </>
+              ) : (
+                <div className="mt-3 flex items-center gap-2 text-xs text-[var(--muted)]"><Loader2 className="h-3.5 w-3.5 animate-spin" /> {t("common.loading")}</div>
+              )}
+            </div>
           </>
         )}
       </div>
@@ -148,6 +197,19 @@ function Row({ label, value }: { label: string; value: string }) {
     <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] pb-2 last:border-0 last:pb-0">
       <span className="shrink-0 text-[var(--muted)]">{label}</span>
       <span className="truncate text-right font-medium">{value}</span>
+    </div>
+  );
+}
+function FeatureRow({ icon: Icon, label, state, t }: { icon: typeof Camera; label: string; state: PolicyFeatureState; t: (k: string) => string }) {
+  const tone = state === "allowed" ? "text-emerald-400" : state === "blocked" ? "text-rose-400" : "text-amber-500";
+  const dot = state === "allowed" ? "bg-emerald-500" : state === "blocked" ? "bg-rose-500" : "bg-amber-500";
+  const stateLabel = state === "allowed" ? t("ahlt.permPolicyAllowed") : state === "blocked" ? t("ahlt.permPolicyStateBlocked") : t("ahlt.permPolicyStateMissing");
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2">
+      <Icon className="h-4 w-4 shrink-0 text-[var(--muted)]" />
+      <span className="min-w-0 flex-1 truncate text-xs font-medium">{label}</span>
+      <span className={clsx("h-2 w-2 shrink-0 rounded-full", dot)} />
+      <span className={clsx("shrink-0 text-xs font-semibold", tone)}>{stateLabel}</span>
     </div>
   );
 }
