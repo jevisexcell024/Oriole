@@ -322,7 +322,6 @@ function StudentForm({ title, student, onClose, onSaved }: { title: string; stud
   async function save() {
     setErr(null);
     if (!name.trim() || !email.trim()) { setErr(t("acan.errNameEmail")); return; }
-    if (!editMode && password.length < 6) { setErr(t("acan.errPw6")); return; }
     setBusy(true);
     try {
       const body = { name, email, gender: gender || undefined, age: age ? Number(age) : null, phone };
@@ -330,7 +329,7 @@ function StudentForm({ title, student, onClose, onSaved }: { title: string; stud
         await api.patch(`/admin/students/${student!.id}`, body);
         if (password) await api.patch(`/admin/candidates/${student!.id}/password`, { password });
       } else {
-        await api.post("/admin/candidates", { ...body, password });
+        await api.post("/admin/candidates", body);
       }
       onSaved();
     } catch (e) { setErr((e as Error).message); setBusy(false); }
@@ -348,9 +347,13 @@ function StudentForm({ title, student, onClose, onSaved }: { title: string; stud
           <Field label={t("acan.age")}><input type="number" min={0} className="input h-10" value={age} onChange={(e) => setAge(e.target.value)} /></Field>
         </div>
         <Field label={t("acan.phone")}><input className="input h-10" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+233…" /></Field>
-        <Field label={editMode ? t("acan.resetPassword") : t("acan.password")}>
-          <input type="password" className="input h-10" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={editMode ? t("acan.leaveBlank") : t("acan.min6")} />
-        </Field>
+        {editMode ? (
+          <Field label={t("acan.resetPassword")}>
+            <input type="password" className="input h-10" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={t("acan.leaveBlank")} />
+          </Field>
+        ) : (
+          <p className="text-xs text-[var(--muted)]">{t("acan.setupLinkHint")}</p>
+        )}
         {err && <p className="text-sm text-rose-500">{err}</p>}
       </div>
       <div className="mt-5 flex justify-end gap-2">

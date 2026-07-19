@@ -39,6 +39,22 @@ export function pending2faUserId(req: Request): string | null {
 }
 export function clearPending2fa(res: Response) { res.clearCookie(TWO_FA_COOKIE); }
 
+/** Signed, self-expiring token embedded in a "set up your account" email link —
+ *  proves the click is authorized without ever putting a real password in the
+ *  email itself. 72h window: long enough to reach an inbox and get checked,
+ *  short enough that a stale, unused invite link doesn't stay valid forever. */
+export function passwordSetupToken(userId: string): string {
+  return jwt.sign({ sub: userId, pwSetup: true }, JWT_SECRET, { expiresIn: "72h" });
+}
+export function verifyPasswordSetupToken(token: string): string | null {
+  try {
+    const p = jwt.verify(token, JWT_SECRET) as { sub: string; pwSetup?: boolean };
+    return p.pwSetup ? p.sub : null;
+  } catch {
+    return null;
+  }
+}
+
 export function issueSession(res: Response, user: User) {
   const token = jwt.sign({ sub: user.id, role: user.role, tv: user.tokenVersion ?? 0 }, JWT_SECRET, { expiresIn: "7d" });
   res.cookie(COOKIE, token, {

@@ -62,6 +62,11 @@ export const passwordChangeSchema = z.object({
   password: strongPassword,
 });
 
+export const passwordSetupSchema = z.object({
+  token: z.string().min(1),
+  password: strongPassword,
+});
+
 export const passwordResetSchema = z.object({
   password: strongPassword,
 });
