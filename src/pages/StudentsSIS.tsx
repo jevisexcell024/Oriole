@@ -8,7 +8,10 @@ import {
 } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
 import { PageHeader } from "@/components/PageHeader";
+import { Breadcrumbs } from "@/components/Breadcrumbs";
+import { ErrorBanner } from "@/components/ui";
 import { api } from "@/lib/api";
+import { initials, timeAgo } from "@/lib/format";
 import type { StudentTrend as StudentTrendData, SubjectTrend as SubjectTrendItem } from "@shared/types";
 import { TrendingUp } from "lucide-react";
 import { useT, type TFn } from "@/lib/i18n";
@@ -53,19 +56,6 @@ const hashPalette = (id: string) =>
 const fmtDate = (s: string | null) =>
   s ? new Date(s).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "—";
 
-const fmtAgo = (iso: string | null) => {
-  if (!iso) return "—";
-  const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
-  if (s < 60) return "just now";
-  const m = Math.round(s / 60); if (m < 60) return `${m}m ago`;
-  const h = Math.round(m / 60); if (h < 24) return `${h}h ago`;
-  const d = Math.round(h / 24); if (d === 1) return "Yesterday";
-  return `${d}d ago`;
-};
-
-function initials(name: string) {
-  return name.split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase();
-}
 function scoreTone(n: number | null) {
   if (n === null) return "text-[var(--muted)]";
   return n >= 80 ? "text-emerald-400" : n >= 60 ? "text-amber-400" : "text-rose-400";
@@ -158,7 +148,7 @@ export function StudentsSIS() {
         <PageHeader title={t("asis.title")} subtitle={t("asis.subtitle")} />
 
         {error && (
-          <p className="mt-6 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">{error}</p>
+          <ErrorBanner className="mt-6">{error}</ErrorBanner>
         )}
         {!data && !error && (
           <div className="mt-8 flex items-center gap-2 text-[var(--muted)]">
@@ -350,7 +340,7 @@ function ClassFolderRow({ folder, isOpen, onToggle, isPinned, onPin, onNavigate 
         <div className="hidden items-center gap-6 lg:flex">
           <StatChip label="Avg Score"  value={folder.avgScore !== null ? `${folder.avgScore}%` : "—"} accent={folder.avgScore !== null ? p.accent : undefined} />
           <StatChip label="Pass Rate"  value={folder.passRate !== null ? `${folder.passRate}%` : "—"} accent={folder.passRate !== null ? (folder.passRate >= 50 ? "#10b981" : "#ef4444") : undefined} />
-          <StatChip label="Last Active" value={fmtAgo(folder.lastActivity)} muted />
+          <StatChip label="Last Active" value={timeAgo(folder.lastActivity)} muted />
         </div>
 
         {/* Actions */}
@@ -404,7 +394,7 @@ function ClassFolderRow({ folder, isOpen, onToggle, isPinned, onPin, onNavigate 
               { label: "Students",   value: folder.students.length,                                                   color: p.accent },
               { label: "Avg Score",  value: folder.avgScore !== null ? `${folder.avgScore}%` : "—",                  color: "var(--fg)" },
               { label: "Pass Rate",  value: folder.passRate !== null ? `${folder.passRate}%` : "—",                  color: folder.passRate !== null ? (folder.passRate >= 50 ? "#10b981" : "#ef4444") : "var(--muted)" },
-              { label: "Last Active",value: fmtAgo(folder.lastActivity),                                              color: "var(--muted)" },
+              { label: "Last Active",value: timeAgo(folder.lastActivity),                                              color: "var(--muted)" },
             ].map((s) => (
               <div key={s.label} className="rounded-xl p-3" style={{ background: "var(--card-2)" }}>
                 <p className="text-[10px] uppercase tracking-wide text-[var(--muted)]">{s.label}</p>
@@ -526,7 +516,7 @@ function StudentTable({ students, onNavigate }: {
                   {s.certificates || "—"}
                 </td>
                 <td className="px-3 py-3 text-xs text-[var(--muted)] whitespace-nowrap">
-                  {fmtAgo(s.lastActivity)}
+                  {timeAgo(s.lastActivity)}
                 </td>
                 <td className="px-3 py-3 text-right">
                   <ArrowRight className="ml-auto h-4 w-4 text-[var(--muted)]" />
@@ -662,6 +652,7 @@ export function StudentRecord() {
   return (
     <AdminShell wide>
       <div className="fade-in max-w-4xl">
+        <Breadcrumbs current={student.name} />
         <div className="flex items-center justify-between gap-3 print:hidden">
           <Link to="/admin/students" className="inline-flex items-center gap-1.5 text-sm text-[var(--muted)] hover:text-[var(--fg)]">
             <ArrowLeft className="h-4 w-4" /> {t("acan.title")}

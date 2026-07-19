@@ -6,14 +6,15 @@ import {
 } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
 import { PageHeader } from "@/components/PageHeader";
-import { Skeleton, EmptyState } from "@/components/ui";
+import { Breadcrumbs } from "@/components/Breadcrumbs";
+import { Skeleton, EmptyState, Modal } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useT, type TFn } from "@/lib/i18n";
 import { useLearningStructure } from "@/lib/learningStructure";
 import { IMPORT_ACCEPT, parseStudentFile } from "@/lib/importTable";
+import { initials } from "@/lib/format";
 import { clsx } from "clsx";
 
-const initials = (n: string) => n.split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase();
 const fmt = (s: string | null, t: TFn) => (s ? new Date(s).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : t("acls.noSetTime"));
 
 const CLASS_COLORS = ["#fe3bed", "#c6ff34", "#ffffff"] as const;
@@ -186,6 +187,7 @@ export function ClassDetail() {
   return (
     <AdminShell wide>
       <div className="fade-in max-w-4xl">
+        <Breadcrumbs current={d.class.name} />
         <Link to="/admin/classes" className="inline-flex items-center gap-1.5 text-sm text-[var(--muted)] hover:text-[var(--fg)]"><ArrowLeft className="h-4 w-4" /> {t("acls.title")}</Link>
 
         <div className="card mt-4 flex items-center justify-between p-6">
@@ -275,7 +277,7 @@ export function ClassDetail() {
       {assignOpen && <AssignExamModal classId={id!} memberCount={d.members.length} onClose={() => setAssignOpen(false)} onDone={() => { setAssignOpen(false); load(); }} />}
       {delClass && <Modal title={t("acls.deleteClassQ")} onClose={() => setDelClass(false)}>
         <p className="mt-3 text-sm text-[var(--muted)]">{t("acls.deleteClassWarn", { name: d.class.name })}</p>
-        <ModalActions onClose={() => setDelClass(false)}><button onClick={async () => { await api.del(`/admin/classes/${id}`); navigate("/admin/classes"); }} className="inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-3 py-2 text-sm font-semibold text-white hover:bg-rose-700"><Trash2 className="h-4 w-4" /> {t("acls.delete")}</button></ModalActions>
+        <ModalActions onClose={() => setDelClass(false)}><button onClick={async () => { await api.del(`/admin/classes/${id}`); navigate("/admin/classes"); }} className="btn btn-danger"><Trash2 className="h-4 w-4" /> {t("acls.delete")}</button></ModalActions>
       </Modal>}
     </AdminShell>
   );
@@ -449,16 +451,6 @@ function AssignExamModal({ classId, memberCount, onClose, onDone }: { classId: s
 }
 
 // ---- shared modal bits ----
-function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
-      <div className="w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between"><h2 className="text-lg font-bold">{title}</h2><button onClick={onClose} className="rounded-lg p-1 text-[var(--muted)] hover:bg-white/[0.05]"><X className="h-5 w-5" /></button></div>
-        {children}
-      </div>
-    </div>
-  );
-}
 function ModalActions({ onClose, children }: { onClose: () => void; children: React.ReactNode }) {
   const t = useT();
   return <div className="mt-5 flex justify-end gap-2"><button onClick={onClose} className="rounded-lg px-3 py-2 text-sm font-medium text-[var(--muted)] hover:text-[var(--fg)]">{t("acls.cancel")}</button>{children}</div>;

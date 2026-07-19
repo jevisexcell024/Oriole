@@ -4,6 +4,8 @@ import {
   ArrowLeft, Loader2, CheckCircle2, XCircle, Award, ShieldAlert, User, Mail, Send, Gauge, Film, Clock, Download, EyeOff, Scale,
 } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
+import { Breadcrumbs } from "@/components/Breadcrumbs";
+import { MediaStimulus } from "@/components/MediaStimulus";
 import { api } from "@/lib/api";
 import { useT, type TFn } from "@/lib/i18n";
 import type { Attempt, Certificate, Exam, GradingStatus, ProctorEvent, RubricCriterion } from "@shared/types";
@@ -28,6 +30,8 @@ interface ReviewItem {
   rubricScores: Record<string, number> | null;
   explanation: string | null;
   fileUpload: { name: string; type: string; data: string } | null;
+  answerFormat: string | null;
+  media: { kind: string | null; urls: string[]; externalUrl: string | null; passageText: string | null } | null;
 }
 interface Deduction { type: string; severity: string; count: number; weight: number; deducted: number; }
 interface IntegrityBreakdown { base: number; score: number; totalDeducted: number; deductions: Deduction[]; }
@@ -103,6 +107,7 @@ export function AdminAttemptReview() {
   return (
     <AdminShell wide>
       <div className="fade-in max-w-3xl">
+        <Breadcrumbs current={anonymous ? undefined : candidate.name} />
         <Link to="/admin/grading" className="inline-flex items-center gap-1.5 text-sm text-[var(--muted)] hover:text-[var(--fg)]">
           <ArrowLeft className="h-4 w-4" /> {t("aar.gradingQueue")}
         </Link>
@@ -236,7 +241,7 @@ export function AdminAttemptReview() {
           </div>
         )}
 
-        {exam.proctored && (
+        {(exam.proctored || proctorEvents.length > 0) && (
           <div className="card mt-4 p-5">
             <div className="flex items-center gap-2 text-sm font-semibold"><ShieldAlert className="h-4 w-4 text-brand-400" /> {t("aar.eventTimeline")}</div>
             {proctorEvents.length === 0 ? (
@@ -381,7 +386,11 @@ function AnswerCard({ t, index, item, saving, onGrade }: {
   const [scores, setScores] = useState<Record<string, number>>(item.rubricScores ?? {});
   const hasRubric = !!item.rubric?.length;
   const rubricTotal = (item.rubric ?? []).reduce((s, c) => s + Math.max(0, Math.min(c.maxPoints, Number(scores[c.id]) || 0)), 0);
-  const gradeable = !!item.answerId && (item.type === "short" || item.type === "essay" || item.type === "code" || item.type === "file_upload");
+  const isMedia = item.type === "media_comprehension";
+  const gradeable = !!item.answerId && (
+    item.type === "short" || item.type === "essay" || item.type === "code" || item.type === "file_upload"
+    || (isMedia && (item.answerFormat === "short" || item.answerFormat === "essay"))
+  );
   const icon = item.correct === true
     ? <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-500" />
     : item.needsReview
@@ -400,6 +409,16 @@ function AnswerCard({ t, index, item, saving, onGrade }: {
           <p className="mt-1.5 text-xs text-[var(--muted)]">
             {t("aar.answerLabel")} <span className={clsx("font-medium", item.correct ? "text-emerald-400" : item.needsReview ? "text-amber-400" : "text-rose-400")}>{item.yourAnswer || t("aar.blank")}</span>
           </p>
+          {item.media && (
+            <div className="mt-2 max-w-md">
+              <MediaStimulus
+                mediaKind={(item.media.kind as "audio" | "video" | "image" | "pdf" | "passage" | null) ?? "passage"}
+                mediaUrls={item.media.urls}
+                mediaExternalUrl={item.media.externalUrl ?? undefined}
+                passageText={item.media.passageText ?? undefined}
+              />
+            </div>
+          )}
           {item.fileUpload && (
             <a href={item.fileUpload.data} download={item.fileUpload.name}
               className="mt-1.5 inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs font-medium text-brand-400 hover:bg-[var(--card-2)]">
@@ -409,10 +428,10 @@ function AnswerCard({ t, index, item, saving, onGrade }: {
           {item.explanation && (
             <p className="mt-1.5 text-xs text-[var(--muted)]"><span className="font-semibold">{t("aar.explanationLabel")}</span> {item.explanation}</p>
           )}
-          {item.type === "short" && (
+          {(item.type === "short" || (isMedia && item.answerFormat === "short")) && (
             <p className="text-xs text-[var(--muted)]">{t("aar.reference")} <span className="font-medium text-emerald-400">{item.correctAnswer || "—"}</span></p>
           )}
-          {!item.correct && item.type !== "short" && (
+          {!item.correct && item.type !== "short" && !(isMedia && item.answerFormat === "short") && (
             <p className="text-xs text-[var(--muted)]">{t("aar.correctLabel")} <span className="font-medium capitalize text-emerald-400">{item.correctAnswer}</span></p>
           )}
 

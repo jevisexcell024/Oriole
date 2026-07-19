@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
-  LogOut, LayoutDashboard, BookOpen, BarChart3, CalendarDays, Megaphone, User, Menu, X, ChevronsLeft, LayoutGrid, Bell,
+  LogOut, LayoutDashboard, BookOpen, BarChart3, CalendarDays, CalendarCheck, Megaphone, User, Menu, X, ChevronsLeft, ChevronDown, LayoutGrid, Bell,
   MessageCircle, Library, GraduationCap, Clock, LockKeyhole,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
@@ -18,22 +18,23 @@ function greetingKeyFor(d: Date) {
   return h < 12 ? "greeting.morning" : h < 18 ? "greeting.afternoon" : "greeting.evening";
 }
 
-// Student portal navigation, grouped into sections. (Certificates, Payments,
-// Attendance and Practice Tests intentionally excluded from the sidebar —
-// their routes still work, just aren't linked here.)
-const NAV_SECTIONS: { titleKey?: string; items: { to: string; labelKey: string; icon: typeof LayoutDashboard; lockable?: boolean; disabled?: boolean }[] }[] = [
+// Student portal navigation, grouped into sections. (Certificates and Practice
+// Tests are reached via in-page links rather than the sidebar.)
+type NavSection = { key?: string; titleKey?: string; items: { to: string; labelKey: string; icon: typeof LayoutDashboard; lockable?: boolean; disabled?: boolean }[] };
+const NAV_SECTIONS: NavSection[] = [
   { items: [
     { to: "/dashboard", labelKey: "nav.dashboard", icon: LayoutDashboard },
     { to: "/exams", labelKey: "nav.myExams", icon: BookOpen },
     { to: "/calendar", labelKey: "nav.calendar", icon: CalendarDays },
     { to: "/results", labelKey: "nav.myResults", icon: BarChart3 },
+    { to: "/attendance", labelKey: "nav.attendance", icon: CalendarCheck },
   ] },
-  { titleKey: "nav.sectionCommunication", items: [
+  { key: "communication", titleKey: "nav.sectionCommunication", items: [
     { to: "/announcements", labelKey: "nav.announcements", icon: Megaphone },
     { to: "/inbox", labelKey: "nav.inbox", icon: Bell },
     { to: "/chat", labelKey: "nav.chat", icon: MessageCircle, disabled: true },
   ] },
-  { titleKey: "nav.sectionStudyMaterials", items: [
+  { key: "studyMaterials", titleKey: "nav.sectionStudyMaterials", items: [
     { to: "/library", labelKey: "nav.library", icon: Library, lockable: true },
     { to: "/learning-materials", labelKey: "nav.learningMaterials", icon: GraduationCap },
     { to: "/timetable", labelKey: "nav.timetable", icon: Clock },
@@ -54,6 +55,24 @@ export function Shell({ children }: { children: ReactNode }) {
   useEffect(() => { try { localStorage.setItem("orcalis-nav-collapsed", collapsed ? "1" : "0"); } catch { /* ignore */ } }, [collapsed]);
 
   const isActive = (to: string) => loc.pathname === to || loc.pathname.startsWith(to + "/");
+  const activeSectionKey = NAV_SECTIONS.find((s) => s.items.some((i) => isActive(i.to)))?.key;
+
+  // Collapsible sections — persisted separately from the admin shell's own group state,
+  // and the section holding the active route auto-expands without collapsing ones the
+  // user opened manually.
+  const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
+    try { return JSON.parse(localStorage.getItem("orcalis-student-nav-expanded") || "{}"); } catch { return {}; }
+  });
+  useEffect(() => { try { localStorage.setItem("orcalis-student-nav-expanded", JSON.stringify(expanded)); } catch { /* ignore */ } }, [expanded]);
+  useEffect(() => {
+    if (activeSectionKey && expanded[activeSectionKey] === undefined) {
+      setExpanded((e) => ({ ...e, [activeSectionKey]: true }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSectionKey]);
+  const isSectionExpanded = (key?: string) => !key || (expanded[key] ?? key === activeSectionKey);
+  const toggleSection = (key: string) => setExpanded((e) => ({ ...e, [key]: !isSectionExpanded(key) }));
+
   const examLocked = useExamLock();
   // The Dashboard page renders its own large time-based greeting in the hero —
   // showing this header greeting too would just duplicate it.
@@ -103,18 +122,35 @@ export function Shell({ children }: { children: ReactNode }) {
         </div>
 
         <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-5">
-          {NAV_SECTIONS.map((section, si) => (
+          {NAV_SECTIONS.map((section, si) => {
+          const sectionExpanded = collapsed || isSectionExpanded(section.key);
+          return (
             <div key={si} className={clsx(si > 0 && "mt-4")}>
               {section.titleKey && (
-                <p className={clsx(
-                  "px-3 pb-1.5 pt-1 text-[10px] font-bold uppercase tracking-wider text-[#6E7C87]",
-                  collapsed && "lg:hidden",
-                )}>
-                  {t(section.titleKey)}
-                </p>
+                section.key ? (
+                  <button
+                    type="button"
+                    onClick={() => toggleSection(section.key!)}
+                    aria-expanded={sectionExpanded}
+                    className={clsx(
+                      "flex w-full items-center justify-between rounded-[3px] px-3 pb-1.5 pt-1 text-[10px] font-bold uppercase tracking-wider text-[#6E7C87] hover:text-white",
+                      collapsed && "lg:hidden",
+                    )}
+                  >
+                    <span>{t(section.titleKey)}</span>
+                    <ChevronDown className={clsx("h-3 w-3 shrink-0 transition-transform", sectionExpanded && "rotate-180")} />
+                  </button>
+                ) : (
+                  <p className={clsx(
+                    "px-3 pb-1.5 pt-1 text-[10px] font-bold uppercase tracking-wider text-[#6E7C87]",
+                    collapsed && "lg:hidden",
+                  )}>
+                    {t(section.titleKey)}
+                  </p>
+                )
               )}
               {si > 0 && collapsed && <div className="mx-2 mb-1.5 hidden border-t border-[var(--border)] lg:block" />}
-              {section.items.map((n) => {
+              {sectionExpanded && section.items.map((n) => {
                 const active = isActive(n.to);
                 const isLocked = n.disabled || (n.lockable && examLocked);
                 if (isLocked) {
@@ -146,7 +182,8 @@ export function Shell({ children }: { children: ReactNode }) {
                 );
               })}
             </div>
-          ))}
+          );
+          })}
         </nav>
 
         {/* User (→ profile) + sign out */}
