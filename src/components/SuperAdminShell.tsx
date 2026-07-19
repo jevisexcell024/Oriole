@@ -71,14 +71,14 @@ const GROUPS: NavGroup[] = [
     { labelKey: "sanav.emailServices", icon: Mail },
   ] },
   { key: "security", labelKey: "sanav.secSecurity", items: [
-    { labelKey: "sanav.auditLogs", icon: FileSearch },
+    { labelKey: "sanav.securityCenter", icon: FileSearch, to: "/super-admin/security" },
     { labelKey: "sanav.loginLogs", icon: LogIn },
     { labelKey: "sanav.securityEvents", icon: ShieldAlert },
     { labelKey: "sanav.apiKeys", icon: Lock },
   ] },
   { key: "configuration", labelKey: "sanav.secConfiguration", items: [
     { labelKey: "sanav.brandingDefaults", icon: Palette },
-    { labelKey: "sanav.platformSettings", icon: Settings },
+    { labelKey: "sanav.platformSettings", icon: Settings, to: "/super-admin/settings" },
     { labelKey: "sanav.featureFlags", icon: Flag },
     { labelKey: "sanav.emailTemplates", icon: FileText },
     { labelKey: "sanav.notificationTemplates", icon: Bell },

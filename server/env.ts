@@ -28,6 +28,8 @@ export const env = {
   retentionDays: Number(process.env.PROCTOR_RETENTION_DAYS ?? 0),
   /** True when JWT_SECRET is unset — sessions use a random per-process key (reset on restart). */
   jwtIsDefault: !process.env.JWT_SECRET,
+  /** Same as jwtIsDefault, for the Super Admin secret. */
+  superAdminJwtIsDefault: !process.env.SUPER_ADMIN_JWT_SECRET,
   logLevel: process.env.LOG_LEVEL,
   /** Public URL of the app — used in outbound emails so links work in production.
    *  Set APP_URL on the host (e.g. https://oriole.jevislab.com). */

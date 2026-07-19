@@ -4,6 +4,8 @@ import { SuperAdminAuthProvider, useSuperAdminAuth } from "@/lib/superAdminAuth"
 import { SuperAdminLogin } from "@/pages/SuperAdminLogin";
 import { SuperAdminForcePasswordChange } from "@/pages/SuperAdminForcePasswordChange";
 import { SuperAdminDashboard } from "@/pages/SuperAdminDashboard";
+import { SuperAdminSecurityCenter } from "@/pages/SuperAdminSecurityCenter";
+import { SuperAdminPlatformSettings } from "@/pages/SuperAdminPlatformSettings";
 
 /** Entire Super Admin subtree in one file, lazy-loaded as a single unit from
  *  main.tsx (one route: <Route path="/super-admin/*" element={<SuperAdminApp/>}/>).
@@ -25,6 +27,8 @@ function SuperAdminRoutes() {
       <Route path="login" element={<SuperAdminLogin />} />
       <Route path="force-password-change" element={<SuperAdminForcePasswordChange />} />
       <Route path="dashboard" element={<SuperAdminProtected><SuperAdminDashboard /></SuperAdminProtected>} />
+      <Route path="security" element={<SuperAdminProtected><SuperAdminSecurityCenter /></SuperAdminProtected>} />
+      <Route path="settings" element={<SuperAdminProtected><SuperAdminPlatformSettings /></SuperAdminProtected>} />
       <Route path="*" element={<Navigate to="dashboard" replace />} />
     </Routes>
   );

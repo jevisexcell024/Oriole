@@ -65,6 +65,8 @@ const ROUTES: Record<string, CrumbDef> = {
   // force-password-change are full-screen forms with no PageHeader, so they
   // don't need entries here (nothing calls buildCrumbs for them).
   "/super-admin/dashboard": { labelKey: "sanav.dashboard" },
+  "/super-admin/security": { labelKey: "sanav.securityCenter" },
+  "/super-admin/settings": { labelKey: "sanav.platformSettings" },
 };
 
 function matchRoute(path: string): { pattern: string; def: CrumbDef } | null {

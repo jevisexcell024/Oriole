@@ -529,6 +529,44 @@ app.get("/api/super-admin/dashboard", requireSuperAdmin, (_req, res) => {
   });
 });
 
+// Security Center — the super-admin audit trail (login/logout/password events
+// today) plus its own hash-chain integrity check. Mirrors GET /api/admin/audit-logs
+// exactly, against superAdminAuditStore instead of auditStore. Rate-limit
+// "state" itself isn't queryable (express-rate-limit keeps in-memory counters
+// with no introspection API) — this reports the limiters' configured
+// window/max from the same env vars security.ts reads, not live counts.
+app.get("/api/super-admin/audit-logs", requireSuperAdmin, async (_req, res) => {
+  res.json({
+    logs: await superAdminAuditStore.recent(200),
+    integrity: await superAdminAuditStore.verifyChain(),
+    rateLimits: {
+      tenantAuth: { windowMinutes: 15, max: Number(process.env.AUTH_RATE_LIMIT ?? 20) },
+      superAdminAuth: { windowMinutes: 15, max: Number(process.env.SUPER_ADMIN_AUTH_RATE_LIMIT ?? 20) },
+      api: { windowMinutes: 1, max: Number(process.env.API_RATE_LIMIT ?? 600) },
+    },
+  });
+});
+
+// Platform Settings — read-only. No persisted settings store exists yet, so
+// there's nothing to edit here; this just surfaces the env-derived config
+// that already governs the running process, in one place.
+app.get("/api/super-admin/platform-settings", requireSuperAdmin, (_req, res) => {
+  res.json({
+    environment: process.env.NODE_ENV ?? "development",
+    appUrl: env.appUrl,
+    database: { backend: db.backendKind(), managed: !!env.databaseUrl },
+    security: {
+      jwtIsDefault: env.jwtIsDefault,
+      superAdminJwtIsDefault: env.superAdminJwtIsDefault,
+      encryptionKeyConfigured: !!env.encryptionKey,
+    },
+    retention: { proctorRetentionDays: env.retentionDays },
+    mailer: mailerStatus(),
+    sms: smsStatus(),
+    backup: backupStatus(),
+  });
+});
+
 // ---- Single Sign-On (Microsoft / Entra) ----
 app.get("/api/auth/sso", (_req, res) => res.json({ microsoft: microsoftEnabled() }));
 

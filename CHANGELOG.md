@@ -4,6 +4,18 @@ A running record of what shipped in each version. Newest first.
 
 ---
 
+## v2.1.0 — Super Admin Platform, Workstream 2: Security Center, Platform Settings
+
+**Two more sections wired for real, two deliberately skipped.** Continuing Workstream 1's rule — no section ships until it's backed by real data, not a mock. Security Center and Platform Settings had real backing data already; System Health and Feature Flags didn't, so they stayed disabled ("Soon") rather than shipping placeholders.
+
+**Security Center** (`/super-admin/security`) surfaces the `superAdminAuditStore` hash chain that Workstream 1 already started writing to (login/logout/password-change events) — a table of entries plus a live integrity check (`GET /api/super-admin/audit-logs`), mirroring the existing tenant `/admin/audit-logs` page exactly. Also shows the three rate limiters' configured window/max (Super Admin login, tenant login, per-session API) as read-only — express-rate-limit keeps no queryable live counters, so this reports configuration, not real-time counts.
+
+**Platform Settings** (`/super-admin/settings`) is read-only by design: environment, database backend (embedded PGlite vs. managed Postgres), whether the tenant/Super Admin JWT secrets and the data-encryption key are actually configured (vs. using an insecure default), retention policy, mailer/SMS transport status, and last-backup status — all values the app already computes for itself, just never gathered in one place before. No edit affordance: there's no persisted platform-settings store yet, and adding one wasn't justified for a first read-only cut.
+
+**System Health and Feature Flags were considered and explicitly deferred.** A Super Admin System Health page would have ~100% duplicated the existing `/admin/system-health` and public status page — same reliability engine, just behind a different login — so it was skipped rather than built as a redundant view. Feature Flags has zero backing infrastructure anywhere in the codebase and no concrete feature currently needs staged rollout; building flag CRUD with nothing real to flag would have been exactly the fake-placeholder pattern this whole effort is trying to avoid.
+
+---
+
 ## v2.0.0 — Super Admin Platform, Workstream 1: auth, shell, dashboard
 
 **First slice of a much larger request.** The full spec asks for an entire second admin platform — ~15 sidebar sections, a licensing engine, granular RBAC, tenant lifecycle management. Most of that (Institutions, Licensing, Usage Limits, Tenant Suspension/Archive) manages *tenants*, but this app is single-tenant today — confirmed zero `orgId`/tenant concept anywhere in the data model. A prior planning pass already scoped the real multi-tenant retrofit at 3–5 weeks solo (adding tenant scoping across ~108 routes without introducing cross-tenant IDOR) — not something to compress just to ship a UI. This release is the foundation only: a genuinely separate Super Admin identity, its sidebar shell showing the full future IA, and a dashboard with real (not mocked) numbers. Tenant management waits for the retrofit.
