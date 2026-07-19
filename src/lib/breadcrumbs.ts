@@ -60,6 +60,11 @@ const ROUTES: Record<string, CrumbDef> = {
   "/admin/account": { labelKey: "acct.title", parent: "/admin/dashboard" },
   "/admin/team": { labelKey: "anav.team", parent: "/admin/dashboard" },
   "/admin/roles": { labelKey: "anav.roles", parent: "/admin/dashboard" },
+
+  // Super Admin — a third, fully independent shell/root. Login and
+  // force-password-change are full-screen forms with no PageHeader, so they
+  // don't need entries here (nothing calls buildCrumbs for them).
+  "/super-admin/dashboard": { labelKey: "sanav.dashboard" },
 };
 
 function matchRoute(path: string): { pattern: string; def: CrumbDef } | null {

@@ -60,11 +60,16 @@ import { AdminAccount } from "@/pages/AdminAccount";
 // Lazy-loaded so recharts (heavy) ships in its own chunk, fetched only when an
 // admin opens the dashboard — keeps it out of the main bundle.
 const AdminDashboard = lazy(() => import("@/pages/AdminDashboard").then((m) => ({ default: m.AdminDashboard })));
+// Entire Super Admin platform — own auth provider, own routes, own shell — is
+// one lazy chunk so none of it (or its auth context) ever loads for a tenant
+// admin or candidate. See src/pages/SuperAdminApp.tsx for everything else.
+const SuperAdminApp = lazy(() => import("@/pages/SuperAdminApp").then((m) => ({ default: m.SuperAdminApp })));
 import { AdminClasses, ClassDetail } from "@/pages/AdminClasses";
 import { AdminLibrary } from "@/pages/AdminLibrary";
 import { AdminTeam } from "@/pages/AdminTeam";
 import { AdminRoles } from "@/pages/AdminRoles";
 import { ForcePasswordChange } from "@/pages/ForcePasswordChange";
+import { SetupPassword } from "@/pages/SetupPassword";
 import { can, isStaff, landingFor, type Cap } from "@/lib/roles";
 
 function Protected({ children, cap, staff }: { children: ReactNode; cap?: Cap; staff?: boolean }) {
@@ -103,6 +108,8 @@ function App() {
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/force-password-change" element={<ForcePasswordChange />} />
+        <Route path="/setup-password" element={<SetupPassword />} />
+        <Route path="/super-admin/*" element={<SuperAdminApp />} />
         <Route path="/verify/:certNumber" element={<Verify />} />
         <Route path="/verify" element={<Verify />} />
         <Route path="/status" element={<StatusPage />} />

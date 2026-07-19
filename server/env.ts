@@ -7,12 +7,20 @@ import { randomBytes } from "node:crypto";
 // survive a restart until JWT_SECRET is set (assertProductionEnv still requires it
 // in production, so prod gets stable, explicit secrets).
 const FALLBACK_JWT = randomBytes(48).toString("base64");
+// Deliberately a SEPARATE fallback/secret from the tenant one above — the Super
+// Admin platform's whole point is that its identity can never be forged or
+// impersonated via anything that leaks from the tenant side (see
+// server/superAdminAuth.ts). Sharing FALLBACK_JWT here would quietly undermine
+// that even though both are "random" — a leaked tenant secret must not also be
+// a valid super-admin secret.
+const FALLBACK_SUPER_ADMIN_JWT = randomBytes(48).toString("base64");
 
 export const env = {
   isProd: process.env.NODE_ENV === "production",
   // Hosts (Render/Railway/etc.) inject PORT; fall back to API_PORT then 8787.
   port: Number(process.env.PORT) || Number(process.env.API_PORT) || 8787,
   jwtSecret: process.env.JWT_SECRET || FALLBACK_JWT,
+  superAdminJwtSecret: process.env.SUPER_ADMIN_JWT_SECRET || FALLBACK_SUPER_ADMIN_JWT,
   databaseUrl: process.env.DATABASE_URL,
   /** base64-encoded 32-byte key for AES-256-GCM field encryption (PII / proctoring media). */
   encryptionKey: process.env.DATA_ENCRYPTION_KEY,
@@ -46,6 +54,9 @@ export function assertProductionEnv() {
   const problems: string[] = [];
   if (!process.env.JWT_SECRET) {
     problems.push("JWT_SECRET must be set to a strong, unique value (sessions reset on every restart otherwise)");
+  }
+  if (!process.env.SUPER_ADMIN_JWT_SECRET) {
+    problems.push("SUPER_ADMIN_JWT_SECRET must be set to a strong, unique value, DIFFERENT from JWT_SECRET (Super Admin sessions reset on every restart otherwise)");
   }
   if (!process.env.DATABASE_URL && !process.env.ALLOW_EMBEDDED_DB) {
     problems.push("DATABASE_URL must point to a managed Postgres instance — or set ALLOW_EMBEDDED_DB=1 to use the on-disk embedded database (only safe on a single, persistent host like cPanel)");

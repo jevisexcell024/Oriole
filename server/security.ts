@@ -77,6 +77,9 @@ export const authLimiter = rateLimit({
 // getting in the way of normal use (exam sessions poll frequently). Keyed by SESSION
 // when signed in, so each user gets their own budget; many students behind one campus
 // IP won't collectively trip a single per-IP limit. Anonymous traffic falls back to IP.
+// Also recognizes the Super Admin session cookie — without this, authenticated
+// super-admin traffic would fall into the shared anonymous per-IP bucket instead
+// of getting its own budget like every other authenticated actor class.
 export const apiLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: Number(process.env.API_RATE_LIMIT ?? 600),
@@ -85,8 +88,26 @@ export const apiLimiter = rateLimit({
   validate: false,
   keyGenerator: (req) => {
     const r = req as { cookies?: Record<string, string>; ip?: string };
-    const sess = r.cookies?.orcalis_session;
+    const sess = r.cookies?.orcalis_session ?? r.cookies?.orcalis_superadmin_session;
     return sess ? `sess:${sess}` : `ip:${r.ip ?? "unknown"}`;
+  },
+});
+
+// Same shape/rationale as authLimiter above, but a fully separate bucket for
+// Super Admin login — a shared limiter would mean a credential-stuffing burst
+// against tenant logins could exhaust the budget super-admin login itself
+// relies on, or vice versa.
+export const superAdminAuthLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: Number(process.env.SUPER_ADMIN_AUTH_RATE_LIMIT ?? 20),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many attempts. Please wait a few minutes and try again." },
+  validate: false,
+  keyGenerator: (req) => {
+    const r = req as { body?: { email?: unknown }; ip?: string };
+    const email = typeof r.body?.email === "string" ? r.body.email.trim().toLowerCase() : "";
+    return email ? `superadmin-auth:${email}` : `superadmin-auth-ip:${r.ip ?? "unknown"}`;
   },
 });
 

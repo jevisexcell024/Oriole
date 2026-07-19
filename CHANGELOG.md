@@ -4,6 +4,30 @@ A running record of what shipped in each version. Newest first.
 
 ---
 
+## v2.0.0 — Super Admin Platform, Workstream 1: auth, shell, dashboard
+
+**First slice of a much larger request.** The full spec asks for an entire second admin platform — ~15 sidebar sections, a licensing engine, granular RBAC, tenant lifecycle management. Most of that (Institutions, Licensing, Usage Limits, Tenant Suspension/Archive) manages *tenants*, but this app is single-tenant today — confirmed zero `orgId`/tenant concept anywhere in the data model. A prior planning pass already scoped the real multi-tenant retrofit at 3–5 weeks solo (adding tenant scoping across ~108 routes without introducing cross-tenant IDOR) — not something to compress just to ship a UI. This release is the foundation only: a genuinely separate Super Admin identity, its sidebar shell showing the full future IA, and a dashboard with real (not mocked) numbers. Tenant management waits for the retrofit.
+
+**True auth isolation, not just a second role.** New `SuperAdmin` identity — deliberately not a 5th role on `User`. Own cookie (`orcalis_superadmin_session`), own JWT secret (`SUPER_ADMIN_JWT_SECRET`, required in production alongside the existing `JWT_SECRET`), own database collection, own hash-chained audit trail so platform-operator activity can never appear in a school's own `/admin/audit-logs`. Verified live: both sessions coexist in the same browser with zero interference in either direction, and a tenant admin's own audit log shows none of the Super Admin activity generated during testing.
+
+**Bootstrap mirrors the existing tenant-admin pattern, with one deliberate difference**: no hardcoded fallback email. `SUPER_ADMIN_EMAIL` must be set explicitly or bootstrap is skipped with a loud warning — this is the platform's most powerful account, so it doesn't get a guessed identity the way a single-tenant admin's does. Same never-a-hardcoded-password rule, same one-time-print-and-force-rotate flow — closed the gap of a bootstrap password that's never forced to change by adding a real force-password-change gate, not just a flag nobody reads.
+
+**Full nav shape, minimal real surface.** The sidebar renders the complete ~15-section structure from the spec so the overall shape is visible, but only Dashboard is a real page — everything else renders as a visibly disabled, non-navigating entry with a "Soon" badge. Deliberately not 14 placeholder routes/pages: a disabled list item can't 404 or go stale.
+
+**Dashboard shows real numbers.** Total/Active Users by role, Active Exams, Exams Today, Live Sessions, Platform Uptime — a live query against the one real tenant, not mocked data. Institution-count cards honestly show 1/1/0 today; that becomes meaningful once multi-tenancy ships, and showing it now rather than hiding it keeps the dashboard honest about where the platform actually is.
+
+---
+
+## v1.12.3 — Account-setup emails no longer contain a password
+
+**Why**: student onboarding emails were landing in spam. The root cause: the account-creation email put the student's actual password in plain text, labeled "Temporary password," right next to a "Sign in" button — a template close enough to real credential-phishing emails that mail providers (Microsoft 365 / Google Workspace for Education especially) routinely filter it as spam on content alone, independent of any domain/DNS reputation.
+
+**Fix**: every place that used to email a temp password (single student creation, resend-invite, CSV bulk import, class-roster import) now sends a signed, single-use, 72-hour setup link instead (`passwordSetupToken()` / `POST /api/auth/setup-password`, `server/auth.ts` + `server/index.ts`). The student clicks it and picks their own password directly on a new page (`src/pages/SetupPassword.tsx`, route `/setup-password`) — no password of any kind ever travels through email. Verified end-to-end against the real endpoints: account creation with no password field required, the generated email contains only the link, using the link sets a real session, and — a real bug caught during that same verification pass — the link was **not actually single-use** despite saying so in its own copy; a captured or re-clicked link could silently overwrite a password the student had already chosen. Fixed by checking `mustChangePassword` before allowing setup to proceed, pinned with new tests in `test/auth-tokens.test.ts`.
+
+The admin "add student" form no longer asks the admin to type a password for a new account — that field only ever mattered for the reset (edit-mode) path, which is unaffected.
+
+---
+
 ## v1.12.2 — Exam code confirmation at check-in; fixed a blank dashboard schedule
 
 **"Upcoming Examinations" showed blank after scheduling.** There are two independent ways to schedule an exam — the Scheduler page (sets `exam.availableFrom`) and Classes → Assign Exam (sets a per-class `scheduledStart`) — but the admin dashboard's "Upcoming Examinations" card only ever read from the second one. An exam scheduled the more obvious way, through the Scheduler page, would never appear there. Fixed by merging both sources.

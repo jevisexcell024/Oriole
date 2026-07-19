@@ -13,12 +13,17 @@ import type {
   User, Exam, Question, Registration, Attempt, Answer, ProctorEvent, Certificate, Snapshot, EmailMessage, Announcement, AnnouncementRead, OrgSettings, AuditLog,
   Faculty, Department, Program, Campus, AcademicYear, ClassGroup, RegradeRequest, Book, ReadingProgress,
   ResourceVersion, ResourceBookmark, ResourceRating, ResourceDownloadLog, GeofenceLog, CustomRole,
-  ReliabilityIncident, ReliabilitySample, ReliabilityDailyRollup, ReliabilitySubsystemKey, MediaAsset,
+  ReliabilityIncident, ReliabilitySample, ReliabilityDailyRollup, ReliabilitySubsystemKey, MediaAsset, SuperAdmin,
 } from "../shared/types.ts";
 import { DEFAULT_LOCKDOWN, DEFAULT_LEARNING_STRUCTURE } from "../shared/types.ts";
 
 export interface Schema {
   users: User[];
+  // Platform-operator accounts for the Super Admin console — a fully separate
+  // identity from `users` (see shared/types.ts's SuperAdmin doc comment and
+  // server/superAdminAuth.ts). Its own audit trail lives off-mirror as
+  // superAdminAuditStore, mirroring auditStore below but never sharing a table.
+  superAdmins: SuperAdmin[];
   exams: Exam[];
   questions: Question[];
   registrations: Registration[];
@@ -61,7 +66,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const gunzipAsync = promisify(gunzip);
 
 const defaultData: Schema = {
-  users: [], exams: [], questions: [], registrations: [],
+  users: [], superAdmins: [], exams: [], questions: [], registrations: [],
   attempts: [], certificates: [], announcements: [],
   settings: [],
   faculties: [], departments: [], programs: [], campuses: [], academicYears: [], classes: [], regradeRequests: [],
@@ -77,6 +82,7 @@ const defaultData: Schema = {
 // stays stable.
 const TABLES: { key: keyof Schema; table: string; idField: string }[] = [
   { key: "users", table: "users", idField: "id" },
+  { key: "superAdmins", table: "super_admins", idField: "id" },
   { key: "exams", table: "exams", idField: "id" },
   { key: "questions", table: "questions", idField: "id" },
   { key: "registrations", table: "registrations", idField: "id" },
@@ -286,7 +292,7 @@ export const db: {
 // Off-mirror tables (see the comment on Schema above) — not part of TABLES
 // because they're never held in the in-memory mirror, but a full backup needs
 // every row from every table, mirrored or not.
-const OFF_MIRROR_TABLES = ["snapshots", "answers", "proctor_events", "audit_logs", "emails", "geofence_logs", "reliability_samples", "reliability_daily_rollups", "media_assets"];
+const OFF_MIRROR_TABLES = ["snapshots", "answers", "proctor_events", "audit_logs", "super_admin_audit_logs", "emails", "geofence_logs", "reliability_samples", "reliability_daily_rollups", "media_assets"];
 
 /** Full logical snapshot of every row in every table (mirrored + off-mirror),
  *  keyed by collection/table name. Used for backups — a plain SELECT per table,
@@ -611,6 +617,48 @@ export const auditStore = {
   },
 };
 
+// Super Admin action trail — same append-only, hash-chained, off-mirror shape
+// as auditStore above, but its own table: a tenant admin (even a compromised
+// one) must never be able to read or tamper with platform-operator activity,
+// and vice versa — no shared table, no shared query path.
+function superAdminAuditEntryHash(prevHash: string, log: AuditLog): string {
+  const core = JSON.stringify([log.id, log.at, log.actorId, log.actorName, log.action, log.target]);
+  return createHash("sha256").update(prevHash + core).digest("hex");
+}
+export const superAdminAuditStore = {
+  async add(log: AuditLog): Promise<void> {
+    const tip = (await this.recent(1))[0];
+    const prevHash = tip?.hash ?? "";
+    log.prevHash = prevHash;
+    log.hash = superAdminAuditEntryHash(prevHash, log);
+    await be().query(
+      `insert into super_admin_audit_logs(id, at, doc) values ($1, $2, $3::jsonb)
+       on conflict (id) do update set doc = excluded.doc, at = excluded.at`,
+      [log.id, log.at, JSON.stringify(log)]);
+  },
+  async verifyChain(): Promise<{ ok: boolean; brokenAt: string | null; entries: number }> {
+    const { rows } = await be().query<{ doc: AuditLog }>(`select doc from super_admin_audit_logs order by at asc`);
+    let prev = ""; let started = false; let n = 0;
+    for (const r of rows) {
+      const log = r.doc;
+      if (!log.hash) { if (started) return { ok: false, brokenAt: log.id, entries: n }; continue; }
+      started = true; n++;
+      if (log.hash !== superAdminAuditEntryHash(prev, log) || (log.prevHash ?? "") !== prev) return { ok: false, brokenAt: log.id, entries: n };
+      prev = log.hash;
+    }
+    return { ok: true, brokenAt: null, entries: n };
+  },
+  async recent(limit: number): Promise<AuditLog[]> {
+    const { rows } = await be().query<{ doc: AuditLog }>(
+      `select doc from super_admin_audit_logs order by at desc limit $1`, [limit]);
+    return rows.map((r) => r.doc);
+  },
+  async count(): Promise<number> {
+    const { rows } = await be().query<{ n: string }>(`select count(*)::text as n from super_admin_audit_logs`);
+    return Number(rows[0]?.n ?? 0);
+  },
+};
+
 // Email delivery log — append-only, off-mirror, indexed by send time.
 export const emailStore = {
   async add(msg: EmailMessage): Promise<void> {
@@ -657,6 +705,7 @@ const OFF_MIRROR_RESTORERS: [string, (row: never) => Promise<void>][] = [
   ["answers", (r) => answerStore.upsert(r)],
   ["proctor_events", (r) => proctorStore.add(r)],
   ["audit_logs", (r) => auditStore.add(r)],
+  ["super_admin_audit_logs", (r) => superAdminAuditStore.add(r)],
   ["emails", (r) => emailStore.add(r)],
   ["geofence_logs", (r) => geofenceStore.add(r)],
   ["reliability_samples", (r) => reliabilityStore.add(r)],
@@ -703,6 +752,10 @@ async function ensureSchema() {
     "ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS at text;",
     "UPDATE audit_logs SET at = doc->>'at' WHERE at IS NULL;",
     "CREATE INDEX IF NOT EXISTS audit_logs_at_idx ON audit_logs(at);",
+    "CREATE TABLE IF NOT EXISTS super_admin_audit_logs (id text primary key, at text, doc jsonb not null);",
+    "ALTER TABLE super_admin_audit_logs ADD COLUMN IF NOT EXISTS at text;",
+    "UPDATE super_admin_audit_logs SET at = doc->>'at' WHERE at IS NULL;",
+    "CREATE INDEX IF NOT EXISTS super_admin_audit_logs_at_idx ON super_admin_audit_logs(at);",
     "CREATE TABLE IF NOT EXISTS emails (id text primary key, sent_at text, doc jsonb not null);",
     "ALTER TABLE emails ADD COLUMN IF NOT EXISTS sent_at text;",
     "UPDATE emails SET sent_at = doc->>'sentAt' WHERE sent_at IS NULL;",
@@ -940,6 +993,42 @@ export async function initDb() {
     existingAdmin.passwordHash = bcrypt.hashSync(process.env.ADMIN_PASSWORD, BCRYPT_COST);
     changed = true;
     console.log(`🔑 Admin password for ${adminEmail} force-reset via ADMIN_RESET_PASSWORD. Remove that env var now.`);
+  }
+
+  // Bootstrap the first Super Admin account — SUPER_ADMIN_EMAIL / _PASSWORD /
+  // _NAME. Unlike the tenant admin bootstrap above, there is NO hardcoded
+  // fallback email: this is the platform's most powerful account, so bootstrap
+  // is skipped entirely (loudly) rather than guessing an identity for it.
+  // Same only-ever-CREATES guarantee, same never-a-hardcoded-password rule.
+  const superAdminEmail = process.env.SUPER_ADMIN_EMAIL?.trim();
+  if (!superAdminEmail) {
+    console.warn("⚠️  SUPER_ADMIN_EMAIL is not set — no Super Admin account exists yet. Set SUPER_ADMIN_EMAIL (and optionally SUPER_ADMIN_PASSWORD) and restart to bootstrap one.");
+  } else {
+    const superAdminName = process.env.SUPER_ADMIN_NAME || "Super Admin";
+    const existingSuperAdmin = db.data.superAdmins.find((s) => s.email.toLowerCase() === superAdminEmail.toLowerCase());
+    if (!existingSuperAdmin) {
+      const providedPw = process.env.SUPER_ADMIN_PASSWORD;
+      const superAdminPassword = providedPw || randomBytes(18).toString("base64url");
+      db.data.superAdmins.push({
+        id: nanoid(10),
+        email: superAdminEmail,
+        name: superAdminName,
+        passwordHash: bcrypt.hashSync(superAdminPassword, BCRYPT_COST),
+        createdAt: new Date().toISOString(),
+        mustChangePassword: true,
+      });
+      changed = true;
+      console.log(`👑 Bootstrapped Super Admin account: ${superAdminEmail}`);
+      if (!providedPw) {
+        console.log(`🔑 One-time Super Admin password (set SUPER_ADMIN_PASSWORD to choose your own): ${superAdminPassword}`);
+        console.log("   Sign in at /super-admin/login and change it right away.");
+      }
+    } else if (process.env.SUPER_ADMIN_RESET_PASSWORD === "1" && process.env.SUPER_ADMIN_PASSWORD) {
+      existingSuperAdmin.passwordHash = bcrypt.hashSync(process.env.SUPER_ADMIN_PASSWORD, BCRYPT_COST);
+      existingSuperAdmin.mustChangePassword = true;
+      changed = true;
+      console.log(`🔑 Super Admin password for ${superAdminEmail} force-reset via SUPER_ADMIN_RESET_PASSWORD. Remove that env var now.`);
+    }
   }
 
   if (changed) await db.write();

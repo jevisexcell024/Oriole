@@ -8,19 +8,22 @@ import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createHmac, createHash, randomBytes } from "node:crypto";
-import { db, initDb, snapshotStore, proctorStore, answerStore, auditStore, emailStore, geofenceStore, reliabilityStore, reliabilityRollupStore, mediaAssetStore } from "./db.ts";
+import { db, initDb, snapshotStore, proctorStore, answerStore, auditStore, superAdminAuditStore, emailStore, geofenceStore, reliabilityStore, reliabilityRollupStore, mediaAssetStore } from "./db.ts";
 import { sendMail, mailerStatus, verifySmtp, buildHtml, ctaButton, esc } from "./mailer.ts";
 import { sendSms, smsEnabled, smsStatus, recentSms } from "./sms.ts";
 import {
   clearSession, currentUser, issueSession, requireAuth, requireRole, requireRoles, toSafeUser,
   issuePending2fa, pending2faUserId, clearPending2fa, requirePermission, resolvePermissions,
-  resolveCustomRolePermissions, permissionOverreach,
+  resolveCustomRolePermissions, permissionOverreach, passwordSetupToken, verifyPasswordSetupToken,
 } from "./auth.ts";
+import {
+  issueSuperAdminSession, currentSuperAdmin, requireSuperAdmin, clearSuperAdminSession, toSafeSuperAdmin,
+} from "./superAdminAuth.ts";
 import { generateSecret, verifyTotp, verifyTotpStep, otpauthUrl, generateBackupCodes } from "./totp.ts";
 import { microsoftEnabled, authorizeUrl, exchangeCode } from "./sso.ts";
 import { tryEvalExpr } from "../shared/expr.ts";
 import { env, assertProductionEnv, BCRYPT_COST } from "./env.ts";
-import { securityHeaders, permissionsPolicy, authLimiter, apiLimiter, twoFaLimiter, assertSafeWebhookUrl } from "./security.ts";
+import { securityHeaders, permissionsPolicy, authLimiter, apiLimiter, twoFaLimiter, superAdminAuthLimiter, assertSafeWebhookUrl } from "./security.ts";
 import { logger, httpLogger } from "./logger.ts";
 import { encryptString, decryptString, encryptionEnabled } from "./crypto.ts";
 import { scheduleRetention, stopRetention } from "./retention.ts";
@@ -33,7 +36,7 @@ import { classifyStatus, aggregateDailyRollup, computeReliabilityScore, DEFAULT_
 import { validate } from "./validate.ts";
 import {
   loginSchema, teamCreateSchema, passwordChangeSchema, passwordResetSchema, twoFaCodeSchema, twoFaDisableSchema,
-  customRoleCreateSchema, customRoleUpdateSchema, roleAssignSchema,
+  customRoleCreateSchema, customRoleUpdateSchema, roleAssignSchema, passwordSetupSchema,
 } from "./schemas.ts";
 import { verifySeb } from "./seb.ts";
 import { nextStreak, displayStreak } from "./streak.ts";
@@ -142,6 +145,22 @@ async function recordAuthAudit(req: Request, action: string, email: string) {
   await auditStore.add(log);
 }
 
+/** Super Admin equivalents of the two helpers above — write to
+ *  superAdminAuditStore (its own hash chain, own table), never auditStore, so
+ *  platform-operator activity never appears in a tenant's own /admin/audit-logs. */
+async function recordSuperAdminAudit(req: Request, action: string, target: string) {
+  const s = currentSuperAdmin(req);
+  const log = { id: nanoid(10), at: now(), actorId: s?.id ?? "system", actorName: s?.name ?? "System", action, target };
+  await superAdminAuditStore.add(log);
+}
+async function recordSuperAdminAuthAudit(req: Request, action: string, email: string) {
+  const log = {
+    id: nanoid(10), at: now(), actorId: email.toLowerCase(), actorName: email,
+    action, target: `from ${req.ip ?? "unknown IP"}`,
+  };
+  await superAdminAuditStore.add(log);
+}
+
 /** Fingerprint a device from IP + user agent — coarse but sufficient to notice
  *  "this account just signed in somewhere it hasn't before". Never the raw IP
  *  itself (minimizes what's persisted), and no third-party geolocation lookup
@@ -186,26 +205,25 @@ async function checkNewDeviceAndAlert(req: Request, user: User) {
   try { await sendMail(user.email, "New sign-in to your Oriole account", text, html); } catch { /* best-effort */ }
 }
 
-function invitationEmail(name: string, email: string, password: string) {
-  const loginUrl = `${env.appUrl}/login`;
+// Replaces the old "here's your temporary password" email. Putting a real
+// password in an email body, labeled and sitting next to a login link, is
+// close enough to a phishing template that mail providers (Microsoft 365 /
+// Google Workspace for Education especially) routinely spam-filter it. This
+// sends a signed, single-purpose, 72h-expiring link instead — the student
+// picks their own password on a page they land on directly, and no password
+// (temporary or otherwise) ever travels through email at all.
+function setupLinkEmail(name: string, email: string, setupUrl: string) {
   const text =
-    `Hi ${name},\n\nAn account has been created for you on Oriole.\n\n` +
-    `Login:    ${email}\nPassword: ${password}\n\n` +
-    `Sign in at ${loginUrl} — you can change your password after your first login.\n\n— Oriole`;
+    `Hi ${name},\n\nAn account has been created for you on Oriole. Set your password to finish getting started:\n\n${setupUrl}\n\n` +
+    `This link works once and expires in 72 hours.\n\n— Oriole`;
   const html = buildHtml(
     `<p style="margin:0 0 12px;font-size:15px;color:#111827"><strong>Hi ${esc(name)},</strong></p>
-     <p style="margin:0 0 16px">An account has been created for you on <strong>Oriole</strong>. Use the credentials below to sign in.</p>
-     <table role="presentation" cellpadding="0" cellspacing="0" style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:14px 18px;margin:0 0 20px;width:100%">
-       <tr><td style="font-size:13px;color:#6b7280;padding-bottom:4px">Email</td></tr>
-       <tr><td style="font-size:15px;font-weight:700;color:#111827;padding-bottom:12px">${esc(email)}</td></tr>
-       <tr><td style="font-size:13px;color:#6b7280;padding-bottom:4px">Temporary password</td></tr>
-       <tr><td style="font-size:15px;font-weight:700;color:#111827;font-family:monospace">${esc(password)}</td></tr>
-     </table>
-     <p style="margin:0 0 4px;font-size:13px;color:#6b7280">You will be asked to change your password after your first login.</p>
-     ${ctaButton("Sign in to Oriole", loginUrl)}`,
+     <p style="margin:0 0 16px">An account has been created for you on <strong>Oriole</strong>. Set your password to finish getting started.</p>
+     ${ctaButton("Set my password", setupUrl)}
+     <p style="margin:16px 0 0;font-size:13px;color:#6b7280">This link works once and expires in 72 hours.</p>`,
     email,
   );
-  return { subject: "Your Oriole account is ready", text, html };
+  return { subject: "Finish setting up your Oriole account", text, html };
 }
 
 const app = express();
@@ -234,7 +252,9 @@ app.use(express.json({ limit: "2mb" })); // webcam snapshots / verification phot
 app.use(cookieParser());
 app.use("/api/auth/login", authLimiter); // brute-force protection on credentials
 app.use("/api/auth/signup", authLimiter);
+app.use("/api/auth/setup-password", authLimiter); // same class of endpoint — public, unauthenticated, worth capping
 app.use("/api/auth/2fa/verify", twoFaLimiter); // brute-force protection on 2FA codes / backup codes
+app.use("/api/super-admin/auth/login", superAdminAuthLimiter); // own bucket — see security.ts
 app.use("/api", apiLimiter); // global API rate limit
 // Never let a proxy/browser cache API responses — a cached /auth/me (user:null)
 // would log users out on refresh, and stale data would mask updates.
@@ -351,6 +371,28 @@ app.post("/api/auth/2fa/verify", validate(twoFaCodeSchema), async (req, res) => 
   res.json({ user: toSafeUser(user) });
 });
 
+// Public — the caller isn't signed in yet. The signed, 72h-expiring token from
+// the account-setup email IS the authorization; nothing else gates this.
+app.post("/api/auth/setup-password", validate(passwordSetupSchema), async (req, res) => {
+  const { token, password } = req.body as { token: string; password: string };
+  const userId = verifyPasswordSetupToken(token);
+  if (!userId) return res.status(400).json({ error: "This setup link is invalid or has expired. Ask your administrator to resend it." });
+  const user = db.data!.users.find((u) => u.id === userId);
+  if (!user) return res.status(404).json({ error: "Account not found." });
+  // Single-use: mustChangePassword flips false the moment setup completes, so
+  // a captured/forwarded/re-clicked link can't silently overwrite a password
+  // the student already chose for themselves — even though the JWT itself
+  // stays cryptographically valid until its 72h expiry.
+  if (!user.mustChangePassword) return res.status(400).json({ error: "This setup link has already been used. Sign in with your existing password, or ask your administrator to resend a new one." });
+  user.passwordHash = await bcrypt.hash(password, BCRYPT_COST);
+  user.mustChangePassword = false;
+  user.tokenVersion = (user.tokenVersion ?? 0) + 1; // invalidate anything issued off the old placeholder hash
+  await db.upsert("users", user);
+  await recordAuthAudit(req, "auth.password_setup_completed", user.email);
+  issueSession(res, user);
+  res.json({ user: toSafeUser(user) });
+});
+
 app.post("/api/auth/logout", async (req, res) => {
   // Revoke this user's tokens server-side (not just clear the cookie) so a
   // captured session can't be replayed after logout.
@@ -411,6 +453,80 @@ app.post("/api/auth/2fa/disable", requireAuth, validate(twoFaDisableSchema), asy
 app.get("/api/auth/me", (req, res) => {
   const user = currentUser(req);
   res.json({ user: user ? toSafeUser(user) : null });
+});
+
+// ---- Super Admin — fully separate identity, session, and audit trail from
+// everything above. See server/superAdminAuth.ts for the isolation rationale.
+app.post("/api/super-admin/auth/login", validate(loginSchema), async (req, res) => {
+  const { email, password } = req.body as { email: string; password: string };
+  const superAdmin = db.data!.superAdmins.find((s) => s.email.toLowerCase() === String(email).toLowerCase());
+  // Same timing-safe pattern as tenant login (server/index.ts, /api/auth/login):
+  // bcrypt.compare always runs, even for a nonexistent email, against the same
+  // DUMMY_BCRYPT_HASH — no email-enumeration timing side-channel.
+  const passwordOk = await bcrypt.compare(String(password), superAdmin?.passwordHash ?? DUMMY_BCRYPT_HASH);
+  if (!superAdmin || !passwordOk) {
+    await recordSuperAdminAuthAudit(req, "superadmin.login_failed", String(email));
+    return res.status(401).json({ error: "Invalid email or password." });
+  }
+  issueSuperAdminSession(res, superAdmin);
+  await recordSuperAdminAudit(req, "superadmin.login", `${superAdmin.name} <${superAdmin.email}>`);
+  res.json({ superAdmin: toSafeSuperAdmin(superAdmin) });
+});
+
+app.post("/api/super-admin/auth/logout", async (req, res) => {
+  const superAdmin = currentSuperAdmin(req);
+  if (superAdmin) {
+    superAdmin.tokenVersion = (superAdmin.tokenVersion ?? 0) + 1; // server-side revocation, not just cookie clearing
+    await db.upsert("superAdmins", superAdmin);
+    await recordSuperAdminAudit(req, "superadmin.logout", `${superAdmin.name} <${superAdmin.email}>`);
+  }
+  clearSuperAdminSession(res);
+  res.json({ ok: true });
+});
+
+app.get("/api/super-admin/auth/me", (req, res) => {
+  const superAdmin = currentSuperAdmin(req);
+  res.json({ superAdmin: superAdmin ? toSafeSuperAdmin(superAdmin) : null });
+});
+
+// One-time gate consuming the bootstrap password, mirroring
+// POST /api/me/complete-password-setup for tenant users exactly.
+app.post("/api/super-admin/auth/complete-password-setup", requireSuperAdmin, validate(passwordChangeSchema), async (req, res) => {
+  const superAdmin = currentSuperAdmin(req)!;
+  if (!superAdmin.mustChangePassword) return res.status(400).json({ error: "No password change is required on this account." });
+  const { current, password } = req.body ?? {};
+  if (!current || !(await bcrypt.compare(String(current), superAdmin.passwordHash))) {
+    return res.status(400).json({ error: "Current password is incorrect." });
+  }
+  await recordSuperAdminAudit(req, "superadmin.first_password_set", superAdmin.name);
+  superAdmin.passwordHash = await bcrypt.hash(String(password), BCRYPT_COST);
+  superAdmin.mustChangePassword = false;
+  superAdmin.tokenVersion = (superAdmin.tokenVersion ?? 0) + 1; // revoke the bootstrap-password-derived session
+  await db.upsert("superAdmins", superAdmin);
+  issueSuperAdminSession(res, superAdmin);
+  res.json({ ok: true });
+});
+
+// Real numbers from the one real tenant that exists today — not mocked.
+// Institution-count cards are honestly 1/1/0 until the multi-tenant retrofit
+// (see the v2.0.0 plan) makes them mean something; that's correct, not a stub.
+app.get("/api/super-admin/dashboard", requireSuperAdmin, (_req, res) => {
+  const users = db.data!.users;
+  const students = users.filter((u) => u.role === "candidate").length;
+  const facilitators = users.filter((u) => u.role === "facilitator").length;
+  const proctors = users.filter((u) => u.role === "proctor").length;
+  const administrators = users.filter((u) => u.role === "admin").length;
+  const activeExams = db.data!.exams.filter((e) => e.status === "published").length;
+  const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
+  const examsToday = db.data!.attempts.filter((a) => new Date(a.startedAt).getTime() >= startOfToday.getTime()).length;
+  const liveSessions = db.data!.attempts.filter((a) => a.status === "in_progress").length;
+  res.json({
+    institutions: { total: 1, active: 1, suspended: 0 },
+    users: { total: users.length, students, facilitators, proctors, administrators },
+    exams: { active: activeExams, today: examsToday },
+    liveSessions,
+    platformUptimeSeconds: process.uptime(),
+  });
 });
 
 // ---- Single Sign-On (Microsoft / Entra) ----
@@ -2010,17 +2126,20 @@ app.get("/api/admin/candidates", requirePermission("students.view"), (_req, res)
 });
 
 app.post("/api/admin/candidates", requirePermission("students.manage"), async (req, res) => {
-  const { name, email, password } = req.body ?? {};
-  if (!name?.trim() || !email?.trim() || !password || String(password).length < 6) {
-    return res.status(400).json({ error: "Name, email and a password (min 6 characters) are required." });
+  const { name, email } = req.body ?? {};
+  if (!name?.trim() || !email?.trim()) {
+    return res.status(400).json({ error: "Name and email are required." });
   }
   const exists = db.data!.users.find((u) => u.email.toLowerCase() === String(email).trim().toLowerCase());
   if (exists) return res.status(409).json({ error: "An account with that email already exists." });
   const b = req.body ?? {};
+  // Never emailed or shown anywhere — the student sets their real password via
+  // the setup link below. This hash only exists so passwordHash has a value.
+  const placeholderPassword = "dti-" + nanoid(6);
   const user = {
     id: nanoid(10),
     email: String(email).trim(),
-    passwordHash: await bcrypt.hash(String(password), BCRYPT_COST),
+    passwordHash: await bcrypt.hash(placeholderPassword, BCRYPT_COST),
     name: String(name).trim(),
     role: "candidate" as const,
     gender: typeof b.gender === "string" ? b.gender : undefined,
@@ -2032,24 +2151,20 @@ app.post("/api/admin/candidates", requirePermission("students.manage"), async (r
   db.data!.users.push(user);
   await db.write();
   await recordAudit(req, "candidate.created", `${user.name} <${user.email}>`);
-  const mail = invitationEmail(user.name, user.email, String(password));
+  const setupUrl = `${env.appUrl}/setup-password?token=${passwordSetupToken(user.id)}`;
+  const mail = setupLinkEmail(user.name, user.email, setupUrl);
   await sendMail(user.email, mail.subject, mail.text, mail.html);
   res.json({ user: { id: user.id, name: user.name, email: user.email } });
 });
 
-// Regenerate a candidate's password and resend the onboarding email — for when
-// the original invitation never arrived (e.g. an SMTP outage). We only ever
-// store a bcrypt hash, so there's no original password to resend as-is; this
-// issues a fresh temporary one and invalidates the old one.
+// Resend the onboarding email with a fresh setup link — for when the original
+// never arrived (e.g. an SMTP outage) or its 72h window expired.
 app.post("/api/admin/candidates/:id/resend-invite", requirePermission("students.manage"), async (req, res) => {
   const user = db.data!.users.find((u) => u.id === req.params.id && u.role === "candidate");
   if (!user) return res.status(404).json({ error: "Student not found." });
-  const tempPassword = "dti-" + nanoid(6);
-  user.passwordHash = await bcrypt.hash(tempPassword, BCRYPT_COST);
-  user.mustChangePassword = true;
-  await db.upsert("users", user);
   await recordAudit(req, "candidate.invite_resent", `${user.name} <${user.email}>`);
-  const mail = invitationEmail(user.name, user.email, tempPassword);
+  const setupUrl = `${env.appUrl}/setup-password?token=${passwordSetupToken(user.id)}`;
+  const mail = setupLinkEmail(user.name, user.email, setupUrl);
   const result = await sendMail(user.email, mail.subject, mail.text, mail.html);
   res.json({ ok: result.delivery !== "failed", delivery: result.delivery, error: result.error });
 });
@@ -2097,7 +2212,9 @@ app.post("/api/admin/candidates/bulk", requirePermission("students.manage"), asy
   res.json({ created, skipped });
   for (const c of created) {
     try {
-      const mail = invitationEmail(c.name, c.email, c.tempPassword);
+      const user = createdUsers.find((u) => u.email === c.email)!;
+      const setupUrl = `${env.appUrl}/setup-password?token=${passwordSetupToken(user.id)}`;
+      const mail = setupLinkEmail(c.name, c.email, setupUrl);
       await sendMail(c.email, mail.subject, mail.text, mail.html);
     } catch (e) {
       logger.error({ err: e, email: c.email }, "bulk-import invitation email failed");
@@ -6412,12 +6529,14 @@ app.post("/api/admin/classes/:id/import", requirePermission("students.manage"), 
   res.json({ created, addedExisting, removed, skipped, enrolled, memberCount: cls.memberIds.length });
 
   // Onboarding emails for newly created accounts only — matched existing
-  // students already have a real password and don't need a new temp one.
+  // students already have a real password and don't need a new setup link.
   // Sent after responding so a large roster can't stall the request (see the
   // identical pattern in /admin/candidates/bulk).
   for (const c of created) {
     try {
-      const mail = invitationEmail(c.name, c.email, c.tempPassword);
+      const user = createdUsers.find((u) => u.email === c.email)!;
+      const setupUrl = `${env.appUrl}/setup-password?token=${passwordSetupToken(user.id)}`;
+      const mail = setupLinkEmail(c.name, c.email, setupUrl);
       await sendMail(c.email, mail.subject, mail.text, mail.html);
     } catch (e) {
       logger.error({ err: e, email: c.email }, "class-import invitation email failed");

@@ -63,6 +63,32 @@ export interface User {
   roleExpiresAt?: string | null;
 }
 
+/** Platform-operator identity for the Super Admin console — deliberately NOT a
+ *  5th `Role` literal or a flag on `User`. Tenant accounts and super-admin
+ *  accounts share no table, no session cookie, and no JWT signing key (see
+ *  server/superAdminAuth.ts); a compromise of one can never reach the other.
+ *  v1 has no internal role tiers (Owner/Support/Security/etc. from the spec
+ *  are deferred) — every super admin is equally privileged for now. */
+export interface SuperAdmin {
+  id: string;
+  email: string;
+  passwordHash: string;
+  name: string;
+  createdAt: string;
+  tokenVersion?: number;
+  /** Same self-clearing semantics as User.mustChangePassword — forces the
+   *  bootstrap one-time password to be rotated before anything else is reachable. */
+  mustChangePassword?: boolean;
+}
+
+/** Client-facing DTO for SuperAdmin — no passwordHash, mirrors SafeUser below. */
+export interface SafeSuperAdmin {
+  id: string;
+  email: string;
+  name: string;
+  mustChangePassword?: boolean;
+}
+
 /** A named, admin-defined bundle of fine-grained permissions (see
  *  shared/permissions.ts) that can be assigned to a staff member via
  *  User.customRoleId, on top of their base `role`. */
