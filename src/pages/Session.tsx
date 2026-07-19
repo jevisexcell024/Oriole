@@ -9,8 +9,12 @@ import { api, sendBeaconJson } from "@/lib/api";
 import { useProctoring } from "@/lib/proctoring";
 import { useGeofenceMonitor } from "@/lib/geofence";
 import { useExamLockdown, type LockdownEvent } from "@/lib/lockdown";
+import { useWakeLock } from "@/lib/wakeLock";
 import { useAnswerSync } from "@/lib/useAnswerSync";
 import { CodeAnswer } from "@/components/CodeAnswer";
+import { Calculator } from "@/components/Calculator";
+import { MediaStimulus } from "@/components/MediaStimulus";
+import { INITIAL_CALC_STATE, type CalcState } from "@shared/calculator";
 import { detectIncognito } from "@/lib/incognito";
 import { MathText } from "@/lib/richtext";
 import { useT } from "@/lib/i18n";
@@ -62,6 +66,9 @@ export function Session() {
   const [proctorMsgs, setProctorMsgs] = useState<{ id: string; text: string; at: string }[]>([]);
   const [dismissedMsgs, setDismissedMsgs] = useState<Set<string>>(new Set());
   const [online, setOnline] = useState(() => typeof navigator !== "undefined" ? navigator.onLine : true);
+  // Lifted here (not local to <Calculator>) so the display/history survive question
+  // navigation when the exam's "remember state between questions" setting is on.
+  const [calcState, setCalcState] = useState<CalcState>(INITIAL_CALC_STATE);
 
   const sync = useAnswerSync(attemptId);
 
@@ -86,6 +93,18 @@ export function Session() {
     active: !!data && proctored && !!ld?.requireGeofence && !!ld?.geofenceContinuousMonitoring,
     attemptId, intervalSec: ld?.geofenceCheckIntervalSec ?? 60,
   });
+  // Not gated on `proctored` — the calculator and wake lock are opt-in exam
+  // settings on their own, independent of whether webcam/lockdown proctoring
+  // is also enabled for this exam.
+  const wakeLock = useWakeLock({ active: !!data && !!ld?.wakeLockEnabled, attemptId });
+
+  // When "remember state between questions" is off, reset the calculator on
+  // every question change instead of carrying its value across (it's a single
+  // persistent floating widget, not remounted per question, so without this it
+  // would always remember regardless of the setting).
+  useEffect(() => {
+    if (!ld?.calculatorRememberState) setCalcState(INITIAL_CALC_STATE);
+  }, [idx, ld?.calculatorRememberState]);
 
   // Load attempt.
   useEffect(() => {
@@ -253,7 +272,8 @@ export function Session() {
 
   const isAnswered = useCallback((qq: PublicQuestion) => {
     const v = answers[qq.id] ?? "";
-    if (qq.type === "multi_select" || qq.type === "matching" || qq.type === "ordering" || qq.type === "cloze") {
+    const effType = qq.type === "media_comprehension" ? qq.answerFormat : qq.type;
+    if (effType === "multi_select" || effType === "matching" || effType === "ordering" || effType === "cloze") {
       try { const a = JSON.parse(v || "[]"); return Array.isArray(a) && a.some((x) => String(x ?? "").trim() !== ""); } catch { return false; }
     }
     return v.trim().length > 0;
@@ -404,6 +424,14 @@ export function Session() {
         </div>
       )}
 
+      {/* Screen Wake Lock unsupported — non-blocking, the exam continues either way */}
+      {ld?.wakeLockEnabled && ld?.wakeLockFailureAction !== "continue" && !wakeLock.supported && (
+        <div className="mx-auto mt-3 flex max-w-6xl items-center gap-2 rounded-xl bg-amber-500/15 px-4 py-3 text-sm font-medium text-amber-400 ring-1 ring-amber-500/30">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span>Your browser does not support Screen Wake Lock. Your screen may turn off according to your device settings.</span>
+        </div>
+      )}
+
       {/* Messages from the proctor */}
       {proctorMsgs.filter((m) => !dismissedMsgs.has(m.id)).map((m) => (
         <div key={m.id} className="mx-auto mt-3 flex max-w-6xl items-start gap-2 rounded-xl bg-brand-500/15 px-4 py-3 text-sm font-medium text-brand-300 ring-1 ring-brand-500/30">
@@ -444,81 +472,15 @@ export function Session() {
             <h2 className="mt-3 text-lg font-semibold leading-snug"><MathText>{q.prompt}</MathText></h2>
 
             <div className="mt-5 space-y-2.5">
-              {q.type === "matching" ? (
-                <MatchingAnswer q={q} value={answers[q.id] ?? ""} onChange={(v) => saveAnswer(q.id, v)} />
-              ) : q.type === "ordering" ? (
-                <OrderingAnswer q={q} value={answers[q.id] ?? ""} onChange={(v) => saveAnswer(q.id, v)} />
-              ) : q.type === "cloze" ? (
-                <ClozeAnswer q={q} value={answers[q.id] ?? ""} onChange={(v) => saveAnswer(q.id, v)} />
-              ) : q.type === "hotspot" ? (
-                <HotspotAnswer q={q} value={answers[q.id] ?? ""} onChange={(v) => saveAnswer(q.id, v)} />
-              ) : q.type === "file_upload" ? (
-                <FileUploadAnswer value={answers[q.id] ?? ""} onChange={(v) => saveAnswer(q.id, v)} />
-              ) : q.type === "short" ? (
-                <input
-                  className="input"
-                  placeholder="Type your answer…"
-                  value={answers[q.id] ?? ""}
-                  onChange={(e) => saveAnswer(q.id, e.target.value)}
-                />
-              ) : q.type === "numeric" || q.type === "parameterized" ? (
-                <input
-                  className="input max-w-xs"
-                  type="number"
-                  step="any"
-                  inputMode="decimal"
-                  placeholder="Enter a number…"
-                  value={answers[q.id] ?? ""}
-                  onChange={(e) => saveAnswer(q.id, e.target.value)}
-                />
-              ) : q.type === "code" ? (
-                <CodeAnswer q={q} value={answers[q.id] ?? ""} onChange={(v) => saveAnswer(q.id, v)} runner={data.codeRunner} />
-              ) : q.type === "essay" ? (
-                <textarea
-                  className="input min-h-[200px] resize-y leading-relaxed"
-                  placeholder="Write your answer…"
-                  value={answers[q.id] ?? ""}
-                  onChange={(e) => saveAnswer(q.id, e.target.value)}
-                />
-              ) : q.type === "multi_select" ? (
-                (() => {
-                  let picked: string[] = [];
-                  try { picked = JSON.parse(answers[q.id] || "[]"); } catch { picked = []; }
-                  const toggle = (opt: string) => {
-                    const next = picked.includes(opt) ? picked.filter((x) => x !== opt) : [...picked, opt];
-                    saveAnswer(q.id, JSON.stringify(next));
-                  };
-                  return (q.options ?? []).map((opt) => {
-                    const sel = picked.includes(opt);
-                    return (
-                      <button key={opt} onClick={() => toggle(opt)}
-                        className={clsx("flex w-full items-center gap-3 rounded-[3px] border p-3.5 text-left text-sm transition",
-                          sel ? "border-brand-500 bg-brand-500/15" : "border-[var(--border)] hover:bg-white/[0.02]")}>
-                        {sel ? <CheckSquare className="h-4 w-4 text-brand-400" /> : <Square className="h-4 w-4 text-[var(--muted)]" />}
-                        <span className="capitalize"><MathText>{opt}</MathText></span>
-                      </button>
-                    );
-                  });
-                })()
+              {q.type === "media_comprehension" ? (
+                <MediaComprehensionAnswer q={q} attemptId={attemptId} value={answers[q.id] ?? ""} onChange={(v) => saveAnswer(q.id, v)}
+                  allQuestions={data.questions} codeRunner={data.codeRunner} />
               ) : (
-                (q.options ?? []).map((opt) => {
-                  const selected = answers[q.id] === opt;
-                  return (
-                    <button
-                      key={opt}
-                      onClick={() => saveAnswer(q.id, opt)}
-                      className={clsx(
-                        "flex w-full items-center gap-3 rounded-[3px] border p-3.5 text-left text-sm transition",
-                        selected ? "border-brand-500 bg-brand-500/15" : "border-[var(--border)] hover:bg-white/[0.02]",
-                      )}
-                    >
-                      {selected ? <CircleDot className="h-4 w-4 text-brand-400" /> : <Circle className="h-4 w-4 text-[var(--muted)]" />}
-                      <span className="capitalize"><MathText>{opt}</MathText></span>
-                    </button>
-                  );
-                })
+                <AnswerArea q={q} value={answers[q.id] ?? ""} onChange={(v) => saveAnswer(q.id, v)} codeRunner={data.codeRunner} />
               )}
-              {q.type === "multi_select" && <p className="text-xs text-[var(--muted)]">Select all that apply.</p>}
+              {(q.type === "multi_select" || (q.type === "media_comprehension" && q.answerFormat === "multi_select")) && (
+                <p className="text-xs text-[var(--muted)]">Select all that apply.</p>
+              )}
             </div>
           </div>
 
@@ -659,6 +621,17 @@ export function Session() {
           </div>
         </div>
       )}
+
+      {ld?.calculatorEnabled && attemptId && (
+        <Calculator
+          attemptId={attemptId}
+          type={ld.calculatorType ?? "basic"}
+          allowKeyboard={ld.calculatorAllowKeyboard ?? true}
+          saveHistory={!!ld.calculatorSaveHistory}
+          state={calcState}
+          onStateChange={setCalcState}
+        />
+      )}
     </div>
   );
 }
@@ -685,6 +658,84 @@ function Centered({ children }: { children: React.ReactNode }) {
 }
 
 /* ─────────────────────── New question-type answers ─────────────────────── */
+
+/** The full per-type answer renderer, extracted so media_comprehension can
+ *  delegate to it (with `type` swapped for `answerFormat`) instead of
+ *  duplicating every format's UI a second time. */
+function AnswerArea({ q, value, onChange, codeRunner }: { q: PublicQuestion; value: string; onChange: (v: string) => void; codeRunner?: boolean }) {
+  if (q.type === "matching") return <MatchingAnswer q={q} value={value} onChange={onChange} />;
+  if (q.type === "ordering") return <OrderingAnswer q={q} value={value} onChange={onChange} />;
+  if (q.type === "cloze") return <ClozeAnswer q={q} value={value} onChange={onChange} />;
+  if (q.type === "hotspot") return <HotspotAnswer q={q} value={value} onChange={onChange} />;
+  if (q.type === "file_upload") return <FileUploadAnswer value={value} onChange={onChange} />;
+  if (q.type === "short") {
+    return <input className="input" placeholder="Type your answer…" value={value} onChange={(e) => onChange(e.target.value)} />;
+  }
+  if (q.type === "numeric" || q.type === "parameterized") {
+    return <input className="input max-w-xs" type="number" step="any" inputMode="decimal" placeholder="Enter a number…" value={value} onChange={(e) => onChange(e.target.value)} />;
+  }
+  if (q.type === "code") return <CodeAnswer q={q} value={value} onChange={onChange} runner={codeRunner} />;
+  if (q.type === "essay") {
+    return <textarea className="input min-h-[200px] resize-y leading-relaxed" placeholder="Write your answer…" value={value} onChange={(e) => onChange(e.target.value)} />;
+  }
+  if (q.type === "multi_select") {
+    let picked: string[] = [];
+    try { picked = JSON.parse(value || "[]"); } catch { picked = []; }
+    const toggle = (opt: string) => {
+      const next = picked.includes(opt) ? picked.filter((x) => x !== opt) : [...picked, opt];
+      onChange(JSON.stringify(next));
+    };
+    return <>{(q.options ?? []).map((opt) => {
+      const sel = picked.includes(opt);
+      return (
+        <button key={opt} onClick={() => toggle(opt)}
+          className={clsx("flex w-full items-center gap-3 rounded-[3px] border p-3.5 text-left text-sm transition",
+            sel ? "border-brand-500 bg-brand-500/15" : "border-[var(--border)] hover:bg-white/[0.02]")}>
+          {sel ? <CheckSquare className="h-4 w-4 text-brand-400" /> : <Square className="h-4 w-4 text-[var(--muted)]" />}
+          <span className="capitalize"><MathText>{opt}</MathText></span>
+        </button>
+      );
+    })}</>;
+  }
+  // mcq / true_false
+  return <>{(q.options ?? []).map((opt) => {
+    const selected = value === opt;
+    return (
+      <button key={opt} onClick={() => onChange(opt)}
+        className={clsx("flex w-full items-center gap-3 rounded-[3px] border p-3.5 text-left text-sm transition",
+          selected ? "border-brand-500 bg-brand-500/15" : "border-[var(--border)] hover:bg-white/[0.02]")}>
+        {selected ? <CircleDot className="h-4 w-4 text-brand-400" /> : <Circle className="h-4 w-4 text-[var(--muted)]" />}
+        <span className="capitalize"><MathText>{opt}</MathText></span>
+      </button>
+    );
+  })}</>;
+}
+
+/** media_comprehension: the shared stimulus player above whatever answerFormat's
+ *  own UI is below (delegated to AnswerArea). Resolves a shared passage's text
+ *  from the full served question set when this question is a passage-group follower. */
+function MediaComprehensionAnswer({ q, attemptId, value, onChange, allQuestions, codeRunner }: {
+  q: PublicQuestion; attemptId?: string; value: string; onChange: (v: string) => void;
+  allQuestions: PublicQuestion[]; codeRunner?: boolean;
+}) {
+  const passageText = q.passageGroupId
+    ? allQuestions.find((o) => o.passageGroupId === q.passageGroupId && o.passageText)?.passageText
+    : q.passageText;
+  const shim: PublicQuestion = { ...q, type: q.answerFormat ?? "essay" };
+  return (
+    <div className="space-y-4">
+      <MediaStimulus
+        attemptId={attemptId}
+        mediaKind={q.mediaKind ?? "passage"}
+        mediaUrls={q.mediaUrls ?? []}
+        mediaExternalUrl={q.mediaExternalUrl}
+        mediaConfig={q.mediaConfig}
+        passageText={passageText}
+      />
+      <AnswerArea q={shim} value={value} onChange={onChange} codeRunner={codeRunner} />
+    </div>
+  );
+}
 
 // Matching: one dropdown per left prompt; options are the shuffled right values.
 function MatchingAnswer({ q, value, onChange }: { q: PublicQuestion; value: string; onChange: (v: string) => void }) {

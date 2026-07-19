@@ -4,6 +4,7 @@ import { gzip } from "node:zlib";
 import { promisify } from "node:util";
 import { dumpAll } from "./db.ts";
 import { logger } from "./logger.ts";
+import { recordJobRun } from "./reliability.ts";
 
 const gzipAsync = promisify(gzip);
 
@@ -72,10 +73,14 @@ let timer: ReturnType<typeof setInterval> | null = null;
 
 export function scheduleBackup() {
   const fire = () => {
-    void runBackup().catch((e) => {
-      lastBackupError = e instanceof Error ? e.message : String(e);
-      logger.error({ err: e }, "database backup failed");
-    });
+    const t0 = performance.now();
+    void runBackup()
+      .then(() => recordJobRun("backup", true, performance.now() - t0))
+      .catch((e) => {
+        lastBackupError = e instanceof Error ? e.message : String(e);
+        recordJobRun("backup", false, performance.now() - t0, lastBackupError);
+        logger.error({ err: e }, "database backup failed");
+      });
   };
   fire(); // one at startup so a redeploy/restart doesn't leave a stale gap
   timer = setInterval(fire, intervalHours() * 60 * 60 * 1000);

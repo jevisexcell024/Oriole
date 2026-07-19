@@ -53,10 +53,14 @@ export function useExamLockdown({
   const onEventRef = useRef(onEvent);
   onEventRef.current = onEvent;
   const emit = useCallback((e: LockdownEvent) => onEventRef.current?.(e), []);
-  // Switching away fires both `visibilitychange` and window `blur`; record one
-  // flag per away-period (re-armed when focus returns) so the paired events and
-  // the focus heartbeat don't multiply into many flags.
+  // Switching away fires both `visibilitychange` and window `blur` near-simultaneously;
+  // debounce those into a single flag, but keep re-flagging on every heartbeat tick for
+  // as long as the candidate stays away — otherwise a single long absence (minutes) would
+  // only ever cost one flag, letting a student sit outside the exam indefinitely no matter
+  // how low the violation tolerance is configured.
   const awayFlaggedRef = useRef(false);
+  const lastAwayFlagAtRef = useRef(0);
+  const REFLAG_INTERVAL_MS = 3000;
 
   const requestFullscreen = useCallback(async () => {
     try { await document.documentElement.requestFullscreen(); } catch { /* user may decline */ }
@@ -124,8 +128,10 @@ export function useExamLockdown({
     const flagAway = (message: string) => {
       if (!rulesRef.current.tabSwitchDetection) return;
       setObscured(true);
-      if (awayFlaggedRef.current) return; // one flag per away-period (re-armed on focus)
+      const t = Date.now();
+      if (awayFlaggedRef.current && t - lastAwayFlagAtRef.current < REFLAG_INTERVAL_MS) return;
       awayFlaggedRef.current = true;
+      lastAwayFlagAtRef.current = t;
       emit({ type: "tab_blur", severity: "high", message });
     };
     const onHide = () => { if (document.hidden) flagAway("Candidate switched away from the exam (tab hidden or minimised)."); };
@@ -187,7 +193,7 @@ export function useExamLockdown({
     document.addEventListener("fullscreenchange", onFsChange);
     try { scr.addEventListener?.("change", checkDisplays); } catch { /* unsupported */ }
     const displayTimer = window.setInterval(checkDisplays, 5000);
-    const heartbeatTimer = window.setInterval(heartbeat, 2000);
+    const heartbeatTimer = window.setInterval(heartbeat, 3000);
     checkDisplays();
     if (rulesRef.current.blockCopyPaste) document.body.classList.add("exam-lockdown");
     setFullscreen(!!document.fullscreenElement);

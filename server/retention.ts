@@ -1,6 +1,7 @@
 import { db, snapshotStore, auditStore } from "./db.ts";
 import { env } from "./env.ts";
 import { logger } from "./logger.ts";
+import { recordJobRun } from "./reliability.ts";
 
 function auditRetentionDays(): number {
   const v = db.data?.settings.find((s) => s.id === "org")?.auditRetentionDays;
@@ -27,13 +28,23 @@ export async function runRetentionSweep(): Promise<{ removed: number; auditRemov
   return { removed, auditRemoved };
 }
 
+function trackedSweep() {
+  const t0 = performance.now();
+  return runRetentionSweep()
+    .then(() => recordJobRun("retention", true, performance.now() - t0))
+    .catch((e) => {
+      recordJobRun("retention", false, performance.now() - t0, e instanceof Error ? e.message : String(e));
+      logger.error({ err: e }, "retention sweep failed");
+    });
+}
+
 let timer: ReturnType<typeof setInterval> | null = null;
 
 export function scheduleRetention() {
   // Always schedule — the sweep itself decides what (if anything) to purge based
   // on the env var and the org setting, either of which may change at runtime.
-  void runRetentionSweep().catch((e) => logger.error({ err: e }, "retention sweep failed"));
-  timer = setInterval(() => void runRetentionSweep().catch((e) => logger.error({ err: e }, "retention sweep failed")), 6 * 60 * 60 * 1000);
+  void trackedSweep();
+  timer = setInterval(() => void trackedSweep(), 6 * 60 * 60 * 1000);
   timer.unref?.();
 }
 

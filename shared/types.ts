@@ -45,6 +45,14 @@ export interface User {
    *  successfully logged in from before, newest first, capped at 10. A login
    *  from an unrecognized fingerprint triggers a "new sign-in" email alert. */
   knownDevices?: { fingerprint: string; lastSeenAt: string }[];
+  /** Set whenever a student is issued a password they didn't choose (initial
+   *  invite, bulk import, resend, or an admin-driven reset) — forces them
+   *  through a one-time password-setup screen on their next login before they
+   *  can reach anything else. Cleared the moment they complete it. This is a
+   *  narrow, self-clearing exception to the rule that candidates can't change
+   *  their own password (see POST /api/me/password) — that rule still applies
+   *  to every password change after this first one. */
+  mustChangePassword?: boolean;
   /** Optional custom role (see CustomRole below), assignable on top of the base
    *  `role`. Additive only: existing requireRole()/requireRoles() checks still
    *  gate on `role` alone, unaffected by this field. */
@@ -97,7 +105,8 @@ export type QuestionType =
   | "cloze"        // fill-in-the-blank(s) — ___ markers in the prompt
   | "hotspot"      // click the correct region of an image
   | "file_upload"  // upload a file as the answer — manually graded
-  | "parameterized"; // numeric, with random per-candidate variables substituted into the prompt
+  | "parameterized" // numeric, with random per-candidate variables substituted into the prompt
+  | "media_comprehension"; // show a stimulus (audio/video/image/pdf/passage), answer in some other format (see `answerFormat`)
 
 export interface Question {
   id: string;
@@ -148,6 +157,47 @@ export interface Question {
   paramFormula?: string;
   /** Parameterized — accepted +/- tolerance on the computed answer (default 0 = exact). */
   paramTolerance?: number;
+
+  // ── Media comprehension (Language & Media Assessment module, Phase 2) ──
+  /** What stimulus this question shows the candidate. */
+  mediaKind?: "audio" | "video" | "image" | "pdf" | "passage";
+  /** Uploaded media_assets refs (server-stored, never embedded inline). Multiple = multi-image / side-by-side. */
+  mediaAssetIds?: string[];
+  /** Escape hatch for long-form audio/video that shouldn't be stored inline — mirrors Book.externalUrl. */
+  mediaExternalUrl?: string;
+  /** Rich text passage content — only set on the "owner" question when mediaKind === "passage". */
+  passageText?: string;
+  /** Links this question to a shared passage owned by another question (see passageText). Independently scored. */
+  passageGroupId?: string;
+  mediaConfig?: {
+    allowSeek?: boolean;
+    /** 0 = unlimited replays. */
+    replayLimit?: number;
+    autoplay?: boolean;
+    playbackSpeedControl?: boolean;
+    /** Seconds of countdown shown before playback starts. */
+    countdownSeconds?: number;
+    /** Best-effort client-side deterrent — this app can't truly prevent downloads from a web page. */
+    preventDownload?: boolean;
+    /** Uploaded .vtt media_assets ref for video subtitles. */
+    subtitlesAssetId?: string;
+  };
+  /** Which existing answer format/grading path this media_comprehension question uses. */
+  answerFormat?: "mcq" | "multi_select" | "short" | "numeric" | "essay" | "matching" | "cloze";
+}
+
+/** A stored media blob (image/audio/video/pdf) referenced by a media_comprehension question.
+ *  Off-mirror, base64 data URL — same storage model as file_upload answers, just its own table
+ *  so large blobs never sit in the in-memory `questions` mirror. */
+export interface MediaAsset {
+  id: string;
+  kind: "audio" | "video" | "image" | "pdf";
+  mime: string;
+  sizeBytes: number;
+  dataUrl: string;
+  uploadedBy: string;
+  uploadedAt: string;
+  examId: string;
 }
 
 export interface RubricCriterion {
@@ -179,7 +229,7 @@ export interface LockdownConfig {
   audioMonitoring?: boolean;  // listen for sustained talking/noise during the exam and flag it
   requireRoomScan?: boolean;  // capture a short webcam room scan at check-in for the proctor
   requireAgreement: boolean;  // require accepting exam rules + integrity policy
-  violationLimit: number;     // auto-submit after N violations (0 = never auto-submit)
+  violationLimit: number;     // auto-submit after N violations (0 = zero tolerance, submit on first violation)
 
   // ── Geofencing (restrict the exam to approved physical locations) ──
   requireGeofence?: boolean;
@@ -211,6 +261,25 @@ export interface LockdownConfig {
   sebBrowserExamKeys?: string[];
   /** Link that launches this exam in SEB — a `seb(s)://` URL or an https link to the `.seb` config file. */
   sebLaunchUrl?: string;
+
+  // ── Calculator (in-app only — never the OS calculator) ──
+  calculatorEnabled?: boolean;
+  calculatorType?: "basic" | "scientific";
+  calculatorPosition?: "floating" | "sidebar";
+  /** Off = the calculator only accepts button clicks, no keyboard digit/operator input. */
+  calculatorAllowKeyboard?: boolean;
+  /** Keep a scrollable list of past operations inside the calculator itself (client-only, never persisted server-side). */
+  calculatorSaveHistory?: boolean;
+  /** Keep the calculator's current display/value when the candidate navigates between questions. */
+  calculatorRememberState?: boolean;
+
+  // ── Power Management (Screen Wake Lock) ──
+  /** Request the browser's Screen Wake Lock while the exam is in progress, released on submit/exit. */
+  wakeLockEnabled?: boolean;
+  /** What to do if the browser doesn't support the Wake Lock API at all (detected once, at exam start). */
+  wakeLockFailureAction?: "continue" | "warn" | "notify_invigilator";
+  /** What to do once the candidate's device appears to have been asleep/inactive and has now resumed. */
+  wakeLockResumeAction?: "continue" | "pause" | "auto_submit" | "flag";
 }
 
 export const DEFAULT_LOCKDOWN: LockdownConfig = {
@@ -235,6 +304,15 @@ export const DEFAULT_LOCKDOWN: LockdownConfig = {
   sebConfigKeys: [],
   sebBrowserExamKeys: [],
   sebLaunchUrl: "",
+  calculatorEnabled: false,
+  calculatorType: "basic",
+  calculatorPosition: "floating",
+  calculatorAllowKeyboard: true,
+  calculatorSaveHistory: false,
+  calculatorRememberState: true,
+  wakeLockEnabled: false,
+  wakeLockFailureAction: "warn",
+  wakeLockResumeAction: "continue",
 };
 
 export interface Exam {
@@ -430,6 +508,15 @@ export const PROCTOR_EVENT_TYPES = [
   "audio_noise",
   "multi_monitor",
   "geofence_exit",
+  "calculator_open",
+  "calculator_close",
+  "calculator_minimize",
+  "wake_lock_unsupported",
+  "device_resumed",
+  "media_play",
+  "media_pause",
+  "media_replay",
+  "media_completed",
 ] as const;
 
 export type ProctorEventType = (typeof PROCTOR_EVENT_TYPES)[number];
@@ -572,6 +659,15 @@ export interface OrgSettings {
    *  Always present after initDb's backfill; optional in the type only
    *  because older in-memory records predate this field. */
   learningStructure?: LearningStructureConfig;
+  /** Recipients for Status & Reliability Center incident alerts. */
+  reliabilityAlertEmails?: string[];
+  reliabilityAlertSmsNumbers?: string[];
+  /** Off by default — a "degraded" reading only opens an incident (and notifies)
+   *  when true; "down" always notifies regardless of this setting. */
+  reliabilityNotifyOnDegraded?: boolean;
+  /** Org-wide module toggle — when off, `media_comprehension` is hidden from the Exam Builder's
+   *  type picker (already-authored questions of this type keep working). Opt-in, off by default. */
+  mediaAssessmentEnabled?: boolean;
 }
 
 // ---- Learning structure (foundational config layer — see the "Learning
@@ -638,8 +734,96 @@ export interface ScheduledReport {
 }
 
 /** The canonical set of webhook event names. */
-export const WEBHOOK_EVENTS = ["attempt.submitted", "result.released", "certificate.issued", "exam.published"] as const;
+export const WEBHOOK_EVENTS = ["attempt.submitted", "result.released", "certificate.issued", "exam.published", "incident.opened", "incident.resolved"] as const;
 export type WebhookEvent = (typeof WEBHOOK_EVENTS)[number];
+
+// ---- Status & Reliability Center ----
+// Oriole runs as a single Express process (no separate microservices, no job
+// queue, no clustering) — these are honest, independently-measurable
+// subsystems within that one process, not literal separate services. `api` is
+// the overall request layer and is diagnostic-only (dashboard/public display),
+// deliberately excluded from the reliability-score's uptime component so a
+// global signal that's already the union of the other six isn't double-counted.
+export const RELIABILITY_SUBSYSTEMS = ["api", "database", "examDelivery", "auth", "notifications", "fileStorage", "backgroundJobs"] as const;
+export type ReliabilitySubsystemKey = (typeof RELIABILITY_SUBSYSTEMS)[number];
+
+export type ReliabilityStatus = "operational" | "degraded" | "down";
+
+/** One health-check tick's measurement for one subsystem. Raw samples are
+ *  retained briefly (see server/reliability.ts) then rolled up and purged —
+ *  every field here must be a real measurement, never a placeholder. */
+export interface ReliabilitySample {
+  id: string;
+  subsystem: ReliabilitySubsystemKey;
+  at: string;
+  status: ReliabilityStatus;
+  requestCount: number;
+  errorCount: number;
+  avgLatencyMs: number | null;
+  minLatencyMs: number | null;
+  maxLatencyMs: number | null;
+  p95LatencyMs: number | null;
+  p99LatencyMs: number | null;
+  /** Subsystem-specific detail, e.g. {dbRoundTripMs}, {rssMb, loadavg1}, {mailerError}, {jobName, jobDurationMs}. */
+  meta?: Record<string, unknown> | null;
+}
+
+/** One UTC day's aggregate for one subsystem — kept indefinitely (small: ~7
+ *  rows/day), unlike raw samples. Backs the 7d/30d/90d/365d timeline views. */
+export interface ReliabilityDailyRollup {
+  id: string; // `${subsystem}:${date}`
+  subsystem: ReliabilitySubsystemKey;
+  date: string; // UTC YYYY-MM-DD
+  sampleCount: number;
+  upSamples: number;
+  degradedSamples: number;
+  downSamples: number;
+  uptimePct: number;
+  avgLatencyMs: number | null;
+  minLatencyMs: number | null;
+  maxLatencyMs: number | null;
+  p95LatencyMs: number | null;
+  p99LatencyMs: number | null;
+  requestCount: number;
+  errorCount: number;
+}
+
+/** Computed, real impact of an incident on exam-taking — Oriole's differentiator.
+ *  Every count here is derived from actual Attempt rows; `examIntegrityVerdict`
+ *  is never asserted without `examIntegrityBasis` naming the specific evidence. */
+export interface ExamImpactAnalysis {
+  windowStart: string;
+  windowEnd: string;
+  affectedExamIds: string[];
+  attemptsOverlapping: number;
+  attemptsInterrupted: number;
+  attemptsAutoRecovered: number;
+  attemptsRequiringManualRecovery: number;
+  attemptsLost: number;
+  studentsAffected: number;
+  examIntegrityVerdict: "maintained" | "review_recommended";
+  examIntegrityBasis: string;
+}
+
+export interface ReliabilityIncidentEvent {
+  id: string;
+  at: string;
+  type: "opened" | "identified" | "notified" | "monitoring" | "auto_resolved" | "manually_resolved" | "note";
+  message: string;
+}
+
+export interface ReliabilityIncident {
+  id: string;
+  subsystem: ReliabilitySubsystemKey;
+  severity: "minor" | "major" | "critical";
+  status: "investigating" | "identified" | "monitoring" | "resolved";
+  title: string;
+  openedAt: string;
+  resolvedAt: string | null;
+  autoResolved: boolean;
+  timeline: ReliabilityIncidentEvent[];
+  impact: ExamImpactAnalysis | null;
+}
 
 /** A class/section of students (Teams-style). Exams are assigned to the whole class at a
  *  scheduled time. Distinct from a Learning Structure "Cohort" (a top-level intake/batch,
@@ -878,6 +1062,7 @@ export interface SafeUser {
   customRoleId?: string | null;
   /** Resolved permission keys (own role + inherited), for staff users only. */
   permissions?: string[];
+  mustChangePassword?: boolean;
 }
 
 /** A question delivered to the candidate — never includes the correct answer. */
@@ -902,6 +1087,16 @@ export interface PublicQuestion {
   imageUrl?: string;
   /** Parameterized — the random variable values shown to this candidate (already substituted into prompt). */
   paramValues?: Record<string, number>;
+  // ── media_comprehension ──
+  mediaKind?: "audio" | "video" | "image" | "pdf" | "passage";
+  /** Where to fetch the stimulus from — the authenticated per-attempt media endpoint, never a raw/public URL. */
+  mediaUrls?: string[];
+  mediaExternalUrl?: string;
+  mediaConfig?: Question["mediaConfig"];
+  answerFormat?: Question["answerFormat"];
+  /** Set only on the passage "owner" question. */
+  passageText?: string;
+  passageGroupId?: string;
 }
 
 export interface ExamListItem {

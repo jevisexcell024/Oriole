@@ -4,6 +4,7 @@ import {
   Send, Loader2, CheckCircle2, Zap, FlaskConical, Inbox, Trash2, Clock, AlertTriangle,
 } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
+import { ErrorBanner } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { api } from "@/lib/api";
 import { useT, type TFn } from "@/lib/i18n";
@@ -76,7 +77,7 @@ export function AdminCommunication() {
           <button onClick={() => setModal(true)} className="btn btn-primary"><Plus className="h-4 w-4" /> {t("acom.newAnnouncement")}</button>
         </div>
 
-        {error && <p className="mt-4 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">{error}</p>}
+        {error && <ErrorBanner className="mt-4">{error}</ErrorBanner>}
 
         <div className="mt-5">
           {tab === "announcements" && <AnnouncementsTab t={t} anns={anns} onNew={() => setModal(true)} onReload={loadAnns} />}

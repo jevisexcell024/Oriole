@@ -4,7 +4,7 @@ import {
   Plus, FileText, Loader2, Search, ArrowUpRight, Clock, CalendarClock, ClipboardCheck,
   BookOpen, LayoutGrid, List, ArrowLeft, CheckCircle2, PencilLine, Library, SlidersHorizontal,
   ListChecks, ToggleLeft, Type as TypeIcon, CheckSquare, Hash, Code as CodeIcon, Trash2,
-  ArrowLeftRight, ListOrdered, MousePointerClick, Upload, TextCursorInput, Copy, Calculator,
+  ArrowLeftRight, ListOrdered, MousePointerClick, Upload, TextCursorInput, Copy, Calculator, Headphones,
 } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
 import { PageHeader } from "@/components/PageHeader";
@@ -247,13 +247,13 @@ const Q_TYPE_LABEL: Record<QuestionType, string> = {
   mcq: "aqt.mcq", multi_select: "aqt.multi_select", true_false: "aqt.true_false",
   short: "aqt.short", numeric: "aqt.numeric", essay: "aqt.essay", code: "aqt.code",
   matching: "aqt.matching", ordering: "aqt.ordering", cloze: "aqt.cloze", hotspot: "aqt.hotspot", file_upload: "aqt.file_upload",
-  parameterized: "aqt.parameterized",
+  parameterized: "aqt.parameterized", media_comprehension: "aqt.media_comprehension",
 };
 const Q_TYPE_ICON: Record<QuestionType, typeof ListChecks> = {
   mcq: ListChecks, multi_select: CheckSquare, true_false: ToggleLeft,
   short: TypeIcon, numeric: Hash, essay: FileText, code: CodeIcon,
   matching: ArrowLeftRight, ordering: ListOrdered, cloze: TextCursorInput, hotspot: MousePointerClick, file_upload: Upload,
-  parameterized: Calculator,
+  parameterized: Calculator, media_comprehension: Headphones,
 };
 
 function QuestionsView() {

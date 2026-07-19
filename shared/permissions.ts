@@ -73,6 +73,8 @@ export const PERMISSIONS: PermissionDef[] = [
 
   { key: "system.settings", category: "system", label: "Manage system settings", description: "Change platform-wide configuration and integrations." },
   { key: "system.audit_log", category: "system", label: "View audit log", description: "See the full administrative action history." },
+  { key: "system.reliability_view", category: "system", label: "View Status & Reliability Center", description: "See subsystem health, uptime, response times, and incident history." },
+  { key: "system.reliability_manage", category: "system", label: "Manage reliability alerts & incidents", description: "Configure alert recipients, run a health check on demand, and manually resolve incidents." },
 
   { key: "roles.view", category: "roles", label: "View roles & team", description: "See staff members and role definitions." },
   { key: "roles.manage", category: "roles", label: "Manage roles", description: "Create, edit, clone, and delete custom roles and permission assignments." },

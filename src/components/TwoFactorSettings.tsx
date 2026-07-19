@@ -121,7 +121,7 @@ export function TwoFactorSettings() {
           <p className="text-sm">{t("tfa.disablePrompt")}</p>
           <div className="mt-2 flex items-center gap-2">
             <input type="password" className="input h-9 w-56" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={t("tfa.yourPassword")} autoComplete="current-password" />
-            <button onClick={disable} disabled={busy || !password} className="btn h-9 bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-50">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null} {t("tfa.disableBtn")}</button>
+            <button onClick={disable} disabled={busy || !password} className="btn btn-danger h-9">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null} {t("tfa.disableBtn")}</button>
             <button onClick={() => { setStep("idle"); setPassword(""); setError(null); }} className="btn btn-ghost h-9">{t("tfa.cancel")}</button>
           </div>
         </div>

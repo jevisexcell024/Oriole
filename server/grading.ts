@@ -88,6 +88,13 @@ export function gradeOne(q: Question, rawValue: string | undefined, opts: GradeO
     case "file_upload":
       return { awarded: 0, correct: null, needsReview: true };
 
+    // Full reuse of every existing grading path (auto for objective formats,
+    // needsReview for essay) — media_comprehension is just a stimulus wrapper.
+    case "media_comprehension":
+      return q.answerFormat
+        ? gradeOne({ ...q, type: q.answerFormat }, rawValue, opts)
+        : { awarded: 0, correct: null, needsReview: true };
+
     case "matching": {
       const pairs = q.matchPairs ?? [];
       if (pairs.length === 0) return { awarded: 0, correct: null, needsReview: false };

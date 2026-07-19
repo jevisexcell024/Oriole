@@ -12,6 +12,9 @@ let auditStore: typeof import("../server/db.ts")["auditStore"];
 let emailStore: typeof import("../server/db.ts")["emailStore"];
 let proctorStore: typeof import("../server/db.ts")["proctorStore"];
 let answerStore: typeof import("../server/db.ts")["answerStore"];
+let reliabilityStore: typeof import("../server/db.ts")["reliabilityStore"];
+let reliabilityRollupStore: typeof import("../server/db.ts")["reliabilityRollupStore"];
+let dumpAll: typeof import("../server/db.ts")["dumpAll"];
 
 // PGlite's WASM cold-start + the full CREATE TABLE/INDEX migration in initDb()
 // genuinely takes ~11-12s on some machines, past vitest's default 10s hook timeout.
@@ -23,6 +26,9 @@ beforeAll(async () => {
   emailStore = mod.emailStore;
   proctorStore = mod.proctorStore;
   answerStore = mod.answerStore;
+  reliabilityStore = mod.reliabilityStore;
+  reliabilityRollupStore = mod.reliabilityRollupStore;
+  dumpAll = mod.dumpAll;
   await mod.initDb();
 }, 30000);
 
@@ -195,5 +201,87 @@ describe("answerStore (off-mirror, indexed by attempt)", () => {
 
   it("is not held in the in-memory mirror", () => {
     expect((db.data as Record<string, unknown>).answers).toBeUndefined();
+  });
+});
+
+describe("reliabilityStore (off-mirror raw samples, indexed by subsystem + time)", () => {
+  const mk = (id: string, subsystem: string, at: string, status = "operational") =>
+    ({ id, subsystem, at, status, requestCount: 10, errorCount: 0, avgLatencyMs: 100, minLatencyMs: 80, maxLatencyMs: 150, p95LatencyMs: 140, p99LatencyMs: 149 } as Parameters<typeof reliabilityStore.add>[0]);
+
+  it("adds samples and reads them back within a time window, oldest-first", async () => {
+    await reliabilityStore.add(mk("rs1", "database", "2026-05-01T00:00:00Z"));
+    await reliabilityStore.add(mk("rs2", "database", "2026-05-01T00:01:00Z"));
+    await reliabilityStore.add(mk("rs3", "examDelivery", "2026-05-01T00:02:00Z"));
+    const dbOnly = await reliabilityStore.forWindow("database", "2026-05-01T00:00:00Z", "2026-05-01T23:59:59Z");
+    expect(dbOnly.map((s) => s.id)).toEqual(["rs1", "rs2"]);
+  });
+
+  it("returns every subsystem when none is specified", async () => {
+    const all = await reliabilityStore.forWindow(null, "2026-05-01T00:00:00Z", "2026-05-01T23:59:59Z");
+    expect(all.map((s) => s.id).sort()).toEqual(["rs1", "rs2", "rs3"]);
+  });
+
+  it("excludes samples outside the window", async () => {
+    const none = await reliabilityStore.forWindow("database", "2026-06-01T00:00:00Z", "2026-06-02T00:00:00Z");
+    expect(none).toEqual([]);
+  });
+
+  it("purges samples older than a cutoff", async () => {
+    const removed = await reliabilityStore.purgeOlderThan("2026-05-01T00:01:30Z");
+    expect(removed).toBe(2); // rs1, rs2 dropped (rs3 kept — after cutoff)
+    const remaining = await reliabilityStore.forWindow(null, "2026-05-01T00:00:00Z", "2026-05-01T23:59:59Z");
+    expect(remaining.map((s) => s.id)).toEqual(["rs3"]);
+  });
+
+  it("is never held in the in-memory mirror", () => {
+    expect((db.data as Record<string, unknown>).reliabilitySamples).toBeUndefined();
+  });
+});
+
+describe("reliabilityRollupStore (off-mirror daily aggregates)", () => {
+  const mk = (subsystem: string, date: string, uptimePct: number) =>
+    ({ id: `${subsystem}:${date}`, subsystem, date, sampleCount: 1440, upSamples: 1440, degradedSamples: 0, downSamples: 0, uptimePct, avgLatencyMs: 100, minLatencyMs: 80, maxLatencyMs: 150, p95LatencyMs: 140, p99LatencyMs: 149, requestCount: 1000, errorCount: 0 } as Parameters<typeof reliabilityRollupStore.upsert>[0]);
+
+  it("upserts a rollup and reads it back within a date window", async () => {
+    await reliabilityRollupStore.upsert(mk("database", "2026-05-01", 100));
+    await reliabilityRollupStore.upsert(mk("database", "2026-05-02", 99.9));
+    const rows = await reliabilityRollupStore.forWindow("database", "2026-05-01", "2026-05-02");
+    expect(rows.map((r) => r.date)).toEqual(["2026-05-01", "2026-05-02"]);
+  });
+
+  it("updates an existing rollup in place (same id) rather than duplicating", async () => {
+    await reliabilityRollupStore.upsert(mk("database", "2026-05-01", 95));
+    const rows = await reliabilityRollupStore.forWindow("database", "2026-05-01", "2026-05-01");
+    expect(rows.length).toBe(1);
+    expect(rows[0].uptimePct).toBe(95);
+  });
+
+  it("is never held in the in-memory mirror", () => {
+    expect((db.data as Record<string, unknown>).reliabilityDailyRollups).toBeUndefined();
+  });
+});
+
+describe("reliabilityIncidents (mirrored collection)", () => {
+  it("is part of the in-memory mirror and survives a re-read", async () => {
+    await db.upsert("reliabilityIncidents", {
+      id: "inc1", subsystem: "database", severity: "major", status: "resolved",
+      title: "Elevated database latency", openedAt: "2026-05-01T00:00:00Z", resolvedAt: "2026-05-01T00:05:00Z",
+      autoResolved: true, timeline: [], impact: null,
+    } as unknown as typeof db.data.reliabilityIncidents[number]);
+    db.data.reliabilityIncidents = [];
+    await db.read();
+    expect(db.data.reliabilityIncidents.find((i) => i.id === "inc1")?.title).toBe("Elevated database latency");
+  });
+});
+
+describe("dumpAll includes the new reliability tables", () => {
+  it("includes reliability_samples, reliability_daily_rollups, and reliabilityIncidents in a full backup dump", async () => {
+    const dump = await dumpAll();
+    expect(Array.isArray(dump.reliability_samples)).toBe(true);
+    expect(Array.isArray(dump.reliability_daily_rollups)).toBe(true);
+    expect(Array.isArray(dump.reliabilityIncidents)).toBe(true);
+    expect((dump.reliability_samples as { id: string }[]).some((s) => s.id === "rs3")).toBe(true);
+    expect((dump.reliability_daily_rollups as { id: string }[]).some((r) => r.id === "database:2026-05-01")).toBe(true);
+    expect((dump.reliabilityIncidents as { id: string }[]).some((i) => i.id === "inc1")).toBe(true);
   });
 });

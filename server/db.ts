@@ -13,6 +13,7 @@ import type {
   User, Exam, Question, Registration, Attempt, Answer, ProctorEvent, Certificate, Snapshot, EmailMessage, Announcement, AnnouncementRead, OrgSettings, AuditLog,
   Faculty, Department, Program, Campus, AcademicYear, ClassGroup, RegradeRequest, Book, ReadingProgress,
   ResourceVersion, ResourceBookmark, ResourceRating, ResourceDownloadLog, GeofenceLog, CustomRole,
+  ReliabilityIncident, ReliabilitySample, ReliabilityDailyRollup, ReliabilitySubsystemKey, MediaAsset,
 } from "../shared/types.ts";
 import { DEFAULT_LOCKDOWN, DEFAULT_LEARNING_STRUCTURE } from "../shared/types.ts";
 
@@ -49,6 +50,11 @@ export interface Schema {
   resourceDownloadLogs: ResourceDownloadLog[];
   announcementReads: AnnouncementRead[];
   customRoles: CustomRole[];
+  // reliabilitySamples / reliabilityDailyRollups are deliberately NOT mirrored
+  // (see the note above) — they live off-mirror via reliabilityStore /
+  // reliabilityRollupStore to keep an unboundedly-growing time series out of
+  // the full-mirror flush path.
+  reliabilityIncidents: ReliabilityIncident[];
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -63,6 +69,7 @@ const defaultData: Schema = {
   resourceVersions: [], resourceBookmarks: [], resourceRatings: [], resourceDownloadLogs: [],
   announcementReads: [],
   customRoles: [],
+  reliabilityIncidents: [],
 };
 
 // Each collection is stored in a Postgres table as (id, doc jsonb). This keeps a
@@ -92,6 +99,7 @@ const TABLES: { key: keyof Schema; table: string; idField: string }[] = [
   { key: "resourceDownloadLogs", table: "resource_download_logs", idField: "id" },
   { key: "announcementReads", table: "announcement_reads", idField: "id" },
   { key: "customRoles", table: "custom_roles", idField: "id" },
+  { key: "reliabilityIncidents", table: "reliability_incidents", idField: "id" },
 ];
 
 const TABLE_BY_KEY = new Map(TABLES.map((t) => [t.key, t]));
@@ -278,7 +286,7 @@ export const db: {
 // Off-mirror tables (see the comment on Schema above) — not part of TABLES
 // because they're never held in the in-memory mirror, but a full backup needs
 // every row from every table, mirrored or not.
-const OFF_MIRROR_TABLES = ["snapshots", "answers", "proctor_events", "audit_logs", "emails", "geofence_logs"];
+const OFF_MIRROR_TABLES = ["snapshots", "answers", "proctor_events", "audit_logs", "emails", "geofence_logs", "reliability_samples", "reliability_daily_rollups", "media_assets"];
 
 /** Full logical snapshot of every row in every table (mirrored + off-mirror),
  *  keyed by collection/table name. Used for backups — a plain SELECT per table,
@@ -338,6 +346,31 @@ export const snapshotStore = {
   },
   async totalCount(): Promise<number> {
     const { rows } = await be().query<{ n: string }>(`select count(*)::text as n from snapshots`);
+    return Number(rows[0]?.n ?? 0);
+  },
+};
+
+// Media assets (Language & Media Assessment module) — off-mirror, indexed by
+// exam. Base64 data URL storage, same model as file_upload answers and Book
+// resources, just its own table so large blobs never sit in the in-memory
+// `questions` mirror (questions IS mirrored — see the Schema comment above).
+export const mediaAssetStore = {
+  async add(asset: MediaAsset): Promise<void> {
+    await be().query(
+      `insert into media_assets(id, exam_id, at, doc) values ($1, $2, $3, $4::jsonb)
+       on conflict (id) do update set doc = excluded.doc, exam_id = excluded.exam_id, at = excluded.at`,
+      [asset.id, asset.examId, asset.uploadedAt, JSON.stringify(asset)],
+    );
+  },
+  async get(id: string): Promise<MediaAsset | null> {
+    const { rows } = await be().query<{ doc: MediaAsset }>(`select doc from media_assets where id = $1`, [id]);
+    return rows[0]?.doc ?? null;
+  },
+  async removeForExam(examId: string): Promise<void> {
+    await be().query(`delete from media_assets where exam_id = $1`, [examId]);
+  },
+  async totalCount(): Promise<number> {
+    const { rows } = await be().query<{ n: string }>(`select count(*)::text as n from media_assets`);
     return Number(rows[0]?.n ?? 0);
   },
 };
@@ -470,6 +503,67 @@ export const geofenceStore = {
   },
 };
 
+// Status & Reliability Center — raw per-tick health-check samples, off-mirror
+// and indexed by (subsystem, at) since they're always read by time window and
+// never by full-collection iteration. Kept only briefly (see
+// RELIABILITY_RAW_RETENTION_DAYS in server/reliability.ts) then rolled up and
+// purged — see reliabilityRollupStore for the durable long-term aggregate.
+export const reliabilityStore = {
+  async add(sample: ReliabilitySample): Promise<void> {
+    await be().query(
+      `insert into reliability_samples(id, subsystem, at, doc) values ($1, $2, $3, $4::jsonb)
+       on conflict (id) do update set doc = excluded.doc, subsystem = excluded.subsystem, at = excluded.at`,
+      [sample.id, sample.subsystem, sample.at, JSON.stringify(sample)]);
+  },
+  /** All samples for one subsystem (or every subsystem, if null) within [fromIso, toIso]. */
+  async forWindow(subsystem: ReliabilitySubsystemKey | null, fromIso: string, toIso: string): Promise<ReliabilitySample[]> {
+    const { rows } = subsystem
+      ? await be().query<{ doc: ReliabilitySample }>(
+          `select doc from reliability_samples where subsystem = $1 and at >= $2 and at <= $3 order by at asc`,
+          [subsystem, fromIso, toIso])
+      : await be().query<{ doc: ReliabilitySample }>(
+          `select doc from reliability_samples where at >= $1 and at <= $2 order by at asc`,
+          [fromIso, toIso]);
+    return rows.map((r) => r.doc);
+  },
+  /** Retention purge — returns the number of samples removed. */
+  async purgeOlderThan(cutoffIso: string): Promise<number> {
+    const { rows } = await be().query<{ id: string }>(
+      `delete from reliability_samples where at < $1 returning id`, [cutoffIso]);
+    return rows.length;
+  },
+  async totalCount(): Promise<number> {
+    const { rows } = await be().query<{ n: string }>(`select count(*)::text as n from reliability_samples`);
+    return Number(rows[0]?.n ?? 0);
+  },
+};
+
+// Daily aggregates — small (~7 rows/day), kept indefinitely, backs the
+// 7d/30d/90d/365d timeline views without needing unbounded raw retention.
+export const reliabilityRollupStore = {
+  async upsert(rollup: ReliabilityDailyRollup): Promise<void> {
+    await be().query(
+      `insert into reliability_daily_rollups(id, subsystem, date, doc) values ($1, $2, $3, $4::jsonb)
+       on conflict (id) do update set doc = excluded.doc, subsystem = excluded.subsystem, date = excluded.date`,
+      [rollup.id, rollup.subsystem, rollup.date, JSON.stringify(rollup)]);
+  },
+  /** Rollups for one subsystem (or every subsystem, if null) within [fromDate, toDate] (UTC YYYY-MM-DD). */
+  async forWindow(subsystem: ReliabilitySubsystemKey | null, fromDate: string, toDate: string): Promise<ReliabilityDailyRollup[]> {
+    const { rows } = subsystem
+      ? await be().query<{ doc: ReliabilityDailyRollup }>(
+          `select doc from reliability_daily_rollups where subsystem = $1 and date >= $2 and date <= $3 order by date asc`,
+          [subsystem, fromDate, toDate])
+      : await be().query<{ doc: ReliabilityDailyRollup }>(
+          `select doc from reliability_daily_rollups where date >= $1 and date <= $2 order by date asc`,
+          [fromDate, toDate]);
+    return rows.map((r) => r.doc);
+  },
+  async totalCount(): Promise<number> {
+    const { rows } = await be().query<{ n: string }>(`select count(*)::text as n from reliability_daily_rollups`);
+    return Number(rows[0]?.n ?? 0);
+  },
+};
+
 // Admin action trail — append-only, off-mirror, indexed by time.
 // Tamper-evident: every entry hash-chains to the previous one, so any later edit
 // or deletion of a row breaks chain verification.
@@ -559,11 +653,14 @@ function looksLikeCorruption(err: unknown): boolean {
 
 const OFF_MIRROR_RESTORERS: [string, (row: never) => Promise<void>][] = [
   ["snapshots", (r) => snapshotStore.add(r)],
+  ["media_assets", (r) => mediaAssetStore.add(r)],
   ["answers", (r) => answerStore.upsert(r)],
   ["proctor_events", (r) => proctorStore.add(r)],
   ["audit_logs", (r) => auditStore.add(r)],
   ["emails", (r) => emailStore.add(r)],
   ["geofence_logs", (r) => geofenceStore.add(r)],
+  ["reliability_samples", (r) => reliabilityStore.add(r)],
+  ["reliability_daily_rollups", (r) => reliabilityRollupStore.upsert(r)],
 ];
 
 /** Loads a full dump (as produced by dumpAll/runBackup) into the current
@@ -624,6 +721,16 @@ async function ensureSchema() {
     "CREATE TABLE IF NOT EXISTS geofence_logs (id text primary key, registration_id text, attempt_id text, at text, doc jsonb not null);",
     "CREATE INDEX IF NOT EXISTS geofence_logs_registration_idx ON geofence_logs(registration_id);",
     "CREATE INDEX IF NOT EXISTS geofence_logs_attempt_idx ON geofence_logs(attempt_id);",
+    // Status & Reliability Center — raw health-check samples (short retention)
+    // and their durable daily rollups, both off-mirror, indexed by (subsystem, time).
+    "CREATE TABLE IF NOT EXISTS reliability_samples (id text primary key, subsystem text, at text, doc jsonb not null);",
+    "CREATE INDEX IF NOT EXISTS reliability_samples_subsystem_at_idx ON reliability_samples(subsystem, at);",
+    "CREATE TABLE IF NOT EXISTS reliability_daily_rollups (id text primary key, subsystem text, date text, doc jsonb not null);",
+    "CREATE INDEX IF NOT EXISTS reliability_rollups_subsystem_date_idx ON reliability_daily_rollups(subsystem, date);",
+    // Media assets (Language & Media Assessment module) — off-mirror, indexed by
+    // exam so an exam's media can be bulk-cleaned when questions are deleted.
+    "CREATE TABLE IF NOT EXISTS media_assets (id text primary key, exam_id text, at text, doc jsonb not null);",
+    "CREATE INDEX IF NOT EXISTS media_assets_exam_idx ON media_assets(exam_id);",
     // Submitted answers — off-mirror, indexed by attempt.
     "CREATE TABLE IF NOT EXISTS answers (id text primary key, attempt_id text, doc jsonb not null);",
     "ALTER TABLE answers ADD COLUMN IF NOT EXISTS attempt_id text;",
@@ -667,6 +774,11 @@ async function recoverFromLatestBackup(): Promise<string> {
   const { takenAt, data } = JSON.parse(raw.toString("utf8")) as { takenAt: string; data: Record<string, unknown[]> };
   console.error(`   Restoring backup taken at ${takenAt}...`);
   await restoreFromDump(data);
+  // Real, durable, tamper-evident record of the recovery — the Status &
+  // Reliability Center's Exam Impact Analysis queries for exactly this event
+  // to ground its "exam integrity" verdict in something real rather than
+  // asserting it blindly (see shared/types.ts's ExamImpactAnalysis).
+  await auditStore.add({ id: nanoid(10), at: new Date().toISOString(), actorId: "system", actorName: "System", action: "db.recovered_from_backup", target: latest });
   console.error(`   Auto-recovery complete — restored ${latest}.`);
   return latest;
 }

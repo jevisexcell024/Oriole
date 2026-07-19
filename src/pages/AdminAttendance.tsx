@@ -4,6 +4,7 @@ import {
   Loader2, CheckCircle2, XCircle, Hourglass, Clock, IdCard, Camera, ArrowRight,
 } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
+import { ErrorBanner } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { api } from "@/lib/api";
 import { DataTable, type Column, type TableFilter } from "@/components/DataTable";
@@ -82,7 +83,7 @@ export function AdminAttendance() {
       <div className="fade-in">
         <PageHeader title={t("aatt.title")} subtitle={t("aatt.subtitle")} />
 
-        {error && <p className="mt-6 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">{error}</p>}
+        {error && <ErrorBanner className="mt-6">{error}</ErrorBanner>}
         {!sessions && !error && <div className="mt-8 flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div>}
         {sessions && sessions.length === 0 && <p className="card mt-6 p-8 text-center text-sm text-[var(--muted)]">{t("aatt.noSessions")}</p>}
 

@@ -7,7 +7,7 @@ import {
   Code as CodeIcon, Target, Layers, GripVertical, Bold, Italic, Underline, List, Image as ImageIcon,
   Save, Loader2, Settings as SettingsIcon, ListTree, ArrowLeftRight, ListOrdered, MousePointerClick,
   Upload, TextCursorInput, Tag, Library, Search, BookmarkPlus, Sparkles, Clock, Calculator, CalendarClock,
-  MapPin, Crosshair, Navigation,
+  MapPin, Crosshair, Navigation, BatteryCharging, Headphones, Link as LinkIcon,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useT } from "@/lib/i18n";
@@ -17,6 +17,7 @@ import { parseTableFile, IMPORT_ACCEPT } from "@/lib/importTable";
 import { DEFAULT_GRADE_BANDS } from "@shared/grades";
 import { tryEvalExpr } from "@shared/expr";
 import { GeofenceMap } from "@/components/GeofenceMap";
+import { MediaStimulus } from "@/components/MediaStimulus";
 import type { Exam, GeofenceCenter, LockdownConfig, Question, QuestionType, RubricCriterion } from "@shared/types";
 import { clsx } from "clsx";
 
@@ -57,6 +58,7 @@ const TYPE_META: Record<QuestionType, { labelKey: string; shortKey: string; icon
   hotspot: { labelKey: "eb.typeHotspot", shortKey: "eb.typeHotspotShort", icon: MousePointerClick },
   file_upload: { labelKey: "eb.typeFileUpload", shortKey: "eb.typeFileUploadShort", icon: Upload },
   parameterized: { labelKey: "eb.typeParameterized", shortKey: "eb.typeParameterizedShort", icon: Calculator },
+  media_comprehension: { labelKey: "eb.typeMediaComprehension", shortKey: "eb.typeMediaComprehensionShort", icon: Headphones },
 };
 
 const DIFFICULTIES = [
@@ -86,6 +88,7 @@ export function ExamBuilder() {
   const [pickWhen, setPickWhen] = useState("");
   const [bankOpen, setBankOpen] = useState(false);
   const [aiOn, setAiOn] = useState(false);
+  const [mediaEnabled, setMediaEnabled] = useState(false);
   const timers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const pending = useRef<Record<string, Record<string, unknown>>>({});
 
@@ -97,6 +100,7 @@ export function ExamBuilder() {
       .then((d) => setClassesAll(d.classes)).catch(() => {});
     api.get<{ classes: typeof assignedClasses }>(`/admin/exams/${examId}/classes`)
       .then((d) => setAssignedClasses(d.classes)).catch(() => {});
+    api.get<{ enabled: boolean }>("/admin/media/status").then((d) => setMediaEnabled(d.enabled)).catch(() => {});
   }, [examId]);
 
   const assignClass = async () => {
@@ -423,6 +427,9 @@ export function ExamBuilder() {
                   onDelete={() => remove(active.id)}
                   sections={sections}
                   aiEnabled={aiOn}
+                  allQuestions={questions}
+                  mediaEnabled={mediaEnabled}
+                  patchQuestionById={patchQuestion}
                 />
               </div>
             ) : (
@@ -558,21 +565,20 @@ function StructureTree({
 
 /* ─────────────────────────── Question editor ─────────────────────────── */
 function QuestionEditor({
-  q, exam, sectionTitle, numberInGroup, patch, patchExam, onChangeType, onDuplicate, onDelete, sections, aiEnabled,
+  q, exam, sectionTitle, numberInGroup, patch, patchExam, onChangeType, onDuplicate, onDelete, sections, aiEnabled, allQuestions, mediaEnabled, patchQuestionById,
 }: {
   q: Question; exam: Exam; sectionTitle: string; numberInGroup: number;
   patch: (p: Partial<Question>) => void; patchExam: (p: Partial<Exam>) => void;
   onChangeType: (t: QuestionType) => void; onDuplicate: () => void; onDelete: () => void;
-  sections: { id: string; title: string }[]; aiEnabled: boolean;
+  sections: { id: string; title: string }[]; aiEnabled: boolean; allQuestions: Question[]; mediaEnabled: boolean;
+  patchQuestionById: (id: string, p: Partial<Question>) => void;
 }) {
   const [advanced, setAdvanced] = useState(false);
-  const [acceptedRaw, setAcceptedRaw] = useState((q.acceptedAnswers ?? []).join(", "));
   const [rubricLib, setRubricLib] = useState<{ id: string; name: string; criteria: RubricCriterion[] }[]>([]);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiResult, setAiResult] = useState<{ difficulty: "easy" | "medium" | "hard"; confidence: number; rationale: string } | null>(null);
   const [aiErr, setAiErr] = useState<string | null>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
-  const options = q.options ?? [];
 
   const suggestDifficulty = async () => {
     setAiBusy(true); setAiErr(null);
@@ -584,28 +590,6 @@ function QuestionEditor({
   };
 
   useEffect(() => { api.get<{ rubrics: typeof rubricLib }>("/admin/rubric-library").then((d) => setRubricLib(d.rubrics)).catch(() => {}); }, []);
-
-  const editOption = (i: number, value: string) => {
-    const next = [...options];
-    const old = next[i]; next[i] = value;
-    const p: Partial<Question> = { options: next };
-    if (q.correctAnswer === old) p.correctAnswer = value;
-    if ((q.correctAnswers ?? []).includes(old)) p.correctAnswers = (q.correctAnswers ?? []).map((x) => (x === old ? value : x));
-    patch(p);
-  };
-  const addOption = () => patch({ options: [...options, `Option ${options.length + 1}`] });
-  const removeOption = (i: number) => {
-    const removed = options[i];
-    const p: Partial<Question> = { options: options.filter((_, idx) => idx !== i) };
-    if (q.correctAnswer === removed) p.correctAnswer = "";
-    if ((q.correctAnswers ?? []).includes(removed)) p.correctAnswers = (q.correctAnswers ?? []).filter((x) => x !== removed);
-    patch(p);
-  };
-  const markCorrect = (value: string) => patch({ correctAnswer: value });
-  const toggleMultiCorrect = (value: string) => {
-    const cur = q.correctAnswers ?? [];
-    patch({ correctAnswers: cur.includes(value) ? cur.filter((x) => x !== value) : [...cur, value] });
-  };
 
   // Lightweight rich-text helpers — wrap the current textarea selection.
   const wrap = (before: string, after = before) => {
@@ -665,7 +649,9 @@ function QuestionEditor({
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <Field label={t("eb.questionType")}>
             <select className="input h-10" value={q.type} onChange={(e) => onChangeType(e.target.value as QuestionType)}>
-              {(Object.keys(TYPE_META) as QuestionType[]).map((qt) => <option key={qt} value={qt}>{t(TYPE_META[qt].labelKey)}</option>)}
+              {(Object.keys(TYPE_META) as QuestionType[])
+                .filter((qt) => qt !== "media_comprehension" || mediaEnabled || q.type === "media_comprehension")
+                .map((qt) => <option key={qt} value={qt}>{t(TYPE_META[qt].labelKey)}</option>)}
             </select>
           </Field>
           <Field label={t("eb.difficulty")}>
@@ -727,61 +713,11 @@ function QuestionEditor({
 
         {/* Answer area by type */}
         {isChoice ? (
-          <div className="mt-5">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t("eb.answerOptions")}</span>
-              <label className="flex items-center gap-2 text-xs text-[var(--muted)]">
-                <input type="checkbox" className="h-3.5 w-3.5 accent-[#c6ff34]" checked={exam.shuffleOptions !== false} onChange={(e) => patchExam({ shuffleOptions: e.target.checked })} />
-                {t("eb.shuffleOptionsLabel")}
-              </label>
-            </div>
-            <div className="mt-2 space-y-2">
-              {options.map((opt, i) => {
-                const isTF = q.type === "true_false";
-                const isMulti = q.type === "multi_select";
-                const correct = isMulti ? (q.correctAnswers ?? []).includes(opt) && opt !== "" : q.correctAnswer === opt && opt !== "";
-                return (
-                  <div key={i} className={clsx("flex items-center gap-2 rounded-lg border px-2.5 py-2 transition",
-                    correct ? "border-emerald-500/50 bg-emerald-500/[0.07]" : "border-[var(--border)]")}>
-                    <GripVertical className="h-4 w-4 shrink-0 text-[var(--border)]" />
-                    <button type="button" title={correct ? t("eb.correctAnswerTag") : t("eb.markAsCorrect")} onClick={() => (isMulti ? toggleMultiCorrect(opt) : markCorrect(opt))} className="shrink-0">
-                      {isMulti
-                        ? (correct ? <span className="flex h-5 w-5 items-center justify-center rounded bg-emerald-500 text-white"><Check className="h-3.5 w-3.5" /></span> : <Square className="h-5 w-5 text-[var(--muted)] hover:text-[#c6ff34]" />)
-                        : (correct ? <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500 text-white"><Check className="h-3.5 w-3.5" /></span> : <CircleDot className="h-5 w-5 text-[var(--muted)] hover:text-[#c6ff34]" />)}
-                    </button>
-                    {isTF
-                      ? <span className="flex-1 text-sm capitalize">{opt}</span>
-                      : <input className="flex-1 bg-transparent text-sm outline-none" value={opt} onChange={(e) => editOption(i, e.target.value)} placeholder={t("eb.optionPlaceholder", { n: i + 1 })} />}
-                    {correct && <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold text-emerald-500">{t("eb.correctBadge")}</span>}
-                    {!isTF && options.length > 2 && (
-                      <button type="button" onClick={() => removeOption(i)} className="shrink-0 text-[var(--muted)] hover:text-rose-500"><X className="h-4 w-4" /></button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-            {(q.type === "mcq" || q.type === "multi_select") && (
-              <button type="button" onClick={addOption} className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-[#c6ff34] hover:underline"><Plus className="h-4 w-4" /> {t("eb.addOption")}</button>
-            )}
-            {q.type === "multi_select" && <p className="mt-1.5 text-[11px] text-[var(--muted)]">{t("eb.multiSelectHint")}</p>}
-          </div>
+          <ChoiceOptionsEditor q={q} patch={patch} shuffleOptions={exam.shuffleOptions !== false} onShuffleOptionsChange={(v) => patchExam({ shuffleOptions: v })} />
         ) : q.type === "short" ? (
-          <div className="mt-5 space-y-3">
-            <Field label={t("eb.primaryAcceptedAnswer")}>
-              <input className="input h-10" value={q.correctAnswer} placeholder={t("eb.egPlagiarism")} onChange={(e) => patch({ correctAnswer: e.target.value })} />
-            </Field>
-            <Field label={t("eb.alsoAccept")}>
-              <input className="input h-10" value={acceptedRaw} placeholder={t("eb.egPlagiarizing")}
-                onChange={(e) => { setAcceptedRaw(e.target.value); patch({ acceptedAnswers: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) }); }} />
-            </Field>
-            <p className="text-[11px] text-[var(--muted)]">{t("eb.shortAnswerHint")}</p>
-          </div>
+          <ShortAnswerEditor q={q} patch={patch} />
         ) : q.type === "numeric" ? (
-          <div className="mt-5 flex flex-wrap items-end gap-3">
-            <Field label={t("eb.correctValueAutoGraded")}><input className="input h-10 w-40" type="number" step="any" value={q.correctAnswer} placeholder={t("eb.egNumeric")} onChange={(e) => patch({ correctAnswer: e.target.value })} /></Field>
-            <Field label={t("eb.tolerance")}><input className="input h-10 w-32" type="number" min={0} step="any" value={q.tolerance ?? 0} onChange={(e) => patch({ tolerance: Math.max(0, Number(e.target.value) || 0) })} /></Field>
-            <span className="pb-2.5 text-[11px] text-[var(--muted)]">{t("eb.toleranceHint")}</span>
-          </div>
+          <NumericAnswerEditor q={q} patch={patch} />
         ) : q.type === "matching" ? (
           <MatchingEditor q={q} patch={patch} />
         ) : q.type === "ordering" ? (
@@ -792,6 +728,9 @@ function QuestionEditor({
           <HotspotEditor q={q} patch={patch} />
         ) : q.type === "parameterized" ? (
           <ParameterizedEditor q={q} patch={patch} />
+        ) : q.type === "media_comprehension" ? (
+          <MediaComprehensionEditor q={q} patch={patch} examId={exam.id} allQuestions={allQuestions} patchQuestionById={patchQuestionById}
+            shuffleOptions={exam.shuffleOptions !== false} onShuffleOptionsChange={(v) => patchExam({ shuffleOptions: v })} />
         ) : (
           <div className="mt-5 rounded-lg border border-dashed border-[var(--border)] px-3 py-3 text-sm text-[var(--muted)]">
             {q.type === "code" ? t("eb.codeAnswerDesc")
@@ -823,7 +762,7 @@ function QuestionEditor({
 
               {q.type === "code" && <CodeQuestionFields q={q} patch={patch} />}
 
-              {(q.type === "essay" || q.type === "code" || q.type === "file_upload") && (
+              {(q.type === "essay" || q.type === "code" || q.type === "file_upload" || (q.type === "media_comprehension" && q.answerFormat === "essay")) && (
                 <div className="rounded-lg border border-[var(--border)] p-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t("eb.gradingRubric")}{rubric.length > 0 ? t("eb.ptsTotal", { n: rubricSum }) : ""}</span>
@@ -1122,6 +1061,117 @@ function ProctoringPanel({ exam, patchExam }: { exam: Exam; patchExam: (p: Parti
           <span className={clsx("inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition", exam.lockdown?.requireGeofence ? "bg-[#c6ff34]" : "bg-[var(--border)]")}><span className={clsx("h-4 w-4 rounded-full bg-white transition", exam.lockdown?.requireGeofence && "translate-x-4")} /></span>
         </button>
         {exam.lockdown?.requireGeofence && <GeofencePanel exam={exam} patchExam={patchExam} />}
+      </div>
+
+      {/* Calculator */}
+      <div className="mt-4 border-t border-[var(--border)] pt-4">
+        <button onClick={() => patchExam({ lockdown: { ...exam.lockdown, calculatorEnabled: !exam.lockdown?.calculatorEnabled } })}
+          className={clsx("flex w-full items-center justify-between gap-3 rounded-xl border p-3 text-left transition", exam.lockdown?.calculatorEnabled ? "border-[#c6ff34]/40 bg-[rgba(198,255,52,0.08)]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
+          <div className="flex items-center gap-2">
+            <Calculator className="h-4 w-4 text-[var(--muted)]" />
+            <div>
+              <p className="text-sm font-medium">{t("eb.calculatorEnabled")}</p>
+              <p className="text-xs text-[var(--muted)]">{t("eb.calculatorEnabledDesc")}</p>
+            </div>
+          </div>
+          <span className={clsx("inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition", exam.lockdown?.calculatorEnabled ? "bg-[#c6ff34]" : "bg-[var(--border)]")}><span className={clsx("h-4 w-4 rounded-full bg-white transition", exam.lockdown?.calculatorEnabled && "translate-x-4")} /></span>
+        </button>
+        {exam.lockdown?.calculatorEnabled && <CalculatorPanel exam={exam} patchExam={patchExam} />}
+      </div>
+
+      {/* Power Management (Screen Wake Lock) */}
+      <div className="mt-4 border-t border-[var(--border)] pt-4">
+        <button onClick={() => patchExam({ lockdown: { ...exam.lockdown, wakeLockEnabled: !exam.lockdown?.wakeLockEnabled } })}
+          className={clsx("flex w-full items-center justify-between gap-3 rounded-xl border p-3 text-left transition", exam.lockdown?.wakeLockEnabled ? "border-[#c6ff34]/40 bg-[rgba(198,255,52,0.08)]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
+          <div className="flex items-center gap-2">
+            <BatteryCharging className="h-4 w-4 text-[var(--muted)]" />
+            <div>
+              <p className="text-sm font-medium">{t("eb.wakeLockEnabled")}</p>
+              <p className="text-xs text-[var(--muted)]">{t("eb.wakeLockEnabledDesc")}</p>
+            </div>
+          </div>
+          <span className={clsx("inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition", exam.lockdown?.wakeLockEnabled ? "bg-[#c6ff34]" : "bg-[var(--border)]")}><span className={clsx("h-4 w-4 rounded-full bg-white transition", exam.lockdown?.wakeLockEnabled && "translate-x-4")} /></span>
+        </button>
+        {exam.lockdown?.wakeLockEnabled && (
+          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <label className="text-xs font-medium">{t("eb.wakeLockFailureAction")}</label>
+              <select className="input mt-1 h-9 w-full text-sm" value={exam.lockdown?.wakeLockFailureAction ?? "warn"}
+                onChange={(e) => patchExam({ lockdown: { ...exam.lockdown, wakeLockFailureAction: e.target.value as LockdownConfig["wakeLockFailureAction"] } })}>
+                <option value="continue">{t("eb.wakeLockFailureContinue")}</option>
+                <option value="warn">{t("eb.wakeLockFailureWarn")}</option>
+                <option value="notify_invigilator">{t("eb.wakeLockFailureNotify")}</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-medium">{t("eb.wakeLockResumeAction")}</label>
+              <select className="input mt-1 h-9 w-full text-sm" value={exam.lockdown?.wakeLockResumeAction ?? "continue"}
+                onChange={(e) => patchExam({ lockdown: { ...exam.lockdown, wakeLockResumeAction: e.target.value as LockdownConfig["wakeLockResumeAction"] } })}>
+                <option value="continue">{t("eb.wakeLockResumeContinue")}</option>
+                <option value="pause">{t("eb.wakeLockResumePause")}</option>
+                <option value="auto_submit">{t("eb.wakeLockResumeAutoSubmit")}</option>
+                <option value="flag">{t("eb.wakeLockResumeFlag")}</option>
+              </select>
+            </div>
+            <p className="sm:col-span-2 text-xs text-[var(--muted)]">{t("eb.wakeLockResumeHint")}</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const CALCULATOR_TYPE_OPTIONS: { value: NonNullable<LockdownConfig["calculatorType"]>; labelKey: string }[] = [
+  { value: "basic", labelKey: "eb.calculatorTypeBasic" },
+  { value: "scientific", labelKey: "eb.calculatorTypeScientific" },
+];
+const CALCULATOR_POSITION_OPTIONS: { value: NonNullable<LockdownConfig["calculatorPosition"]>; labelKey: string }[] = [
+  { value: "floating", labelKey: "eb.calculatorPositionFloating" },
+  { value: "sidebar", labelKey: "eb.calculatorPositionSidebar" },
+];
+const CALCULATOR_TOGGLES: { key: "calculatorAllowKeyboard" | "calculatorSaveHistory" | "calculatorRememberState"; labelKey: string; descKey: string }[] = [
+  { key: "calculatorAllowKeyboard", labelKey: "eb.calculatorAllowKeyboard", descKey: "eb.calculatorAllowKeyboardDesc" },
+  { key: "calculatorSaveHistory", labelKey: "eb.calculatorSaveHistory", descKey: "eb.calculatorSaveHistoryDesc" },
+  { key: "calculatorRememberState", labelKey: "eb.calculatorRememberState", descKey: "eb.calculatorRememberStateDesc" },
+];
+
+function CalculatorPanel({ exam, patchExam }: { exam: Exam; patchExam: (p: Partial<Exam>) => void }) {
+  const t = useT();
+  return (
+    <div className="mt-3 space-y-3">
+      <div>
+        <label className="text-xs font-medium">{t("eb.calculatorType")}</label>
+        <div className="mt-1 flex flex-wrap gap-1.5">
+          {CALCULATOR_TYPE_OPTIONS.map((o) => (
+            <button key={o.value} onClick={() => patchExam({ lockdown: { ...exam.lockdown, calculatorType: o.value } })}
+              className={clsx("rounded-lg border px-2.5 py-1 text-xs transition", (exam.lockdown?.calculatorType ?? "basic") === o.value ? "border-[#c6ff34]/50 bg-[rgba(198,255,52,0.12)] text-[#c6ff34]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
+              {t(o.labelKey)}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div>
+        <label className="text-xs font-medium">{t("eb.calculatorPosition")}</label>
+        <div className="mt-1 flex flex-wrap gap-1.5">
+          {CALCULATOR_POSITION_OPTIONS.map((o) => (
+            <button key={o.value} onClick={() => patchExam({ lockdown: { ...exam.lockdown, calculatorPosition: o.value } })}
+              className={clsx("rounded-lg border px-2.5 py-1 text-xs transition", (exam.lockdown?.calculatorPosition ?? "floating") === o.value ? "border-[#c6ff34]/50 bg-[rgba(198,255,52,0.12)] text-[#c6ff34]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
+              {t(o.labelKey)}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {CALCULATOR_TOGGLES.map(({ key, labelKey, descKey }) => {
+          const on = exam.lockdown?.[key] ?? (key !== "calculatorSaveHistory");
+          return (
+            <button key={key} onClick={() => patchExam({ lockdown: { ...exam.lockdown, [key]: !on } })}
+              className={clsx("flex items-center justify-between gap-3 rounded-xl border p-3 text-left transition", on ? "border-[#c6ff34]/40 bg-[rgba(198,255,52,0.08)]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
+              <div><p className="text-sm font-medium">{t(labelKey)}</p><p className="text-xs text-[var(--muted)]">{t(descKey)}</p></div>
+              <span className={clsx("inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition", on ? "bg-[#c6ff34]" : "bg-[var(--border)]")}><span className={clsx("h-4 w-4 rounded-full bg-white transition", on && "translate-x-4")} /></span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -1672,6 +1722,285 @@ function HotspotEditor({ q, patch }: { q: Question; patch: (p: Partial<Question>
   );
 }
 
+/** MCQ / multi_select / true_false options list. Extracted out of QuestionEditor
+ *  so media_comprehension can reuse it verbatim when answerFormat is one of these. */
+function ChoiceOptionsEditor({ q, patch, shuffleOptions, onShuffleOptionsChange }: {
+  q: Question; patch: (p: Partial<Question>) => void; shuffleOptions: boolean; onShuffleOptionsChange: (v: boolean) => void;
+}) {
+  const t = useT();
+  const options = q.options ?? [];
+  const isTF = q.type === "true_false";
+  const isMulti = q.type === "multi_select";
+  const editOption = (i: number, value: string) => {
+    const next = [...options];
+    const old = next[i]; next[i] = value;
+    const p: Partial<Question> = { options: next };
+    if (q.correctAnswer === old) p.correctAnswer = value;
+    if ((q.correctAnswers ?? []).includes(old)) p.correctAnswers = (q.correctAnswers ?? []).map((x) => (x === old ? value : x));
+    patch(p);
+  };
+  const addOption = () => patch({ options: [...options, `Option ${options.length + 1}`] });
+  const removeOption = (i: number) => {
+    const removed = options[i];
+    const p: Partial<Question> = { options: options.filter((_, idx) => idx !== i) };
+    if (q.correctAnswer === removed) p.correctAnswer = "";
+    if ((q.correctAnswers ?? []).includes(removed)) p.correctAnswers = (q.correctAnswers ?? []).filter((x) => x !== removed);
+    patch(p);
+  };
+  const markCorrect = (value: string) => patch({ correctAnswer: value });
+  const toggleMultiCorrect = (value: string) => {
+    const cur = q.correctAnswers ?? [];
+    patch({ correctAnswers: cur.includes(value) ? cur.filter((x) => x !== value) : [...cur, value] });
+  };
+  return (
+    <div className="mt-5">
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t("eb.answerOptions")}</span>
+        <label className="flex items-center gap-2 text-xs text-[var(--muted)]">
+          <input type="checkbox" className="h-3.5 w-3.5 accent-[#c6ff34]" checked={shuffleOptions} onChange={(e) => onShuffleOptionsChange(e.target.checked)} />
+          {t("eb.shuffleOptionsLabel")}
+        </label>
+      </div>
+      <div className="mt-2 space-y-2">
+        {options.map((opt, i) => {
+          const correct = isMulti ? (q.correctAnswers ?? []).includes(opt) && opt !== "" : q.correctAnswer === opt && opt !== "";
+          return (
+            <div key={i} className={clsx("flex items-center gap-2 rounded-lg border px-2.5 py-2 transition",
+              correct ? "border-emerald-500/50 bg-emerald-500/[0.07]" : "border-[var(--border)]")}>
+              <GripVertical className="h-4 w-4 shrink-0 text-[var(--border)]" />
+              <button type="button" title={correct ? t("eb.correctAnswerTag") : t("eb.markAsCorrect")} onClick={() => (isMulti ? toggleMultiCorrect(opt) : markCorrect(opt))} className="shrink-0">
+                {isMulti
+                  ? (correct ? <span className="flex h-5 w-5 items-center justify-center rounded bg-emerald-500 text-white"><Check className="h-3.5 w-3.5" /></span> : <Square className="h-5 w-5 text-[var(--muted)] hover:text-[#c6ff34]" />)
+                  : (correct ? <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500 text-white"><Check className="h-3.5 w-3.5" /></span> : <CircleDot className="h-5 w-5 text-[var(--muted)] hover:text-[#c6ff34]" />)}
+              </button>
+              {isTF
+                ? <span className="flex-1 text-sm capitalize">{opt}</span>
+                : <input className="flex-1 bg-transparent text-sm outline-none" value={opt} onChange={(e) => editOption(i, e.target.value)} placeholder={t("eb.optionPlaceholder", { n: i + 1 })} />}
+              {correct && <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold text-emerald-500">{t("eb.correctBadge")}</span>}
+              {!isTF && options.length > 2 && (
+                <button type="button" onClick={() => removeOption(i)} className="shrink-0 text-[var(--muted)] hover:text-rose-500"><X className="h-4 w-4" /></button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {(q.type === "mcq" || q.type === "multi_select") && (
+        <button type="button" onClick={addOption} className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-[#c6ff34] hover:underline"><Plus className="h-4 w-4" /> {t("eb.addOption")}</button>
+      )}
+      {q.type === "multi_select" && <p className="mt-1.5 text-[11px] text-[var(--muted)]">{t("eb.multiSelectHint")}</p>}
+    </div>
+  );
+}
+
+function ShortAnswerEditor({ q, patch }: { q: Question; patch: (p: Partial<Question>) => void }) {
+  const t = useT();
+  const [acceptedRaw, setAcceptedRaw] = useState((q.acceptedAnswers ?? []).join(", "));
+  return (
+    <div className="mt-5 space-y-3">
+      <Field label={t("eb.primaryAcceptedAnswer")}>
+        <input className="input h-10" value={q.correctAnswer} placeholder={t("eb.egPlagiarism")} onChange={(e) => patch({ correctAnswer: e.target.value })} />
+      </Field>
+      <Field label={t("eb.alsoAccept")}>
+        <input className="input h-10" value={acceptedRaw} placeholder={t("eb.egPlagiarizing")}
+          onChange={(e) => { setAcceptedRaw(e.target.value); patch({ acceptedAnswers: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) }); }} />
+      </Field>
+      <p className="text-[11px] text-[var(--muted)]">{t("eb.shortAnswerHint")}</p>
+    </div>
+  );
+}
+
+function NumericAnswerEditor({ q, patch }: { q: Question; patch: (p: Partial<Question>) => void }) {
+  const t = useT();
+  return (
+    <div className="mt-5 flex flex-wrap items-end gap-3">
+      <Field label={t("eb.correctValueAutoGraded")}><input className="input h-10 w-40" type="number" step="any" value={q.correctAnswer} placeholder={t("eb.egNumeric")} onChange={(e) => patch({ correctAnswer: e.target.value })} /></Field>
+      <Field label={t("eb.tolerance")}><input className="input h-10 w-32" type="number" min={0} step="any" value={q.tolerance ?? 0} onChange={(e) => patch({ tolerance: Math.max(0, Number(e.target.value) || 0) })} /></Field>
+      <span className="pb-2.5 text-[11px] text-[var(--muted)]">{t("eb.toleranceHint")}</span>
+    </div>
+  );
+}
+
+const MEDIA_KIND_META: { value: NonNullable<Question["mediaKind"]>; labelKey: string; accept: string; upload: "image" | "audio" | "video" | "pdf" | null }[] = [
+  { value: "audio", labelKey: "eb.mediaKindAudio", accept: "audio/mpeg,audio/wav,audio/aac,audio/ogg,audio/mp3", upload: "audio" },
+  { value: "video", labelKey: "eb.mediaKindVideo", accept: "video/mp4,video/webm,video/quicktime", upload: "video" },
+  { value: "image", labelKey: "eb.mediaKindImage", accept: "image/png,image/jpeg,image/gif,image/webp", upload: "image" },
+  { value: "pdf", labelKey: "eb.mediaKindPdf", accept: "application/pdf", upload: "pdf" },
+  { value: "passage", labelKey: "eb.mediaKindPassage", accept: "", upload: null },
+];
+const ANSWER_FORMAT_OPTIONS: NonNullable<Question["answerFormat"]>[] = ["mcq", "multi_select", "short", "numeric", "essay", "matching", "cloze"];
+
+/** Editor for the media_comprehension type — stimulus (upload/link/passage) +
+ *  playback config + answer format, then delegates the answer-key UI to the
+ *  same editor components every native type already uses. */
+function MediaComprehensionEditor({ q, patch, examId, allQuestions, shuffleOptions, onShuffleOptionsChange, patchQuestionById }: {
+  q: Question; patch: (p: Partial<Question>) => void; examId: string; allQuestions: Question[];
+  shuffleOptions: boolean; onShuffleOptionsChange: (v: boolean) => void;
+  patchQuestionById: (id: string, p: Partial<Question>) => void;
+}) {
+  const t = useT();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadErr, setUploadErr] = useState<string | null>(null);
+  const kind = q.mediaKind ?? "audio";
+  const meta = MEDIA_KIND_META.find((m) => m.value === kind)!;
+  const cfg = q.mediaConfig ?? {};
+
+  const otherPassageQuestions = allQuestions.filter((o) => o.id !== q.id && o.type === "media_comprehension" && o.mediaKind === "passage" && o.passageText?.trim());
+
+  const upload = (file: File) => {
+    if (!meta.upload) return;
+    setUploadErr(null);
+    setUploading(true);
+    const r = new FileReader();
+    r.onload = async () => {
+      try {
+        const { id } = await api.post<{ id: string }>("/admin/media", { kind: meta.upload, examId, data: String(r.result) });
+        patch({ mediaAssetIds: [...(q.mediaAssetIds ?? []), id] });
+      } catch (e) { setUploadErr((e as Error).message); }
+      finally { setUploading(false); }
+    };
+    r.onerror = () => { setUploadErr(t("eb.mediaUploadFailed")); setUploading(false); };
+    r.readAsDataURL(file);
+  };
+  const pickFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = [...(e.target.files ?? [])];
+    e.target.value = "";
+    files.forEach(upload);
+  };
+  const removeAsset = (id: string) => patch({ mediaAssetIds: (q.mediaAssetIds ?? []).filter((a) => a !== id) });
+
+  const patchConfig = (p: Partial<NonNullable<Question["mediaConfig"]>>) => patch({ mediaConfig: { ...cfg, ...p } });
+
+  return (
+    <div className="mt-5 space-y-4">
+      {/* Stimulus kind */}
+      <div>
+        <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t("eb.mediaKindLabel")}</span>
+        <div className="flex flex-wrap gap-1.5">
+          {MEDIA_KIND_META.map((m) => (
+            <button key={m.value} type="button" onClick={() => patch({ mediaKind: m.value, mediaAssetIds: [] })}
+              className={clsx("rounded-lg border px-3 py-1.5 text-sm font-medium", kind === m.value ? "border-[#c6ff34]/50 bg-[rgba(198,255,52,0.1)] text-[#c6ff34]" : "border-[var(--border)] text-[var(--muted)] hover:text-[var(--fg)]")}>
+              {t(m.labelKey)}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Stimulus source */}
+      {kind === "passage" ? (
+        <div>
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t("eb.passageText")}</span>
+            {otherPassageQuestions.length > 0 && (
+              <label className="flex items-center gap-1.5 text-xs text-[var(--muted)]">
+                {t("eb.orShareExisting")}
+                <select className="input h-7 w-auto text-xs" value={q.passageGroupId ?? ""} onChange={(e) => {
+                  const owner = otherPassageQuestions.find((o) => o.id === e.target.value || o.passageGroupId === e.target.value);
+                  if (owner) {
+                    // Stamp the group id onto both sides — the owner may not have
+                    // one yet if this is the first time its passage is being shared.
+                    const groupId = owner.passageGroupId ?? owner.id;
+                    if (!owner.passageGroupId) patchQuestionById(owner.id, { passageGroupId: groupId });
+                    patch({ passageGroupId: groupId, passageText: undefined });
+                  } else patch({ passageGroupId: undefined });
+                }}>
+                  <option value="">{t("eb.newPassage")}</option>
+                  {otherPassageQuestions.map((o) => <option key={o.id} value={o.passageGroupId ?? o.id}>{(o.passageText ?? "").slice(0, 40)}…</option>)}
+                </select>
+              </label>
+            )}
+          </div>
+          {q.passageGroupId ? (
+            <p className="mt-1.5 rounded-lg border border-dashed border-[var(--border)] px-3 py-2.5 text-xs text-[var(--muted)]">{t("eb.sharesPassageHint")}</p>
+          ) : (
+            <textarea className="input mt-1.5 min-h-[140px] w-full resize-y text-sm" value={q.passageText ?? ""}
+              placeholder={t("eb.passagePlaceholder")} onChange={(e) => patch({ passageText: e.target.value })} />
+          )}
+        </div>
+      ) : (
+        <div>
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t(meta.labelKey)}</span>
+            <button type="button" onClick={() => fileRef.current?.click()} disabled={uploading} className="btn btn-outline h-8 text-xs disabled:opacity-50">
+              {uploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />} {t("eb.uploadFile")}
+            </button>
+            <input ref={fileRef} type="file" accept={meta.accept} multiple={kind === "image"} className="hidden" onChange={pickFiles} />
+          </div>
+          {uploadErr && <p className="mt-1 text-xs text-rose-400">{uploadErr}</p>}
+          {(q.mediaAssetIds ?? []).length > 0 && (
+            <ul className="mt-2 space-y-1.5">
+              {(q.mediaAssetIds ?? []).map((id) => (
+                <li key={id} className="flex items-center justify-between rounded-lg border border-[var(--border)] px-3 py-2 text-xs">
+                  <span className="truncate text-[var(--muted)]">{id}</span>
+                  <button type="button" onClick={() => removeAsset(id)} className="shrink-0 text-[var(--muted)] hover:text-rose-500"><X className="h-3.5 w-3.5" /></button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="mt-2 flex items-center gap-2">
+            <LinkIcon className="h-3.5 w-3.5 shrink-0 text-[var(--muted)]" />
+            <input className="input h-8 flex-1 text-xs" placeholder={t("eb.orExternalUrl")} value={q.mediaExternalUrl ?? ""} onChange={(e) => patch({ mediaExternalUrl: e.target.value })} />
+          </div>
+          {kind !== "image" && <p className="mt-1 text-[11px] text-[var(--muted)]">{t("eb.externalUrlHint")}</p>}
+        </div>
+      )}
+
+      {/* Playback config */}
+      {(kind === "audio" || kind === "video") && (
+        <div className="grid grid-cols-2 gap-3 rounded-lg border border-[var(--border)] p-3 sm:grid-cols-3">
+          <label className="flex items-center gap-2 text-xs"><input type="checkbox" className="h-3.5 w-3.5 accent-[#c6ff34]" checked={cfg.allowSeek !== false} onChange={(e) => patchConfig({ allowSeek: e.target.checked })} /> {t("eb.mediaAllowSeek")}</label>
+          <label className="flex items-center gap-2 text-xs"><input type="checkbox" className="h-3.5 w-3.5 accent-[#c6ff34]" checked={!!cfg.autoplay} onChange={(e) => patchConfig({ autoplay: e.target.checked })} /> {t("eb.mediaAutoplay")}</label>
+          <label className="flex items-center gap-2 text-xs"><input type="checkbox" className="h-3.5 w-3.5 accent-[#c6ff34]" checked={cfg.preventDownload !== false} onChange={(e) => patchConfig({ preventDownload: e.target.checked })} /> {t("eb.mediaPreventDownload")}</label>
+          <label className="flex items-center gap-2 text-xs"><input type="checkbox" className="h-3.5 w-3.5 accent-[#c6ff34]" checked={!!cfg.playbackSpeedControl} onChange={(e) => patchConfig({ playbackSpeedControl: e.target.checked })} /> {t("eb.mediaSpeedControl")}</label>
+          <label className="flex items-center gap-2 text-xs">{t("eb.mediaReplayLimit")}
+            <input type="number" min={0} className="input h-7 w-16 text-xs" value={cfg.replayLimit ?? 0} onChange={(e) => patchConfig({ replayLimit: Math.max(0, Number(e.target.value) || 0) })} />
+          </label>
+          <label className="flex items-center gap-2 text-xs">{t("eb.mediaCountdown")}
+            <input type="number" min={0} max={30} className="input h-7 w-16 text-xs" value={cfg.countdownSeconds ?? 0} onChange={(e) => patchConfig({ countdownSeconds: Math.max(0, Math.min(30, Number(e.target.value) || 0)) })} />
+          </label>
+        </div>
+      )}
+
+      {/* Preview */}
+      {(kind !== "passage" ? ((q.mediaAssetIds ?? []).length > 0 || q.mediaExternalUrl) : true) && (
+        <div>
+          <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t("eb.preview")}</span>
+          <MediaStimulus
+            mediaKind={kind}
+            mediaUrls={(q.mediaAssetIds ?? []).map((id) => `/api/admin/media/${id}`)}
+            mediaExternalUrl={q.mediaExternalUrl}
+            mediaConfig={q.mediaConfig}
+            passageText={q.passageGroupId ? allQuestions.find((o) => o.passageGroupId === q.passageGroupId && o.passageText)?.passageText : q.passageText}
+          />
+        </div>
+      )}
+
+      {/* Answer format */}
+      <div>
+        <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t("eb.answerFormatLabel")}</span>
+        <select className="input h-10" value={q.answerFormat ?? "mcq"} onChange={(e) => patch({ answerFormat: e.target.value as Question["answerFormat"] })}>
+          {ANSWER_FORMAT_OPTIONS.map((f) => <option key={f} value={f}>{t(TYPE_META[f].shortKey)}</option>)}
+        </select>
+      </div>
+
+      {/* Delegate to the same editor every native type already uses */}
+      {(q.answerFormat === "mcq" || q.answerFormat === "multi_select") ? (
+        <ChoiceOptionsEditor q={{ ...q, type: q.answerFormat }} patch={patch} shuffleOptions={shuffleOptions} onShuffleOptionsChange={onShuffleOptionsChange} />
+      ) : q.answerFormat === "short" ? (
+        <ShortAnswerEditor q={q} patch={patch} />
+      ) : q.answerFormat === "numeric" ? (
+        <NumericAnswerEditor q={q} patch={patch} />
+      ) : q.answerFormat === "matching" ? (
+        <MatchingEditor q={q} patch={patch} />
+      ) : q.answerFormat === "cloze" ? (
+        <ClozeEditor q={q} patch={patch} />
+      ) : (
+        <p className="rounded-lg border border-dashed border-[var(--border)] px-3 py-3 text-sm text-[var(--muted)]">{t("eb.essayDesc")} {t("eb.gradedManually")}</p>
+      )}
+    </div>
+  );
+}
+
 /* ─────────────────────── Exam blueprint ─────────────────────── */
 function BlueprintEditor({ exam, questions, patchExam }: { exam: Exam; questions: Question[]; patchExam: (p: Partial<Exam>) => void }) {
   const t = useT();
@@ -1918,6 +2247,17 @@ function PreviewView({ exam, questions }: { exam: Exam; questions: Question[] })
                   <div className="space-y-1.5 text-sm text-[var(--muted)]">
                     <input className="input max-w-xs" type="number" placeholder={t("eb.enterNumberPlaceholder")} disabled />
                     <p className="text-[11px]"><span className="text-[#c6ff34]">⚙</span> {t("eb.randomizedPerCandidate")}</p>
+                  </div>
+                ) : q.type === "media_comprehension" ? (
+                  <div className="space-y-2">
+                    <MediaStimulus
+                      mediaKind={q.mediaKind ?? "passage"}
+                      mediaUrls={(q.mediaAssetIds ?? []).map((id) => `/api/admin/media/${id}`)}
+                      mediaExternalUrl={q.mediaExternalUrl}
+                      mediaConfig={q.mediaConfig}
+                      passageText={q.passageGroupId ? questions.find((o) => o.passageGroupId === q.passageGroupId && o.passageText)?.passageText : q.passageText}
+                    />
+                    <p className="text-[11px] text-[var(--muted)]">{t("eb.answerFormatLabel")}: {q.answerFormat ? t(TYPE_META[q.answerFormat].shortKey) : "—"}</p>
                   </div>
                 ) : (
                   (q.options ?? []).map((opt) => (

@@ -12,9 +12,13 @@ interface Flagged {
   attemptId: string; candidate: string; exam: string; integrity: number;
   flags: number; highFlags: number; submittedAt: string | null;
 }
+interface CalcUsage { candidate: string; opens: number; minutes: number; }
+interface MediaUsage { candidate: string; plays: number; replays: number; minutes: number; }
 interface Resp {
   kpis: { attempts: number; avgIntegrity: number | null; totalFlags: number; highFlags: number; cleanSessions: number; flaggedSessions: number };
   byType: ByType[];
+  calculatorUsage: CalcUsage[];
+  mediaUsage: MediaUsage[];
   flagged: Flagged[];
 }
 
@@ -31,7 +35,7 @@ export function AdminIntegrity() {
   if (error) return <AdminShell wide><p className="text-sm text-rose-400">{error}</p></AdminShell>;
   if (!data) return <AdminShell wide><div className="flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div></AdminShell>;
 
-  const { kpis, byType, flagged } = data;
+  const { kpis, byType, calculatorUsage, mediaUsage, flagged } = data;
   const maxCount = Math.max(1, ...byType.map((b) => b.count));
 
   return (
@@ -122,6 +126,64 @@ export function AdminIntegrity() {
             </table>
           )}
         </div>
+
+        {/* Calculator usage — reporting only, never a violation indicator */}
+        {calculatorUsage.length > 0 && (
+          <>
+            <h2 className="mt-6 text-sm font-semibold">{t("aint.calculatorUsage")}</h2>
+            <p className="mt-0.5 text-xs text-[var(--muted)]">{t("aint.calculatorUsageHint")}</p>
+            <div className="card mt-3 overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-[var(--border)] text-left text-[11px] uppercase tracking-wide text-[var(--muted)]">
+                    <th className="px-4 py-2.5 font-semibold">{t("ares.colCandidate")}</th>
+                    <th className="px-3 py-2.5 text-center font-semibold">{t("aint.calculatorOpens")}</th>
+                    <th className="px-3 py-2.5 text-center font-semibold">{t("aint.calculatorMinutes")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {calculatorUsage.map((c) => (
+                    <tr key={c.candidate} className="border-b border-[var(--border)] last:border-0 hover:bg-white/[0.02]">
+                      <td className="px-4 py-3 font-medium">{c.candidate}</td>
+                      <td className="px-3 py-3 text-center tabular-nums">{c.opens}</td>
+                      <td className="px-3 py-3 text-center tabular-nums">{c.minutes}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+
+        {/* Media usage — reporting only, never a violation indicator */}
+        {mediaUsage.length > 0 && (
+          <>
+            <h2 className="mt-6 text-sm font-semibold">{t("aint.mediaUsage")}</h2>
+            <p className="mt-0.5 text-xs text-[var(--muted)]">{t("aint.mediaUsageHint")}</p>
+            <div className="card mt-3 overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-[var(--border)] text-left text-[11px] uppercase tracking-wide text-[var(--muted)]">
+                    <th className="px-4 py-2.5 font-semibold">{t("ares.colCandidate")}</th>
+                    <th className="px-3 py-2.5 text-center font-semibold">{t("aint.mediaPlays")}</th>
+                    <th className="px-3 py-2.5 text-center font-semibold">{t("aint.mediaReplays")}</th>
+                    <th className="px-3 py-2.5 text-center font-semibold">{t("aint.mediaMinutes")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {mediaUsage.map((m) => (
+                    <tr key={m.candidate} className="border-b border-[var(--border)] last:border-0 hover:bg-white/[0.02]">
+                      <td className="px-4 py-3 font-medium">{m.candidate}</td>
+                      <td className="px-3 py-3 text-center tabular-nums">{m.plays}</td>
+                      <td className="px-3 py-3 text-center tabular-nums">{m.replays || "—"}</td>
+                      <td className="px-3 py-3 text-center tabular-nums">{m.minutes}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
       </div>
     </AdminShell>
   );

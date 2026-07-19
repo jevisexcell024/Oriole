@@ -22,8 +22,14 @@ export function Login() {
   const [twoFA, setTwoFA] = useState(false);
   const [code, setCode] = useState("");
 
-  // Staff (admin/facilitator/proctor) land on the admin dashboard; students on theirs.
-  useEffect(() => { if (user) navigate(landingFor(user.role), { replace: true }); }, [user, navigate]);
+  // Staff (admin/facilitator/proctor) land on the admin dashboard; students on theirs —
+  // unless a first-time password setup is still outstanding, which takes priority
+  // over everything else (and avoids a flash of the real dashboard before Protected
+  // would otherwise bounce them there).
+  useEffect(() => {
+    if (!user) return;
+    navigate(user.mustChangePassword ? "/force-password-change" : landingFor(user.role), { replace: true });
+  }, [user, navigate]);
 
   // Surface any SSO callback error (the Microsoft sign-in button has been removed,
   // but a direct callback hit can still redirect back here with ?sso=…).

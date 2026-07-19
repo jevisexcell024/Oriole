@@ -50,6 +50,9 @@ import { AdminReports } from "@/pages/AdminReports";
 import { AdminIntegrations } from "@/pages/AdminIntegrations";
 import { AdminViolations } from "@/pages/AdminViolations";
 import { AdminSystemHealth } from "@/pages/AdminSystemHealth";
+import { AdminReliability } from "@/pages/AdminReliability";
+import { AdminReliabilityIncident } from "@/pages/AdminReliabilityIncident";
+import { StatusPage } from "@/pages/StatusPage";
 import { AdminOrganization } from "@/pages/AdminOrganization";
 import { AdminAuditLogs } from "@/pages/AdminAuditLogs";
 import { AdminSettings } from "@/pages/AdminSettings";
@@ -61,6 +64,7 @@ import { AdminClasses, ClassDetail } from "@/pages/AdminClasses";
 import { AdminLibrary } from "@/pages/AdminLibrary";
 import { AdminTeam } from "@/pages/AdminTeam";
 import { AdminRoles } from "@/pages/AdminRoles";
+import { ForcePasswordChange } from "@/pages/ForcePasswordChange";
 import { can, isStaff, landingFor, type Cap } from "@/lib/roles";
 
 function Protected({ children, cap, staff }: { children: ReactNode; cap?: Cap; staff?: boolean }) {
@@ -73,6 +77,10 @@ function Protected({ children, cap, staff }: { children: ReactNode; cap?: Cap; s
     );
   }
   if (!user) return <Navigate to="/login" replace />;
+  // Defense in depth: Login.tsx already redirects here on sign-in, but this
+  // catches direct navigation to any other URL while a first-time password
+  // setup is still outstanding — no route is reachable until it's done.
+  if (user.mustChangePassword) return <Navigate to="/force-password-change" replace />;
   if (cap) {
     // Staff route: candidates bounce to their portal; staff lacking the capability go to their landing.
     if (!isStaff(user.role)) return <Navigate to="/dashboard" replace />;
@@ -94,8 +102,10 @@ function App() {
       <Suspense fallback={<div className="flex min-h-screen items-center justify-center text-[var(--muted)]">Loading…</div>}>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/force-password-change" element={<ForcePasswordChange />} />
         <Route path="/verify/:certNumber" element={<Verify />} />
         <Route path="/verify" element={<Verify />} />
+        <Route path="/status" element={<StatusPage />} />
         <Route path="/certificate/:certNumber" element={<CertificateView />} />
         <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />
         <Route path="/exams" element={<Protected><Exams /></Protected>} />
@@ -143,6 +153,8 @@ function App() {
         <Route path="/admin/live" element={<Protected cap="monitor"><AdminLiveMonitor /></Protected>} />
         <Route path="/admin/violations" element={<Protected cap="monitor"><AdminViolations /></Protected>} />
         <Route path="/admin/system-health" element={<Protected cap="system"><AdminSystemHealth /></Protected>} />
+        <Route path="/admin/reliability" element={<Protected cap="system"><AdminReliability /></Protected>} />
+        <Route path="/admin/reliability/incidents/:id" element={<Protected cap="system"><AdminReliabilityIncident /></Protected>} />
         <Route path="/admin/organization" element={<Protected cap="org"><AdminOrganization /></Protected>} />
         <Route path="/admin/integrations" element={<Protected cap="org"><AdminIntegrations /></Protected>} />
         <Route path="/admin/audit-logs" element={<Protected cap="org"><AdminAuditLogs /></Protected>} />
