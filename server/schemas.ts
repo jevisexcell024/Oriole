@@ -16,10 +16,18 @@ async function isPasswordBreached(password: string): Promise<boolean> {
       headers: { "Add-Padding": "true" },
       signal: AbortSignal.timeout(3000),
     });
-    if (!r.ok) return false;
+    if (!r.ok) {
+      console.warn(`⚠️  HIBP breach check got HTTP ${r.status} — this password was NOT screened, only the length/variety rule applied.`);
+      return false;
+    }
     const body = await r.text();
     return body.split("\n").some((line) => line.trim().split(":")[0] === suffix);
-  } catch {
+  } catch (err) {
+    // Fails open by design (see comment above) — but a host with no outbound
+    // internet access (common on locked-down shared hosting) means this check
+    // silently never runs, ever, for any password. Log it so that's visible
+    // in production instead of a permanently-dark safety net.
+    console.warn(`⚠️  HIBP breach check unreachable (${err instanceof Error ? err.message : err}) — this password was NOT screened, only the length/variety rule applied.`);
     return false;
   }
 }

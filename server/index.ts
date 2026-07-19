@@ -8,12 +8,13 @@ import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createHmac, createHash, randomBytes } from "node:crypto";
-import { db, initDb, snapshotStore, proctorStore, answerStore, auditStore, emailStore, geofenceStore } from "./db.ts";
+import { db, initDb, snapshotStore, proctorStore, answerStore, auditStore, emailStore, geofenceStore, reliabilityStore, reliabilityRollupStore, mediaAssetStore } from "./db.ts";
 import { sendMail, mailerStatus, verifySmtp, buildHtml, ctaButton, esc } from "./mailer.ts";
 import { sendSms, smsEnabled, smsStatus, recentSms } from "./sms.ts";
 import {
   clearSession, currentUser, issueSession, requireAuth, requireRole, requireRoles, toSafeUser,
   issuePending2fa, pending2faUserId, clearPending2fa, requirePermission, resolvePermissions,
+  resolveCustomRolePermissions, permissionOverreach,
 } from "./auth.ts";
 import { generateSecret, verifyTotp, verifyTotpStep, otpauthUrl, generateBackupCodes } from "./totp.ts";
 import { microsoftEnabled, authorizeUrl, exchangeCode } from "./sso.ts";
@@ -24,6 +25,11 @@ import { logger, httpLogger } from "./logger.ts";
 import { encryptString, decryptString, encryptionEnabled } from "./crypto.ts";
 import { scheduleRetention, stopRetention } from "./retention.ts";
 import { scheduleBackup, stopBackup, runBackup, backupStatus } from "./backup.ts";
+import {
+  reliabilityMiddleware, scheduleReliability, stopReliability, runHealthCheckSweep, recordJobRun, getLiveMetrics,
+  listIncidents, getIncident, manuallyResolveIncident, jobStatuses, toPublicIncident, subsystemLabel, type ReliabilityDeps,
+} from "./reliability.ts";
+import { classifyStatus, aggregateDailyRollup, computeReliabilityScore, DEFAULT_STATUS_THRESHOLDS } from "../shared/reliability.ts";
 import { validate } from "./validate.ts";
 import {
   loginSchema, teamCreateSchema, passwordChangeSchema, passwordResetSchema, twoFaCodeSchema, twoFaDisableSchema,
@@ -47,12 +53,12 @@ const GRADERS: ("admin" | "facilitator")[] = ["admin", "facilitator"];
 import type {
   Answer, Attempt, Certificate, Exam, ExamListItem, ProctorEvent, PublicQuestion, Question, Registration, RubricCriterion, RegradeRequest, WebhookEvent,
   Book, BookGenre, ReadingProgress, ResourceType, ResourceDifficulty, ResourceVersion, ResourceBookmark, ResourceRating, ResourceDownloadLog, User,
-  LearningStructureMode, AnnouncementRead, CustomRole,
+  LearningStructureMode, AnnouncementRead, CustomRole, ReliabilitySubsystemKey, ReliabilityIncident, MediaAsset,
 } from "../shared/types.ts";
-import { PERMISSIONS, PERMISSION_KEYS, isPermissionKey, SYSTEM_ROLE_PERMISSIONS, systemParentId, parseSystemParentId } from "../shared/permissions.ts";
+import { PERMISSIONS, PERMISSION_KEYS, isPermissionKey, SYSTEM_ROLE_PERMISSIONS, systemParentId, parseSystemParentId, type PermissionKey } from "../shared/permissions.ts";
 import {
   DEFAULT_LOCKDOWN, WEBHOOK_EVENTS, PROCTOR_EVENT_TYPES, BOOK_GENRES, RESOURCE_TYPES, RESOURCE_DIFFICULTIES,
-  LEARNING_STRUCTURE_MODES, DEFAULT_LEARNING_STRUCTURE,
+  LEARNING_STRUCTURE_MODES, DEFAULT_LEARNING_STRUCTURE, RELIABILITY_SUBSYSTEMS,
 } from "../shared/types.ts";
 
 /** Per-severity weight deducted from the integrity score for each logged violation. */
@@ -217,6 +223,7 @@ app.use((req, res, next) => {
 });
 
 app.use(httpLogger); // structured request/response logging
+app.use(reliabilityMiddleware); // Status & Reliability Center — real per-request latency/error instrumentation
 app.use(securityHeaders); // helmet security headers
 app.use(permissionsPolicy); // explicitly allow geolocation/camera/microphone for our own origin
 // Library book uploads (PDF documents) need more headroom than the global
@@ -727,19 +734,41 @@ function servedPublicQuestions(attempt: Attempt): PublicQuestion[] {
       points: q.points,
       sectionId: q.sectionId ?? null,
     };
-    if (q.type === "code") return { ...base, codeLanguage: q.codeLanguage ?? "python", starterCode: q.starterCode ?? "", testCases: q.testCases ?? [] };
-    // Matching: serve the left prompts (answer aligns to these) + the shuffled rights as options.
-    if (q.type === "matching") return { ...base, matchPrompts: (q.matchPairs ?? []).map((p) => p.left), options: attempt.optionOrders?.[q.id] ?? (q.matchPairs ?? []).map((p) => p.right) };
-    // Ordering: serve the shuffled items as options.
-    if (q.type === "ordering") return { ...base, options: attempt.optionOrders?.[q.id] ?? (q.sequence ?? []) };
-    if (q.type === "cloze") return { ...base, blankCount: (q.blanks ?? []).length };
-    if (q.type === "hotspot") return { ...base, imageUrl: q.imageUrl };
-    // Parameterized: substitute this attempt's frozen values into the prompt {name} markers.
-    if (q.type === "parameterized") {
-      const vals = attempt.paramValues?.[q.id];
-      return { ...base, prompt: vals ? substituteParams(q.prompt, vals) : q.prompt, paramValues: vals };
+    // Type-specific answer-key stripping/projection, as a function so
+    // media_comprehension can reuse whatever its answerFormat already
+    // projects (its options are ONLY revealed if the format needs them —
+    // no answer keys leak either way).
+    const projectByType = (t: Question["type"]): Partial<PublicQuestion> => {
+      if (t === "code") return { codeLanguage: q.codeLanguage ?? "python", starterCode: q.starterCode ?? "", testCases: q.testCases ?? [] };
+      // Matching: serve the left prompts (answer aligns to these) + the shuffled rights as options.
+      if (t === "matching") return { matchPrompts: (q.matchPairs ?? []).map((p) => p.left), options: attempt.optionOrders?.[q.id] ?? (q.matchPairs ?? []).map((p) => p.right) };
+      // Ordering: serve the shuffled items as options.
+      if (t === "ordering") return { options: attempt.optionOrders?.[q.id] ?? (q.sequence ?? []) };
+      if (t === "cloze") return { blankCount: (q.blanks ?? []).length };
+      if (t === "hotspot") return { imageUrl: q.imageUrl };
+      // Parameterized: substitute this attempt's frozen values into the prompt {name} markers.
+      if (t === "parameterized") {
+        const vals = attempt.paramValues?.[q.id];
+        return { prompt: vals ? substituteParams(q.prompt, vals) : q.prompt, paramValues: vals };
+      }
+      return {};
+    };
+    if (q.type === "media_comprehension") {
+      return {
+        ...base,
+        ...projectByType(q.answerFormat ?? "essay"),
+        mediaKind: q.mediaKind,
+        // Never the raw asset — a URL through the authenticated, ownership-checked
+        // per-attempt media endpoint (see GET /api/attempts/:id/media/:assetId).
+        mediaUrls: (q.mediaAssetIds ?? []).map((id) => `/api/attempts/${attempt.id}/media/${id}`),
+        mediaExternalUrl: q.mediaExternalUrl,
+        mediaConfig: q.mediaConfig,
+        answerFormat: q.answerFormat,
+        passageText: q.mediaKind === "passage" ? q.passageText : undefined,
+        passageGroupId: q.passageGroupId,
+      };
     }
-    return base;
+    return { ...base, ...projectByType(q.type) };
   });
 }
 
@@ -768,6 +797,7 @@ function displayCorrect(q: Question): string {
     case "ordering": return (q.sequence ?? []).join(" → ");
     case "cloze": return (q.blanks ?? []).map((b) => b[0] ?? "").join(" | ");
     case "hotspot": return "Correct region on the image";
+    case "media_comprehension": { const fmt = q.answerFormat; return fmt ? displayCorrect({ ...q, type: fmt }) : ""; }
     default: return q.correctAnswer;
   }
 }
@@ -781,6 +811,7 @@ function displayAnswer(q: Question, value: string | undefined): string {
     case "cloze": return jsonArr(v).map((s) => s || "—").join(" | ");
     case "hotspot": { try { const o = JSON.parse(v || "{}"); return Number.isFinite(o.x) ? `Clicked (${Math.round(o.x)}%, ${Math.round(o.y)}%)` : ""; } catch { return ""; } }
     case "file_upload": { try { const o = JSON.parse(v || "{}"); return o.name ? String(o.name) : (v ? "File uploaded" : ""); } catch { return v ? "File uploaded" : ""; } }
+    case "media_comprehension": { const fmt = q.answerFormat; return fmt ? displayAnswer({ ...q, type: fmt }, v) : v; }
     default: return v;
   }
 }
@@ -1260,6 +1291,87 @@ async function validateUploadAnswer(value: string): Promise<{ ok: boolean; reaso
   return { ok: true };
 }
 
+// Media assets (Language & Media Assessment module, Phase 2) — capped base64
+// blobs in their own off-mirror table (never inline on a Question row, which
+// IS mirrored into memory), served only through an authenticated,
+// ownership-checked endpoint. This is a "lean" reuse of the same storage
+// model file_upload/Book already use, not real signed-URL/CDN streaming —
+// the app has no object storage to build that on (see CHANGELOG).
+const MEDIA_MIME: Record<MediaAsset["kind"], Set<string>> = {
+  image: new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]),
+  audio: new Set(["audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/aac", "audio/ogg"]),
+  video: new Set(["video/mp4", "video/webm", "video/quicktime"]),
+  pdf: new Set(["application/pdf"]),
+};
+// Sit between the existing 2.5MB file_upload cap and the 25MB Book cap — these
+// blobs live in a dedicated off-mirror table, not inline on a mirrored row.
+const MEDIA_MAX_BYTES: Record<MediaAsset["kind"], number> = {
+  image: 5_000_000, audio: 15_000_000, video: 40_000_000, pdf: 20_000_000,
+};
+
+// Lightweight status check for the Exam Builder's type picker — an exam author
+// (facilitator) may not hold system.settings, so this doesn't expose full
+// OrgSettings, just the one flag needed to decide whether to show the type.
+app.get("/api/admin/media/status", requirePermission("exams.view"), (_req, res) => {
+  res.json({ enabled: !!getSettings().mediaAssessmentEnabled });
+});
+
+app.post("/api/admin/media", requirePermission("exams.edit"), async (req, res) => {
+  const user = currentUser(req)!;
+  const { kind, examId, data } = req.body ?? {};
+  if (!["image", "audio", "video", "pdf"].includes(kind)) return res.status(400).json({ error: "Invalid media kind." });
+  const exam = db.data!.exams.find((e) => e.id === examId);
+  if (!exam) return res.status(404).json({ error: "Exam not found." });
+  if (typeof data !== "string" || !data.startsWith("data:")) return res.status(400).json({ error: "Invalid upload." });
+  const type = data.slice(5, data.indexOf(";")).toLowerCase();
+  if (!MEDIA_MIME[kind as MediaAsset["kind"]].has(type)) {
+    return res.status(400).json({ error: "That file type isn't allowed for this media kind." });
+  }
+  if (data.length > MEDIA_MAX_BYTES[kind as MediaAsset["kind"]]) return res.status(400).json({ error: "File is too large." });
+  if (looksLikeMarkupOrScript(data)) return res.status(400).json({ error: "That file looks like markup or a script and isn't allowed." });
+  let sizeBytes: number;
+  try {
+    const raw = Buffer.from(data.slice(data.indexOf(",") + 1), "base64");
+    sizeBytes = raw.length;
+    const scan = await scanForMalware(raw);
+    if (!scan.clean) return res.status(400).json({ error: scan.reason });
+  } catch { return res.status(400).json({ error: "Invalid upload." }); }
+  const asset: MediaAsset = { id: nanoid(12), kind, mime: type, sizeBytes, dataUrl: data, uploadedBy: user.id, uploadedAt: now(), examId: exam.id };
+  await mediaAssetStore.add(asset);
+  await recordAudit(req, "media.uploaded", `${kind} (${(sizeBytes / 1024 / 1024).toFixed(1)}MB) for ${exam.title}`);
+  res.json({ id: asset.id, kind: asset.kind, mime: asset.mime, sizeBytes: asset.sizeBytes });
+});
+
+function serveMediaAsset(res: Response, asset: MediaAsset) {
+  const raw = Buffer.from(asset.dataUrl.slice(asset.dataUrl.indexOf(",") + 1), "base64");
+  res.setHeader("Content-Type", asset.mime);
+  res.setHeader("Cache-Control", "private, no-store");
+  res.send(raw);
+}
+
+app.get("/api/admin/media/:id", requirePermission("exams.view"), async (req, res) => {
+  const asset = await mediaAssetStore.get(String(req.params.id));
+  if (!asset) return res.status(404).json({ error: "Media not found." });
+  serveMediaAsset(res, asset);
+});
+
+// Candidate-facing: no signed URL, but not a public one either — the asset
+// must actually belong to a media_comprehension question served in THIS
+// candidate's own attempt, or the request is rejected.
+app.get("/api/attempts/:id/media/:assetId", requireAuth, async (req, res) => {
+  const user = currentUser(req)!;
+  const attempt = db.data!.attempts.find((a) => a.id === req.params.id && a.candidateId === user.id);
+  if (!attempt) return res.status(404).json({ error: "Attempt not found." });
+  const assetId = String(req.params.assetId);
+  const owned = servedQuestions(attempt).some(
+    (q) => q.type === "media_comprehension" && (q.mediaAssetIds ?? []).includes(assetId),
+  );
+  if (!owned) return res.status(403).json({ error: "Forbidden." });
+  const asset = await mediaAssetStore.get(assetId);
+  if (!asset) return res.status(404).json({ error: "Media not found." });
+  serveMediaAsset(res, asset);
+});
+
 app.post("/api/attempts/:id/answer", requireAuth, async (req, res) => {
   const user = currentUser(req)!;
   const attempt = db.data!.attempts.find((a) => a.id === req.params.id && a.candidateId === user.id);
@@ -1523,6 +1635,52 @@ async function applyGeofencePolicy(a: Attempt, exam: Exam): Promise<void> {
   }
 }
 
+// Screen Wake Lock reporting — unlike geofence's ongoing "currently outside" state,
+// a device-asleep condition is only detectable in hindsight (the tab wasn't running
+// to report anything while suspended), so there's no separate "still asleep" phase
+// to track: the client reports the gap once it's already back. A "pause" resume
+// action behaves like a manual proctor pause (requires proctor action to resume,
+// via the existing Live Monitor capability) rather than auto-resuming like
+// geofence's auto-pause does — the logged event's message is the audit trail for why.
+app.post("/api/attempts/:id/wake-lock-event", requireAuth, async (req, res) => {
+  const user = currentUser(req)!;
+  const attempt = db.data!.attempts.find((a) => a.id === req.params.id && a.candidateId === user.id);
+  if (!attempt || attempt.status !== "in_progress") return res.status(404).json({ error: "Attempt not found." });
+  const exam = db.data!.exams.find((e) => e.id === attempt.examId);
+  const ld = exam?.lockdown;
+  const { type, inactiveSeconds } = req.body ?? {};
+
+  if (type === "unsupported") {
+    await proctorStore.add({
+      id: nanoid(10), attemptId: attempt.id, type: "wake_lock_unsupported",
+      severity: ld?.wakeLockFailureAction === "notify_invigilator" ? "warning" : "info",
+      message: "Browser does not support the Screen Wake Lock API.", at: now(),
+    });
+    return res.json({ ok: true });
+  }
+
+  if (type === "inactive_resumed") {
+    const secs = Math.max(0, Number(inactiveSeconds) || 0);
+    await proctorStore.add({
+      id: nanoid(10), attemptId: attempt.id, type: "device_resumed",
+      severity: secs >= 30 ? "warning" : "info",
+      message: `Device appeared inactive for ${Math.round(secs)}s before resuming.`, at: now(),
+    });
+    if (secs >= 30 && !attempt.paused) {
+      const action = ld?.wakeLockResumeAction ?? "continue";
+      if (action === "pause") {
+        attempt.paused = true; attempt.pausedAt = now();
+        await db.upsert("attempts", attempt);
+      } else if (action === "auto_submit") {
+        await forceSubmitAttempt(attempt, "Auto-submitted: device was inactive/asleep beyond the allowed threshold.");
+      }
+    }
+    return res.json({ attempt: { paused: !!attempt.paused } });
+  }
+
+  res.status(400).json({ error: "Unknown wake-lock event type." });
+});
+
 app.post("/api/attempts/:id/submit", requireAuth, async (req, res) => {
   const user = currentUser(req)!;
   const attempt = db.data!.attempts.find((a) => a.id === req.params.id && a.candidateId === user.id);
@@ -1663,6 +1821,8 @@ function questionDefaults(type: Question["type"]): QDefaults {
     correctAnswer: "", correctAnswers: [], tolerance: 0,
     options: undefined, matchPairs: undefined, sequence: undefined, blanks: undefined, hotspots: undefined, imageUrl: undefined,
     paramVariables: undefined, paramFormula: undefined, paramTolerance: undefined,
+    mediaKind: undefined, mediaAssetIds: undefined, mediaExternalUrl: undefined, passageText: undefined, passageGroupId: undefined,
+    mediaConfig: undefined, answerFormat: undefined,
   };
   if (type === "true_false") return { ...base, options: ["true", "false"] };
   if (type === "mcq" || type === "multi_select") return { ...base, options: ["Option 1", "Option 2"] };
@@ -1671,6 +1831,9 @@ function questionDefaults(type: Question["type"]): QDefaults {
   if (type === "cloze") return { ...base, blanks: [[""]] };
   if (type === "hotspot") return { ...base, hotspots: [] };
   if (type === "parameterized") return { ...base, paramVariables: [], paramFormula: "", paramTolerance: 0 };
+  if (type === "media_comprehension") {
+    return { ...base, answerFormat: "mcq", options: ["Option 1", "Option 2"], mediaConfig: { preventDownload: true } };
+  }
   // short / numeric / essay / code / file_upload — free-form, no options
   return base;
 }
@@ -1851,6 +2014,7 @@ app.post("/api/admin/candidates", requirePermission("students.manage"), async (r
     age: typeof b.age === "number" ? b.age : undefined,
     studentClass: typeof b.studentClass === "string" ? b.studentClass.trim() : undefined,
     phone: typeof b.phone === "string" && b.phone.trim() ? encryptString(b.phone.trim()) : undefined,
+    mustChangePassword: true,
   };
   db.data!.users.push(user);
   await db.write();
@@ -1869,6 +2033,7 @@ app.post("/api/admin/candidates/:id/resend-invite", requirePermission("students.
   if (!user) return res.status(404).json({ error: "Student not found." });
   const tempPassword = "dti-" + nanoid(6);
   user.passwordHash = await bcrypt.hash(tempPassword, BCRYPT_COST);
+  user.mustChangePassword = true;
   await db.upsert("users", user);
   await recordAudit(req, "candidate.invite_resent", `${user.name} <${user.email}>`);
   const mail = invitationEmail(user.name, user.email, tempPassword);
@@ -1902,6 +2067,7 @@ app.post("/api/admin/candidates/bulk", requirePermission("students.manage"), asy
       age: row?.age !== undefined && row?.age !== "" && Number.isFinite(ageNum) ? ageNum : undefined,
       studentClass: typeof row?.studentClass === "string" && row.studentClass.trim() ? row.studentClass.trim() : undefined,
       phone: typeof row?.phone === "string" && row.phone.trim() ? encryptString(row.phone.trim()) : undefined,
+      mustChangePassword: true,
     };
     db.data!.users.push(user);
     createdUsers.push(user);
@@ -1975,6 +2141,7 @@ app.patch("/api/admin/candidates/:id/password", requirePermission("students.mana
     return res.status(400).json({ error: "Password must be at least 12 characters." });
   }
   user.passwordHash = await bcrypt.hash(String(password), BCRYPT_COST);
+  user.mustChangePassword = true;
   user.tokenVersion = (user.tokenVersion ?? 0) + 1; // revoke the candidate's existing sessions
   await db.write();
   res.json({ ok: true });
@@ -1989,6 +2156,9 @@ app.delete("/api/admin/candidates/:id", requirePermission("students.delete"), as
   db.data!.registrations = db.data!.registrations.filter((r) => r.candidateId !== id);
   db.data!.attempts = db.data!.attempts.filter((a) => a.candidateId !== id);
   db.data!.certificates = db.data!.certificates.filter((c) => c.candidateId !== id);
+  for (const cls of db.data!.classes) {
+    if (cls.memberIds.includes(id as string)) cls.memberIds = cls.memberIds.filter((m) => m !== id);
+  }
   await answerStore.removeForAttempts(attemptIds);
   await proctorStore.removeForAttempts(attemptIds);
   await snapshotStore.removeForAttempts(attemptIds);
@@ -2130,6 +2300,16 @@ app.patch("/api/admin/exams/:id", requirePermission("exams.edit"), async (req, r
     ld.sebConfigKeys = cleanKeys(ld.sebConfigKeys);
     ld.sebBrowserExamKeys = cleanKeys(ld.sebBrowserExamKeys);
     ld.sebLaunchUrl = typeof ld.sebLaunchUrl === "string" ? ld.sebLaunchUrl.trim() : "";
+    // Normalise Calculator + Power Management settings the same way.
+    ld.calculatorEnabled = !!ld.calculatorEnabled;
+    if (!["basic", "scientific"].includes(ld.calculatorType ?? "")) ld.calculatorType = "basic";
+    if (!["floating", "sidebar"].includes(ld.calculatorPosition ?? "")) ld.calculatorPosition = "floating";
+    ld.calculatorAllowKeyboard = ld.calculatorAllowKeyboard !== false;
+    ld.calculatorSaveHistory = !!ld.calculatorSaveHistory;
+    ld.calculatorRememberState = ld.calculatorRememberState !== false;
+    ld.wakeLockEnabled = !!ld.wakeLockEnabled;
+    if (!["continue", "warn", "notify_invigilator"].includes(ld.wakeLockFailureAction ?? "")) ld.wakeLockFailureAction = "warn";
+    if (!["continue", "pause", "auto_submit", "flag"].includes(ld.wakeLockResumeAction ?? "")) ld.wakeLockResumeAction = "continue";
   }
   // Targeted upserts instead of a full-mirror db.write(): this handler fires on
   // every debounced settings edit (and duration changes touch every in-progress
@@ -2276,6 +2456,33 @@ app.patch("/api/admin/questions/:id", requirePermission("exams.edit"), async (re
       .filter((t: unknown): t is { input?: unknown; expected?: unknown } => !!t && typeof t === "object")
       .map((t: { input?: unknown; expected?: unknown }) => ({ input: String(t.input ?? ""), expected: String(t.expected ?? "") }));
   }
+  // ── media_comprehension ──
+  if (["audio", "video", "image", "pdf", "passage"].includes(b.mediaKind)) q.mediaKind = b.mediaKind;
+  if (Array.isArray(b.mediaAssetIds)) q.mediaAssetIds = b.mediaAssetIds.map(String).filter(Boolean);
+  if (typeof b.mediaExternalUrl === "string") {
+    if (!b.mediaExternalUrl.trim()) q.mediaExternalUrl = undefined;
+    else {
+      try {
+        const u = new URL(b.mediaExternalUrl.trim());
+        if (u.protocol === "http:" || u.protocol === "https:") q.mediaExternalUrl = u.toString();
+      } catch { /* invalid URL — leave the existing value in place */ }
+    }
+  }
+  if (typeof b.passageText === "string") q.passageText = b.passageText.slice(0, 50_000);
+  if ("passageGroupId" in b) q.passageGroupId = b.passageGroupId ? String(b.passageGroupId) : undefined;
+  if (b.mediaConfig && typeof b.mediaConfig === "object") {
+    const mc = b.mediaConfig as Record<string, unknown>;
+    q.mediaConfig = {
+      allowSeek: typeof mc.allowSeek === "boolean" ? mc.allowSeek : q.mediaConfig?.allowSeek,
+      replayLimit: typeof mc.replayLimit === "number" ? Math.max(0, Math.floor(mc.replayLimit)) : q.mediaConfig?.replayLimit,
+      autoplay: typeof mc.autoplay === "boolean" ? mc.autoplay : q.mediaConfig?.autoplay,
+      playbackSpeedControl: typeof mc.playbackSpeedControl === "boolean" ? mc.playbackSpeedControl : q.mediaConfig?.playbackSpeedControl,
+      countdownSeconds: typeof mc.countdownSeconds === "number" ? Math.max(0, Math.min(30, Math.floor(mc.countdownSeconds))) : q.mediaConfig?.countdownSeconds,
+      preventDownload: typeof mc.preventDownload === "boolean" ? mc.preventDownload : (q.mediaConfig?.preventDownload ?? true),
+      subtitlesAssetId: typeof mc.subtitlesAssetId === "string" ? mc.subtitlesAssetId : q.mediaConfig?.subtitlesAssetId,
+    };
+  }
+  if (["mcq", "multi_select", "short", "numeric", "essay", "matching", "cloze"].includes(b.answerFormat)) q.answerFormat = b.answerFormat;
   // Stamp the edit. If this question belongs to an exam with an attempt already in
   // progress, the answer to it is voided (recorded blank) at submission — see gradeAttempt.
   q.updatedAt = now();
@@ -2341,49 +2548,64 @@ app.post("/api/admin/exams/:id/publish", requirePermission("exams.publish"), asy
   questions.forEach((q, i) => {
     const n = i + 1;
     if (!q.prompt.trim()) errors.push(`Question ${n}: add a question prompt.`);
-    switch (q.type) {
-      case "essay":
-      case "code":
-      case "file_upload":
-        break; // manually graded — no answer key required
-      case "matching":
-        if (!(q.matchPairs ?? []).length || (q.matchPairs ?? []).some((p) => !p.left.trim() || !p.right.trim()))
-          errors.push(`Question ${n}: every matching pair needs both a left prompt and a right value.`);
-        break;
-      case "ordering":
-        if ((q.sequence ?? []).filter((s) => s.trim()).length < 2) errors.push(`Question ${n}: add at least two items to order.`);
-        break;
-      case "cloze":
-        if (!(q.blanks ?? []).length || (q.blanks ?? []).some((b) => !b.some((a) => a.trim())))
-          errors.push(`Question ${n}: every blank needs at least one accepted answer.`);
-        break;
-      case "hotspot":
-        if (!q.imageUrl) errors.push(`Question ${n}: add an image.`);
-        else if (!(q.hotspots ?? []).length) errors.push(`Question ${n}: mark at least one correct region on the image.`);
-        break;
-      case "multi_select":
-        if (!(q.correctAnswers ?? []).length) errors.push(`Question ${n}: mark at least one correct option.`);
-        else if (q.options && (q.correctAnswers ?? []).some((c) => !q.options!.includes(c))) errors.push(`Question ${n}: every correct answer must match an option.`);
-        break;
-      case "numeric":
-        if (!q.correctAnswer.trim() || !Number.isFinite(parseFloat(q.correctAnswer))) errors.push(`Question ${n}: enter a numeric correct answer.`);
-        break;
-      case "short":
-        if (!q.correctAnswer.trim()) errors.push(`Question ${n}: add a primary accepted answer.`);
-        break;
-      case "parameterized": {
-        const pvs = q.paramVariables ?? [];
-        if (!pvs.length) errors.push(`Question ${n}: add at least one variable.`);
-        else if (pvs.some((pv) => !pv.name.trim())) errors.push(`Question ${n}: every variable needs a name.`);
-        if (!q.paramFormula?.trim()) errors.push(`Question ${n}: add a formula to compute the answer.`);
-        else if (pvs.length && tryEvalExpr(q.paramFormula, Object.fromEntries(pvs.map((pv) => [pv.name, (pv.min + pv.max) / 2]))) == null)
-          errors.push(`Question ${n}: the formula couldn't be evaluated — check the variable names and syntax.`);
-        break;
+    // A named, recursive helper (rather than a plain switch) so media_comprehension
+    // can delegate its answer-key requirement to whatever its answerFormat already
+    // needs, instead of duplicating every case's validation a second time.
+    const checkAnswerKey = (t: Question["type"]) => {
+      switch (t) {
+        case "essay":
+        case "code":
+        case "file_upload":
+          break; // manually graded — no answer key required
+        case "matching":
+          if (!(q.matchPairs ?? []).length || (q.matchPairs ?? []).some((p) => !p.left.trim() || !p.right.trim()))
+            errors.push(`Question ${n}: every matching pair needs both a left prompt and a right value.`);
+          break;
+        case "ordering":
+          if ((q.sequence ?? []).filter((s) => s.trim()).length < 2) errors.push(`Question ${n}: add at least two items to order.`);
+          break;
+        case "cloze":
+          if (!(q.blanks ?? []).length || (q.blanks ?? []).some((b) => !b.some((a) => a.trim())))
+            errors.push(`Question ${n}: every blank needs at least one accepted answer.`);
+          break;
+        case "hotspot":
+          if (!q.imageUrl) errors.push(`Question ${n}: add an image.`);
+          else if (!(q.hotspots ?? []).length) errors.push(`Question ${n}: mark at least one correct region on the image.`);
+          break;
+        case "multi_select":
+          if (!(q.correctAnswers ?? []).length) errors.push(`Question ${n}: mark at least one correct option.`);
+          else if (q.options && (q.correctAnswers ?? []).some((c) => !q.options!.includes(c))) errors.push(`Question ${n}: every correct answer must match an option.`);
+          break;
+        case "numeric":
+          if (!q.correctAnswer.trim() || !Number.isFinite(parseFloat(q.correctAnswer))) errors.push(`Question ${n}: enter a numeric correct answer.`);
+          break;
+        case "short":
+          if (!q.correctAnswer.trim()) errors.push(`Question ${n}: add a primary accepted answer.`);
+          break;
+        case "parameterized": {
+          const pvs = q.paramVariables ?? [];
+          if (!pvs.length) errors.push(`Question ${n}: add at least one variable.`);
+          else if (pvs.some((pv) => !pv.name.trim())) errors.push(`Question ${n}: every variable needs a name.`);
+          if (!q.paramFormula?.trim()) errors.push(`Question ${n}: add a formula to compute the answer.`);
+          else if (pvs.length && tryEvalExpr(q.paramFormula, Object.fromEntries(pvs.map((pv) => [pv.name, (pv.min + pv.max) / 2]))) == null)
+            errors.push(`Question ${n}: the formula couldn't be evaluated — check the variable names and syntax.`);
+          break;
+        }
+        case "media_comprehension": {
+          if (!q.mediaKind) { errors.push(`Question ${n}: choose a media type.`); break; }
+          const hasStimulus = (q.mediaAssetIds ?? []).length > 0 || !!q.mediaExternalUrl?.trim()
+            || (q.mediaKind === "passage" && (!!q.passageText?.trim() || !!q.passageGroupId));
+          if (!hasStimulus) errors.push(`Question ${n}: add media (upload, an external link, or passage text).`);
+          if (!q.answerFormat) errors.push(`Question ${n}: choose an answer format for this media question.`);
+          else checkAnswerKey(q.answerFormat);
+          break;
+        }
+        default: // mcq / true_false
+          if (!q.correctAnswer.trim()) errors.push(`Question ${n}: mark the correct answer.`);
+          else if (q.options && !q.options.includes(q.correctAnswer)) errors.push(`Question ${n}: the correct answer must match an option.`);
       }
-      default: // mcq / true_false
-        if (!q.correctAnswer.trim()) errors.push(`Question ${n}: mark the correct answer.`);
-        else if (q.options && !q.options.includes(q.correctAnswer)) errors.push(`Question ${n}: the correct answer must match an option.`);
-    }
+    };
+    checkAnswerKey(q.type);
   });
   if (errors.length) return res.status(400).json({ errors });
   exam.status = "published";
@@ -2407,11 +2629,15 @@ app.get("/api/admin/questions", requirePermission("exams.edit"), (_req, res) => 
 // results.view/release/export and grading.regrade already matched GRADERS
 // exactly; results.manage (new) covers the one admin-only recompute action.
 app.get("/api/admin/results", requirePermission("results.view"), async (_req, res) => {
-  const userName = (id: string) => db.data!.users.find((u) => u.id === id)?.name ?? "Candidate";
-  const examOf = (id: string) => db.data!.exams.find((e) => e.id === id);
+  const usersById = new Map(db.data!.users.map((u) => [u.id, u]));
+  const examsById = new Map(db.data!.exams.map((e) => [e.id, e]));
+  const userName = (id: string) => usersById.get(id)?.name ?? "Candidate";
+  const examOf = (id: string) => examsById.get(id);
   const submitted = db.data!.attempts.filter((a) => a.status === "submitted" && !examOf(a.examId)?.practice);
   const evMap = await proctorStore.forAttempts(submitted.map((a) => a.id));
   const flaggedAll = await proctorStore.allFlagged();
+  const attemptsByExam = new Map<string, typeof submitted>();
+  for (const a of submitted) { const list = attemptsByExam.get(a.examId) ?? []; list.push(a); attemptsByExam.set(a.examId, list); }
 
   const attempts = submitted
     .map((a) => {
@@ -2421,7 +2647,7 @@ app.get("/api/admin/results", requirePermission("results.view"), async (_req, re
         id: a.id,
         candidateId: a.candidateId,
         candidateName: userName(a.candidateId),
-        candidateEmail: db.data!.users.find((u) => u.id === a.candidateId)?.email ?? "",
+        candidateEmail: usersById.get(a.candidateId)?.email ?? "",
         examId: a.examId,
         examTitle: exam?.title ?? "Examination",
         examCode: exam?.code ?? "",
@@ -2443,7 +2669,7 @@ app.get("/api/admin/results", requirePermission("results.view"), async (_req, re
   for (const q of db.data!.questions) { const a = qsByExam.get(q.examId) ?? []; a.push(q.type); qsByExam.set(q.examId, a); }
   const perExam = db.data!.exams
     .map((exam) => {
-      const ax = submitted.filter((a) => a.examId === exam.id);
+      const ax = attemptsByExam.get(exam.id) ?? [];
       if (!ax.length) return null;
       const s = ax.map((a) => a.score ?? 0);
       const qtypes = qsByExam.get(exam.id) ?? [];
@@ -2905,8 +3131,21 @@ app.get("/api/admin/attempts/:id", requirePermission("monitor.view"), async (req
       rubric: q.rubric ?? null,
       rubricScores: ans?.rubricScores ?? null,
       explanation: q.explanation ?? null,
+      answerFormat: q.answerFormat ?? null,
       // For file-upload answers, pass the raw payload so a grader can open/download it.
       fileUpload: q.type === "file_upload" ? parseFileUpload(ans?.value) : null,
+      // For media_comprehension, the stimulus the grader needs to see alongside the
+      // answer — media through the authenticated admin endpoint, never raw data.
+      // A follow-up question in a passage group resolves the shared passage owner's
+      // text (the field is only populated on the "owner" question itself).
+      media: q.type === "media_comprehension" ? {
+        kind: q.mediaKind ?? null,
+        urls: (q.mediaAssetIds ?? []).map((id) => `/api/admin/media/${id}`),
+        externalUrl: q.mediaExternalUrl ?? null,
+        passageText: q.passageGroupId
+          ? (questions.find((o) => o.passageGroupId === q.passageGroupId && o.passageText)?.passageText ?? null)
+          : (q.passageText ?? null),
+      } : null,
     };
   });
   const events = cleanEvents(await proctorStore.forAttempt(attempt.id), attempt.submittedAt);
@@ -3406,7 +3645,7 @@ app.get("/api/admin/analytics-overview", requirePermission("results.view"), asyn
       typeStat.set(q.type, st);
     }
   }
-  const QUESTION_TYPE_LABEL: Record<string, string> = { mcq: "Multiple Choice", true_false: "True / False", short: "Short Answer", numeric: "Numeric", essay: "Essay", code: "Code", matching: "Matching", ordering: "Ordering", cloze: "Cloze", hotspot: "Hotspot", file_upload: "File Upload", parameterized: "Parameterized" };
+  const QUESTION_TYPE_LABEL: Record<string, string> = { mcq: "Multiple Choice", true_false: "True / False", short: "Short Answer", numeric: "Numeric", essay: "Essay", code: "Code", matching: "Matching", ordering: "Ordering", cloze: "Cloze", hotspot: "Hotspot", file_upload: "File Upload", parameterized: "Parameterized", media_comprehension: "Media Comprehension" };
   const questionTypeAnalysis = [...typeStat.entries()]
     .map(([type, st]) => ({ type: QUESTION_TYPE_LABEL[type] ?? type, score: st.t ? Math.round((st.c / st.t) * 100) : 0, volume: st.t }))
     .sort((a, b) => b.volume - a.volume).slice(0, 4);
@@ -3930,6 +4169,33 @@ app.post("/api/me/password", requireAuth, validate(passwordChangeSchema), async 
   res.json({ ok: true });
 });
 
+// One-time exception to the rule above (candidates can't self-service their
+// password): when a student is issued a password they didn't choose —
+// initial invite, bulk import, resend, or an admin reset — mustChangePassword
+// is set, and this is the only endpoint that will honor it. It's consumed
+// (cleared) the instant it succeeds, so it can't be used as a general
+// self-service password-change route; every password after this first one
+// still goes through an administrator via POST /api/me/password above.
+app.post("/api/me/complete-password-setup", requireAuth, validate(passwordChangeSchema), async (req, res) => {
+  const user = currentUser(req)!;
+  if (!user.mustChangePassword) return res.status(400).json({ error: "No password change is required on this account." });
+  const { current, password } = req.body ?? {};
+  if (!password || String(password).length < 12) return res.status(400).json({ error: "New password must be at least 12 characters." });
+  if (!current || !(await bcrypt.compare(String(current), user.passwordHash))) return res.status(400).json({ error: "Current password is incorrect." });
+  // Must run before the tokenVersion bump below: recordAudit() re-resolves the
+  // actor via currentUser(req), which re-checks this same request's JWT "tv"
+  // claim against user.tokenVersion — bumping that first would invalidate the
+  // very session that's making this request, misattributing the entry to
+  // "System" instead of the student.
+  await recordAudit(req, "account.first_password_set", user.name);
+  user.passwordHash = await bcrypt.hash(String(password), BCRYPT_COST);
+  user.mustChangePassword = false;
+  user.tokenVersion = (user.tokenVersion ?? 0) + 1; // revoke the temp-password-derived session
+  await db.upsert("users", user);
+  issueSession(res, user);
+  res.json({ ok: true });
+});
+
 // Self-service account profile (name, contact, avatar, notification prefs).
 app.patch("/api/me/profile", requireAuth, async (req, res) => {
   const user = currentUser(req)!;
@@ -4198,6 +4464,52 @@ app.get("/api/admin/integrity", requirePermission("results.view"), async (_req, 
   }
   const byType = [...groups.values()].sort((a, b) => b.count - a.count);
 
+  // Calculator usage — reporting only, not a violation indicator (calculator
+  // events are info-severity and never appear in `flaggedAll`/`byType` above).
+  // Pairs each open with the next close on the same attempt to estimate time spent.
+  const calcUsage = new Map<string, { opens: number; totalMs: number }>();
+  for (const a of submitted) {
+    const calcEvents = (evMap.get(a.id) ?? [])
+      .filter((e) => e.type === "calculator_open" || e.type === "calculator_close")
+      .sort((x, y) => x.at.localeCompare(y.at));
+    if (calcEvents.length === 0) continue;
+    const name = userName(a.candidateId);
+    const entry = calcUsage.get(name) ?? { opens: 0, totalMs: 0 };
+    let openAt: number | null = null;
+    for (const e of calcEvents) {
+      if (e.type === "calculator_open") { entry.opens += 1; openAt = new Date(e.at).getTime(); }
+      else if (openAt !== null) { entry.totalMs += Math.max(0, new Date(e.at).getTime() - openAt); openAt = null; }
+    }
+    calcUsage.set(name, entry);
+  }
+  const calculatorUsage = [...calcUsage.entries()]
+    .map(([candidate, v]) => ({ candidate, opens: v.opens, minutes: Math.round((v.totalMs / 60_000) * 10) / 10 }))
+    .sort((a, b) => b.opens - a.opens);
+
+  // Media usage — reporting only, not a violation indicator (media_play/pause/
+  // replay are info-severity and never appear in flaggedAll/byType above).
+  // Pairs each play with the next pause on the same attempt to estimate time
+  // spent, same approach as calculator usage above.
+  const mediaUsageMap = new Map<string, { plays: number; replays: number; totalMs: number }>();
+  for (const a of submitted) {
+    const mediaEvents = (evMap.get(a.id) ?? [])
+      .filter((e) => e.type === "media_play" || e.type === "media_pause" || e.type === "media_replay")
+      .sort((x, y) => x.at.localeCompare(y.at));
+    if (mediaEvents.length === 0) continue;
+    const name = userName(a.candidateId);
+    const entry = mediaUsageMap.get(name) ?? { plays: 0, replays: 0, totalMs: 0 };
+    let playAt: number | null = null;
+    for (const e of mediaEvents) {
+      if (e.type === "media_play") { entry.plays += 1; playAt = new Date(e.at).getTime(); }
+      else if (e.type === "media_pause" && playAt !== null) { entry.totalMs += Math.max(0, new Date(e.at).getTime() - playAt); playAt = null; }
+      else if (e.type === "media_replay") entry.replays += 1;
+    }
+    mediaUsageMap.set(name, entry);
+  }
+  const mediaUsage = [...mediaUsageMap.entries()]
+    .map(([candidate, v]) => ({ candidate, plays: v.plays, replays: v.replays, minutes: Math.round((v.totalMs / 60_000) * 10) / 10 }))
+    .sort((a, b) => b.plays - a.plays);
+
   const integrities = perAttempt.map((p) => p.integrity);
   res.json({
     kpis: {
@@ -4209,6 +4521,8 @@ app.get("/api/admin/integrity", requirePermission("results.view"), async (_req, 
       flaggedSessions: perAttempt.filter((p) => p.flags > 0).length,
     },
     byType,
+    calculatorUsage,
+    mediaUsage,
     flagged: perAttempt.sort((a, b) => a.integrity - b.integrity || b.flags - a.flags),
   });
 });
@@ -4498,6 +4812,10 @@ app.patch("/api/admin/settings", requirePermission("system.settings"), async (re
   if (b.digestFrequency === "off" || b.digestFrequency === "daily" || b.digestFrequency === "weekly") s.digestFrequency = b.digestFrequency;
   if (typeof b.auditRetentionDays === "number") s.auditRetentionDays = Math.max(0, Math.min(3650, Math.floor(b.auditRetentionDays)));
   if (typeof b.smsReminders === "boolean") s.smsReminders = b.smsReminders;
+  if (Array.isArray(b.reliabilityAlertEmails)) s.reliabilityAlertEmails = (b.reliabilityAlertEmails as unknown[]).filter((v): v is string => typeof v === "string" && v.trim().length > 0).map((v) => v.trim());
+  if (Array.isArray(b.reliabilityAlertSmsNumbers)) s.reliabilityAlertSmsNumbers = (b.reliabilityAlertSmsNumbers as unknown[]).filter((v): v is string => typeof v === "string" && v.trim().length > 0).map((v) => v.trim());
+  if (typeof b.reliabilityNotifyOnDegraded === "boolean") s.reliabilityNotifyOnDegraded = b.reliabilityNotifyOnDegraded;
+  if (typeof b.mediaAssessmentEnabled === "boolean") s.mediaAssessmentEnabled = b.mediaAssessmentEnabled;
   if (b.learningStructure && typeof b.learningStructure === "object") {
     const ls = b.learningStructure as Record<string, unknown>;
     const current = s.learningStructure ?? DEFAULT_LEARNING_STRUCTURE;
@@ -4686,6 +5004,348 @@ app.get("/api/admin/system-health", requirePermission("system.settings"), async 
     uptimeSeconds: Math.round(process.uptime()),
     serverTime: now(),
   });
+});
+
+// ---- admin: Status & Reliability Center ----
+const RELIABILITY_DEPS = (): ReliabilityDeps => ({ dispatchWebhook, sendMail, sendSms, attemptDeadlineMs });
+const SCORED_SUBSYSTEMS: ReliabilitySubsystemKey[] = RELIABILITY_SUBSYSTEMS.filter((s) => s !== "api");
+
+app.get("/api/admin/reliability/summary", requirePermission("system.reliability_view"), async (_req, res) => {
+  const nowIso = new Date().toISOString();
+  const since5min = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const since24h = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+
+  const recent = await reliabilityStore.forWindow(null, since5min, nowIso);
+  const latestBySubsystem = new Map<string, (typeof recent)[number]>();
+  for (const s of recent) latestBySubsystem.set(s.subsystem, s); // ascending order — last write wins = most recent
+
+  const statuses = SCORED_SUBSYSTEMS.map((s) => latestBySubsystem.get(s)?.status ?? "operational");
+  const overallStatus = statuses.includes("down") ? "down" : statuses.includes("degraded") ? "degraded" : "operational";
+
+  const samples24h = (await reliabilityStore.forWindow(null, since24h, nowIso)).filter((s) => SCORED_SUBSYSTEMS.includes(s.subsystem));
+  const uptimePct24h = samples24h.length
+    ? ((samples24h.filter((s) => s.status === "operational").length + 0.5 * samples24h.filter((s) => s.status === "degraded").length) / samples24h.length) * 100
+    : 100;
+
+  const apiLatencies = (await reliabilityStore.forWindow("api", since24h, nowIso)).map((s) => s.avgLatencyMs).filter((v): v is number => v != null);
+  const avgResponseMs = apiLatencies.length ? Math.round(apiLatencies.reduce((a, b) => a + b, 0) / apiLatencies.length) : null;
+
+  res.json({
+    overallStatus,
+    uptimePct24h: Math.round(uptimePct24h * 100) / 100,
+    avgResponseMs,
+    activeIncidents: listIncidents().filter((i) => i.status !== "resolved").length,
+    lastUpdated: recent.length ? recent[recent.length - 1].at : null,
+  });
+});
+
+app.get("/api/admin/reliability/subsystems", requirePermission("system.reliability_view"), async (_req, res) => {
+  const nowIso = new Date().toISOString();
+  const since5min = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const since24h = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+  const today = nowIso.slice(0, 10);
+  const date30dAgo = new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
+  const incidents = listIncidents();
+
+  const out = [];
+  for (const subsystem of RELIABILITY_SUBSYSTEMS) {
+    const recent = await reliabilityStore.forWindow(subsystem, since5min, nowIso);
+    const latest = recent[recent.length - 1] ?? null;
+
+    const day = await reliabilityStore.forWindow(subsystem, since24h, nowIso);
+    const latencies = day.map((s) => s.avgLatencyMs).filter((v): v is number => v != null);
+    const avgResponseMs = latencies.length ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length) : null;
+
+    const rollups = await reliabilityRollupStore.forWindow(subsystem, date30dAgo, today);
+    const uptimePct30d = rollups.length ? rollups.reduce((a, r) => a + r.uptimePct, 0) / rollups.length : 100;
+
+    const lastIncident = incidents.find((i) => i.subsystem === subsystem) ?? null;
+
+    out.push({
+      subsystem, status: latest?.status ?? "operational",
+      uptimePct30d: Math.round(uptimePct30d * 100) / 100,
+      avgResponseMs,
+      lastIncidentAt: lastIncident?.openedAt ?? null,
+      lastCheckedAt: latest?.at ?? null,
+    });
+  }
+  res.json({ subsystems: out });
+});
+
+const UPTIME_RANGE_DAYS: Record<string, number> = { "24h": 1, "7d": 7, "30d": 30, "90d": 90, "365d": 365 };
+app.get("/api/admin/reliability/uptime", requirePermission("system.reliability_view"), async (req, res) => {
+  const range = typeof req.query.range === "string" && req.query.range in UPTIME_RANGE_DAYS ? req.query.range : "30d";
+  const subsystem = typeof req.query.subsystem === "string" && (RELIABILITY_SUBSYSTEMS as readonly string[]).includes(req.query.subsystem)
+    ? (req.query.subsystem as ReliabilitySubsystemKey) : null;
+  const incidents = listIncidents();
+
+  if (range === "24h") {
+    const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+    const samples = await reliabilityStore.forWindow(subsystem, since, new Date().toISOString());
+    const byHour = new Map<string, typeof samples>();
+    for (const s of samples) {
+      const hour = s.at.slice(0, 13);
+      (byHour.get(hour) ?? byHour.set(hour, []).get(hour)!).push(s);
+    }
+    const bars = [...byHour.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([hour, hourSamples]) => {
+      const agg = aggregateDailyRollup(hourSamples);
+      return { period: `${hour}:00`, uptimePct: Math.round(agg.uptimePct * 100) / 100, avgLatencyMs: agg.avgLatencyMs, requestCount: agg.requestCount, incidents: 0 };
+    });
+    return res.json({ range, bars });
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const fromDate = new Date(Date.now() - UPTIME_RANGE_DAYS[range] * 86_400_000).toISOString().slice(0, 10);
+  const rollups = await reliabilityRollupStore.forWindow(subsystem, fromDate, today);
+  const byDate = new Map<string, typeof rollups>();
+  for (const r of rollups) (byDate.get(r.date) ?? byDate.set(r.date, []).get(r.date)!).push(r);
+
+  // Emit one bar per calendar day in the range — including days with no rollup
+  // data at all — so the timeline renders as a continuous strip (matching a
+  // standard status-page uptime history) instead of silently collapsing gaps.
+  const bars: { period: string; uptimePct: number | null; avgLatencyMs: number | null; requestCount: number; incidents: number }[] = [];
+  for (let d = new Date(`${fromDate}T00:00:00.000Z`); d.getTime() <= new Date(`${today}T00:00:00.000Z`).getTime(); d.setUTCDate(d.getUTCDate() + 1)) {
+    const date = d.toISOString().slice(0, 10);
+    const dayRollups = byDate.get(date);
+    const dayIncidents = incidents.filter((i) => i.openedAt.slice(0, 10) === date && (!subsystem || i.subsystem === subsystem));
+    if (!dayRollups || dayRollups.length === 0) {
+      bars.push({ period: date, uptimePct: null, avgLatencyMs: null, requestCount: 0, incidents: dayIncidents.length });
+      continue;
+    }
+    const totalSamples = dayRollups.reduce((a, r) => a + r.sampleCount, 0);
+    const uptimePct = totalSamples ? dayRollups.reduce((a, r) => a + r.uptimePct * r.sampleCount, 0) / totalSamples : 100;
+    const latencies = dayRollups.map((r) => r.avgLatencyMs).filter((v): v is number => v != null);
+    bars.push({
+      period: date, uptimePct: Math.round(uptimePct * 100) / 100,
+      avgLatencyMs: latencies.length ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length) : null,
+      requestCount: dayRollups.reduce((a, r) => a + r.requestCount, 0), incidents: dayIncidents.length,
+    });
+  }
+  res.json({ range, bars });
+});
+
+const RESPONSE_TIME_RANGE_DAYS: Record<string, number> = { "1h": 1 / 24, "24h": 1, "7d": 7, "30d": 30 };
+app.get("/api/admin/reliability/response-time", requirePermission("system.reliability_view"), async (req, res) => {
+  const range = typeof req.query.range === "string" && req.query.range in RESPONSE_TIME_RANGE_DAYS ? req.query.range : "24h";
+  const since = new Date(Date.now() - RESPONSE_TIME_RANGE_DAYS[range] * 86_400_000).toISOString();
+  const samples = await reliabilityStore.forWindow("api", since, new Date().toISOString());
+  const points = samples.filter((s) => s.avgLatencyMs != null)
+    .map((s) => ({ at: s.at, avg: s.avgLatencyMs, min: s.minLatencyMs, max: s.maxLatencyMs, p95: s.p95LatencyMs, p99: s.p99LatencyMs }));
+  const avgs = points.map((p) => p.avg).filter((v): v is number => v != null);
+  const mins = points.map((p) => p.min).filter((v): v is number => v != null);
+  const maxs = points.map((p) => p.max).filter((v): v is number => v != null);
+  const p95s = points.map((p) => p.p95).filter((v): v is number => v != null);
+  const p99s = points.map((p) => p.p99).filter((v): v is number => v != null);
+  res.json({
+    range, points,
+    summary: {
+      avg: avgs.length ? Math.round(avgs.reduce((a, b) => a + b, 0) / avgs.length) : null,
+      min: mins.length ? Math.min(...mins) : null,
+      max: maxs.length ? Math.max(...maxs) : null,
+      p95: p95s.length ? Math.round(p95s.reduce((a, b) => a + b, 0) / p95s.length) : null,
+      p99: p99s.length ? Math.round(p99s.reduce((a, b) => a + b, 0) / p99s.length) : null,
+    },
+  });
+});
+
+app.get("/api/admin/reliability/live", requirePermission("system.reliability_view"), async (_req, res) => {
+  const since2min = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+  const recent = await reliabilityStore.forWindow("api", since2min, new Date().toISOString());
+  const latest = recent[recent.length - 1] ?? null;
+  res.json({
+    ...getLiveMetrics(),
+    requestsLastMinute: latest?.requestCount ?? 0,
+    errorRatePct: latest && latest.requestCount ? Math.round((latest.errorCount / latest.requestCount) * 10000) / 100 : 0,
+    jobs: jobStatuses(),
+  });
+});
+
+app.get("/api/admin/reliability/score", requirePermission("system.reliability_view"), async (_req, res) => {
+  const today = new Date().toISOString().slice(0, 10);
+  const date30dAgo = new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
+
+  let uptimeSum = 0;
+  for (const s of SCORED_SUBSYSTEMS) {
+    const rollups = await reliabilityRollupStore.forWindow(s, date30dAgo, today);
+    uptimeSum += rollups.length ? rollups.reduce((a, r) => a + r.uptimePct, 0) / rollups.length : 100;
+  }
+  const uptimePct30d = uptimeSum / SCORED_SUBSYSTEMS.length;
+
+  const since24h = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+  const p95s = (await reliabilityStore.forWindow("api", since24h, new Date().toISOString())).map((s) => s.p95LatencyMs).filter((v): v is number => v != null);
+  const p95LatencyMs = p95s.length ? p95s.reduce((a, b) => a + b, 0) / p95s.length : null;
+
+  const since30d = new Date(Date.now() - 30 * 86_400_000).toISOString();
+  const resolved30d = listIncidents().filter((i) => i.status === "resolved" && i.resolvedAt && i.resolvedAt >= since30d);
+  const resolutionMinutes = resolved30d.map((i) => (new Date(i.resolvedAt!).getTime() - new Date(i.openedAt).getTime()) / 60_000);
+  const avgResolutionMinutes = resolutionMinutes.length ? resolutionMinutes.reduce((a, b) => a + b, 0) / resolutionMinutes.length : null;
+  const lostAttempts30d = resolved30d.reduce((a, i) => a + (i.impact?.attemptsLost ?? 0), 0);
+
+  res.json(computeReliabilityScore({
+    uptimePct30d, p95LatencyMs, targetP95Ms: Number(process.env.RELIABILITY_TARGET_P95_MS ?? 500),
+    avgResolutionMinutes, targetResolutionMinutes: Number(process.env.RELIABILITY_TARGET_RESOLUTION_MIN ?? 30),
+    lostAttempts30d,
+  }));
+});
+
+const INCIDENT_RANGE_DAYS: Record<string, number> = { "7d": 7, "30d": 30, "90d": 90, year: 365 };
+app.get("/api/admin/reliability/incidents", requirePermission("system.reliability_view"), (req, res) => {
+  const range = typeof req.query.range === "string" ? req.query.range : null;
+  let incidents = listIncidents();
+  if (range === "today") {
+    const today = new Date().toISOString().slice(0, 10);
+    incidents = incidents.filter((i) => i.openedAt.slice(0, 10) === today);
+  } else if (range === "yesterday") {
+    const y = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+    incidents = incidents.filter((i) => i.openedAt.slice(0, 10) === y);
+  } else if (range && range in INCIDENT_RANGE_DAYS) {
+    const cutoff = new Date(Date.now() - INCIDENT_RANGE_DAYS[range] * 86_400_000).toISOString();
+    incidents = incidents.filter((i) => i.openedAt >= cutoff);
+  }
+  res.json({ incidents });
+});
+
+app.get("/api/admin/reliability/incidents.csv", requirePermission("system.reliability_view"), (_req, res) => {
+  const rows = listIncidents().map((i) => [
+    i.id, i.title, i.subsystem, i.severity, i.status, i.openedAt, i.resolvedAt ?? "",
+    i.resolvedAt ? Math.round((new Date(i.resolvedAt).getTime() - new Date(i.openedAt).getTime()) / 60_000) : "",
+    i.autoResolved ? "auto" : "manual",
+    i.impact?.affectedExamIds.length ?? 0, i.impact?.studentsAffected ?? 0, i.impact?.attemptsLost ?? 0, i.impact?.examIntegrityVerdict ?? "",
+  ]);
+  sendCsv(res, "reliability-incidents.csv", toCsv(
+    ["ID", "Title", "Subsystem", "Severity", "Status", "Opened", "Resolved", "DurationMinutes", "ResolutionType", "AffectedExams", "StudentsAffected", "LostAttempts", "IntegrityVerdict"],
+    rows));
+});
+
+app.get("/api/admin/reliability/incidents/:id", requirePermission("system.reliability_view"), (req, res) => {
+  const incident = getIncident(String(req.params.id));
+  if (!incident) return res.status(404).json({ error: "Incident not found." });
+  res.json({ incident });
+});
+
+app.post("/api/admin/reliability/incidents/:id/resolve", requirePermission("system.reliability_manage"), async (req, res) => {
+  const actor = currentUser(req)!;
+  const incident = await manuallyResolveIncident(String(req.params.id), RELIABILITY_DEPS(), actor.name);
+  if (!incident) return res.status(404).json({ error: "Incident not found or already resolved." });
+  await recordAudit(req, "incident.resolved_manually", incident.title);
+  res.json({ incident });
+});
+
+app.post("/api/admin/reliability/run-now", requirePermission("system.reliability_manage"), async (req, res) => {
+  const result = await runHealthCheckSweep(RELIABILITY_DEPS());
+  await recordAudit(req, "reliability.run_now", `Manual health check (${result.opened.length} opened, ${result.resolved.length} resolved)`);
+  res.json(result);
+});
+
+function reliabilityImpactLines(incident: ReliabilityIncident): string[] {
+  const impact = incident.impact;
+  if (!impact) return [];
+  return [
+    `Affected exams: ${impact.affectedExamIds.length}, students affected: ${impact.studentsAffected}`,
+    `Auto-recovered: ${impact.attemptsAutoRecovered}, manual review needed: ${impact.attemptsRequiringManualRecovery}, lost: ${impact.attemptsLost}`,
+    `Integrity verdict: ${impact.examIntegrityVerdict} — ${impact.examIntegrityBasis}`,
+  ];
+}
+
+app.post("/api/admin/reliability/incidents/:id/ai-summary", requirePermission("system.reliability_manage"), async (req, res) => {
+  if (!aiEnabled()) return res.status(503).json({ error: "AI is not configured. Set ANTHROPIC_API_KEY or AI_BASE_URL+AI_API_KEY on the server." });
+  const incident = getIncident(String(req.params.id));
+  if (!incident) return res.status(404).json({ error: "Incident not found." });
+  const summary = [
+    `Incident: ${incident.title} (${incident.severity})`,
+    `Subsystem: ${incident.subsystem}`,
+    `Opened: ${incident.openedAt}`, `Resolved: ${incident.resolvedAt ?? "still open"}`,
+    ...reliabilityImpactLines(incident),
+  ].join("\n");
+  try {
+    res.json(await narrateTrend(summary));
+  } catch (e) {
+    logger.error({ err: String(e) }, "incident AI summary failed");
+    res.status(502).json({ error: "Couldn't reach the AI service right now — please try again." });
+  }
+});
+
+app.post("/api/admin/reliability/ai-insights", requirePermission("system.reliability_manage"), async (_req, res) => {
+  if (!aiEnabled()) return res.status(503).json({ error: "AI is not configured. Set ANTHROPIC_API_KEY or AI_BASE_URL+AI_API_KEY on the server." });
+  const since30d = new Date(Date.now() - 30 * 86_400_000).toISOString();
+  const resolved30d = listIncidents().filter((i) => i.status === "resolved" && i.resolvedAt && i.resolvedAt >= since30d);
+  const lostTotal = resolved30d.reduce((a, i) => a + (i.impact?.attemptsLost ?? 0), 0);
+  const today = new Date().toISOString().slice(0, 10);
+  const date30dAgo = since30d.slice(0, 10);
+  let uptimeSum = 0;
+  for (const s of SCORED_SUBSYSTEMS) {
+    const rollups = await reliabilityRollupStore.forWindow(s, date30dAgo, today);
+    uptimeSum += rollups.length ? rollups.reduce((a, r) => a + r.uptimePct, 0) / rollups.length : 100;
+  }
+  const avgUptime = uptimeSum / SCORED_SUBSYSTEMS.length;
+  const summary = [
+    `Trailing 30 days: ${resolved30d.length} incident(s) resolved.`,
+    `Average subsystem uptime: ${avgUptime.toFixed(2)}%.`,
+    `Total exam attempts lost across all incidents: ${lostTotal}.`,
+    ...resolved30d.map((i) => `- ${i.title} (${i.subsystem}, ${i.severity}): opened ${i.openedAt}, resolved ${i.resolvedAt}, ${i.impact?.attemptsLost ?? 0} lost attempt(s).`),
+  ].join("\n");
+  try {
+    res.json(await narrateTrend(summary));
+  } catch (e) {
+    logger.error({ err: String(e) }, "reliability AI insights failed");
+    res.status(502).json({ error: "Couldn't reach the AI service right now — please try again." });
+  }
+});
+
+// ---- Public Status Page — no auth. Shows only what the spec allows: overall
+// status, uptime %, per-subsystem status, and incident history. Deliberately
+// separate endpoints (not the admin ones with a "public mode" flag) so a
+// future change to the admin routes can't accidentally leak internal
+// diagnostics, latency numbers, the reliability score, or exam/student impact
+// data onto an unauthenticated page — toPublicIncident() whitelists fields
+// explicitly rather than spreading the full incident object. ----
+app.get("/api/status/summary", async (_req, res) => {
+  const nowIso = new Date().toISOString();
+  const since5min = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const today = nowIso.slice(0, 10);
+  const date30dAgo = new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
+
+  const recent = await reliabilityStore.forWindow(null, since5min, nowIso);
+  const latestBySubsystem = new Map<string, (typeof recent)[number]>();
+  for (const s of recent) latestBySubsystem.set(s.subsystem, s);
+  const statuses = SCORED_SUBSYSTEMS.map((s) => latestBySubsystem.get(s)?.status ?? "operational");
+  const overallStatus = statuses.includes("down") ? "down" : statuses.includes("degraded") ? "degraded" : "operational";
+
+  const subsystems = [];
+  let uptimeSum = 0;
+  for (const s of SCORED_SUBSYSTEMS) {
+    const rollups = await reliabilityRollupStore.forWindow(s, date30dAgo, today);
+    const uptimePct30d = rollups.length ? rollups.reduce((a, r) => a + r.uptimePct, 0) / rollups.length : 100;
+    uptimeSum += uptimePct30d;
+    subsystems.push({ subsystem: subsystemLabel(s), status: latestBySubsystem.get(s)?.status ?? "operational", uptimePct30d: Math.round(uptimePct30d * 100) / 100 });
+  }
+
+  res.json({
+    overallStatus,
+    uptimePct30d: Math.round((uptimeSum / SCORED_SUBSYSTEMS.length) * 100) / 100,
+    activeIncidents: listIncidents().filter((i) => i.status !== "resolved").length,
+    subsystems,
+    lastUpdated: recent.length ? recent[recent.length - 1].at : null,
+  });
+});
+
+app.get("/api/status/incidents", (_req, res) => {
+  res.json({ incidents: listIncidents().slice(0, 50).map(toPublicIncident) });
+});
+
+app.get("/api/status/uptime", async (req, res) => {
+  const range = typeof req.query.range === "string" && req.query.range in UPTIME_RANGE_DAYS ? req.query.range : "90d";
+  const today = new Date().toISOString().slice(0, 10);
+  const fromDate = new Date(Date.now() - UPTIME_RANGE_DAYS[range] * 86_400_000).toISOString().slice(0, 10);
+
+  const perDate = new Map<string, number[]>();
+  for (const s of SCORED_SUBSYSTEMS) {
+    const rollups = await reliabilityRollupStore.forWindow(s, fromDate, today);
+    for (const r of rollups) (perDate.get(r.date) ?? perDate.set(r.date, []).get(r.date)!).push(r.uptimePct);
+  }
+  const bars = [...perDate.entries()].sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, pcts]) => ({ period: date, uptimePct: Math.round((pcts.reduce((a, b) => a + b, 0) / pcts.length) * 100) / 100 }));
+  res.json({ range, bars });
 });
 
 // ---- admin: Dashboard (aggregated overview) ----
@@ -5675,6 +6335,7 @@ app.post("/api/admin/classes/:id/import", requirePermission("students.manage"), 
       age: row?.age !== undefined && row?.age !== "" && Number.isFinite(ageNum) ? ageNum : undefined,
       studentClass: typeof row?.studentClass === "string" && row.studentClass.trim() ? row.studentClass.trim() : (cls.name || undefined),
       phone: typeof row?.phone === "string" && row.phone.trim() ? encryptString(row.phone.trim()) : undefined,
+      mustChangePassword: true,
     };
     db.data!.users.push(user);
     createdUsers.push(user);
@@ -5882,6 +6543,10 @@ app.post("/api/admin/roles", requirePermission("roles.manage"), validate(customR
     return res.status(409).json({ error: "A role with that name already exists." });
   }
   const actor = currentUser(req)!;
+  // Ceiling check — see permissionOverreach() in auth.ts.
+  const grantedPerms = [...permissions, ...(parentRoleId ? resolveCustomRolePermissions(parentRoleId) : [])] as PermissionKey[];
+  const overreach = permissionOverreach(actor, grantedPerms);
+  if (overreach.length) return res.status(403).json({ error: `You can't grant permission(s) you don't have: ${overreach.join(", ")}` });
   const role: CustomRole = {
     id: nanoid(10), name: name.trim(), description: description?.trim() || undefined,
     permissions: Array.from(new Set(permissions)), parentRoleId: parentRoleId || null, scope: scope ?? null,
@@ -5911,6 +6576,16 @@ app.patch("/api/admin/roles/:id", requirePermission("roles.manage"), validate(cu
   }
   if (name && db.data!.customRoles.some((r) => r.id !== role.id && r.name.toLowerCase() === name.trim().toLowerCase())) {
     return res.status(409).json({ error: "A role with that name already exists." });
+  }
+  // Ceiling check against the resulting (post-update) permission set — see
+  // permissionOverreach() in auth.ts.
+  {
+    const actor = currentUser(req)!;
+    const effectivePerms = (permissions !== undefined ? permissions : role.permissions) as PermissionKey[];
+    const effectiveParent = parentRoleId !== undefined ? parentRoleId : role.parentRoleId;
+    const grantedPerms = [...effectivePerms, ...(effectiveParent ? resolveCustomRolePermissions(effectiveParent) : [])];
+    const overreach = permissionOverreach(actor, grantedPerms);
+    if (overreach.length) return res.status(403).json({ error: `You can't grant permission(s) you don't have: ${overreach.join(", ")}` });
   }
   const beforePerms = role.permissions;
   if (name !== undefined) role.name = name.trim();
@@ -5963,6 +6638,15 @@ app.patch("/api/admin/team/:id/custom-role", requirePermission("roles.team_manag
   const { customRoleId, expiresAt } = req.body as { customRoleId: string | null; expiresAt?: string | null };
   if (customRoleId && !db.data!.customRoles.some((r) => r.id === customRoleId)) {
     return res.status(400).json({ error: "Role not found." });
+  }
+  // Ceiling check: assigning a role that grants more than the actor themselves
+  // currently holds is a privilege-escalation path — whether the target is
+  // someone else or (critically) the actor's own account, which this endpoint
+  // otherwise allows with no self-assignment guard at all. See auth.ts.
+  if (customRoleId) {
+    const actor = currentUser(req)!;
+    const overreach = permissionOverreach(actor, resolveCustomRolePermissions(customRoleId));
+    if (overreach.length) return res.status(403).json({ error: "You can't assign a role that grants permissions you don't have." });
   }
   u.customRoleId = customRoleId || null;
   u.roleExpiresAt = customRoleId ? (expiresAt || null) : null;
@@ -6023,6 +6707,7 @@ if (env.jwtIsDefault) {
 await initDb();
 scheduleRetention();
 scheduleBackup();
+scheduleReliability({ dispatchWebhook, sendMail, sendSms, attemptDeadlineMs });
 // Verify SMTP at startup so misconfiguration shows up immediately in the log.
 verifySmtp().then(({ ok, error }) => {
   if (!ok) logger.warn({ error }, "⚠️  SMTP verification failed — check SMTP_HOST/PORT/USER/PASS");
@@ -6069,8 +6754,17 @@ async function autoSubmitOverdue() {
     logger.info({ attemptId: attempt.id }, "auto-submitted overdue attempt (hard close)");
   }
 }
+function trackedSweep(jobName: string, run: () => Promise<unknown>, failLog: string) {
+  const t0 = performance.now();
+  return run()
+    .then(() => recordJobRun(jobName, true, performance.now() - t0))
+    .catch((e) => {
+      recordJobRun(jobName, false, performance.now() - t0, e instanceof Error ? e.message : String(e));
+      logger.error({ err: String(e) }, failLog);
+    });
+}
 const autoSubmitTimer = setInterval(() => {
-  autoSubmitOverdue().catch((e) => logger.error({ err: String(e) }, "auto-submit sweep failed"));
+  void trackedSweep("autoSubmitOverdue", autoSubmitOverdue, "auto-submit sweep failed");
 }, 60_000);
 autoSubmitTimer.unref?.();
 
@@ -6088,24 +6782,24 @@ async function sweepGeofenceViolations() {
   }
 }
 const geofenceSweepTimer = setInterval(() => {
-  sweepGeofenceViolations().catch((e) => logger.error({ err: String(e) }, "geofence sweep failed"));
+  void trackedSweep("geofenceSweep", sweepGeofenceViolations, "geofence sweep failed");
 }, 30_000);
 geofenceSweepTimer.unref?.();
 
 // Send 24h / 1h "starting soon" reminders for confirmed upcoming exams.
 const reminderTimer = setInterval(() => {
-  sendExamReminders().catch((e) => logger.error({ err: String(e) }, "reminder sweep failed"));
+  void trackedSweep("examReminders", sendExamReminders, "reminder sweep failed");
 }, 300_000);
 reminderTimer.unref?.();
 
 // Send the daily/weekly admin summary digest when due (checked hourly).
 const digestTimer = setInterval(() => {
-  digestSweep().catch((e) => logger.error({ err: String(e) }, "digest sweep failed"));
+  void trackedSweep("adminDigest", digestSweep, "digest sweep failed");
 }, 3_600_000);
 digestTimer.unref?.();
 
 const reportTimer = setInterval(() => {
-  reportSweep().catch((e) => logger.error({ err: String(e) }, "report sweep failed"));
+  void trackedSweep("scheduledReports", reportSweep, "report sweep failed");
 }, 3_600_000);
 reportTimer.unref?.();
 
@@ -6119,10 +6813,12 @@ async function shutdown(signal: string) {
   logger.info({ signal }, "shutting down");
   stopRetention();
   stopBackup();
+  stopReliability();
   clearInterval(autoSubmitTimer);
   clearInterval(geofenceSweepTimer);
   clearInterval(reminderTimer);
   clearInterval(digestTimer);
+  clearInterval(reportTimer); // was previously missing from this list — a pre-existing gap, fixed in passing
 
   // Both the graceful path (server.close()'s callback, once every open
   // connection has drained) and the hard-cap timeout below must close the

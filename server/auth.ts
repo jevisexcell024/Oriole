@@ -17,6 +17,7 @@ export function toSafeUser(u: User): SafeUser {
     twoFactorEnabled: !!u.twoFactorEnabled,
     customRoleId: u.customRoleId ?? null,
     permissions: resolvePermissions(u),
+    mustChangePassword: !!u.mustChangePassword,
   };
 }
 
@@ -112,8 +113,10 @@ function isExpired(iso: string | null | undefined): boolean {
 
 /** Resolves a CustomRole's own + inherited permissions. `seen` guards against a
  *  parentRoleId cycle (which the create/update endpoints should already reject,
- *  but this keeps resolution safe even if bad data ever slips in). */
-function resolveCustomRolePermissions(roleId: string, seen: Set<string> = new Set()): PermissionKey[] {
+ *  but this keeps resolution safe even if bad data ever slips in). Exported so
+ *  role-management endpoints can ceiling-check a role's grants against the
+ *  acting user's own permissions before creating/assigning it (see index.ts). */
+export function resolveCustomRolePermissions(roleId: string, seen: Set<string> = new Set()): PermissionKey[] {
   if (seen.has(roleId)) return [];
   seen.add(roleId);
   const sysParent = parseSystemParentId(roleId);
@@ -136,6 +139,19 @@ export function resolvePermissions(user: User): PermissionKey[] {
 
 export function hasPermission(user: User, key: PermissionKey): boolean {
   return resolvePermissions(user).includes(key);
+}
+
+/** Which of `grantedPerms` the actor does NOT themselves currently hold — empty
+ *  means the grant is within the actor's own ceiling. Used everywhere a user
+ *  with role-management permissions (roles.manage / roles.team_manage) tries
+ *  to create, update, or assign a custom role: without this check, someone
+ *  holding only those two keys could mint a role containing every permission
+ *  in the system and assign it to their own account, a full privilege
+ *  escalation to admin-equivalent access with no need to ever hold admin
+ *  permissions directly. */
+export function permissionOverreach(actor: User, grantedPerms: Iterable<PermissionKey>): PermissionKey[] {
+  const actorPerms = new Set(resolvePermissions(actor));
+  return [...new Set(grantedPerms)].filter((p) => !actorPerms.has(p));
 }
 
 export function requirePermission(key: PermissionKey) {

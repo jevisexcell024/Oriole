@@ -10,6 +10,7 @@ delete process.env.DATABASE_URL;
 let db: typeof import("../server/db.ts")["db"];
 let resolvePermissions: typeof import("../server/auth.ts")["resolvePermissions"];
 let hasPermission: typeof import("../server/auth.ts")["hasPermission"];
+let permissionOverreach: typeof import("../server/auth.ts")["permissionOverreach"];
 
 beforeAll(async () => {
   const dbMod = await import("../server/db.ts");
@@ -18,6 +19,7 @@ beforeAll(async () => {
   const authMod = await import("../server/auth.ts");
   resolvePermissions = authMod.resolvePermissions;
   hasPermission = authMod.hasPermission;
+  permissionOverreach = authMod.permissionOverreach;
 }, 30000);
 
 afterAll(async () => { await db.close(); });
@@ -74,6 +76,25 @@ describe("permission resolution (server/auth.ts)", () => {
     const perms = resolvePermissions(user("admin"));
     expect(perms).toContain("communication.manage");
     expect(perms).toContain("system.audit_log");
+  });
+
+  // Status & Reliability Center: new system.reliability_view/_manage keys,
+  // same "admin gets everything, facilitator/proctor get nothing by default"
+  // pattern as system.settings/system.audit_log (no prior endpoint existed
+  // for this feature, so there's no legacy behavior to preserve — it's purely
+  // additive, gated the same way the rest of "system" is).
+  it("gives admin system.reliability_view and system.reliability_manage", () => {
+    const perms = resolvePermissions(user("admin"));
+    expect(perms).toContain("system.reliability_view");
+    expect(perms).toContain("system.reliability_manage");
+  });
+
+  it("gives neither facilitator nor proctor any reliability permission by default", () => {
+    for (const role of ["facilitator", "proctor"] as const) {
+      const perms = resolvePermissions(user(role));
+      expect(perms).not.toContain("system.reliability_view");
+      expect(perms).not.toContain("system.reliability_manage");
+    }
   });
 
   // Batch 3 (Students + Classes) uncovered a real split in the existing code:
@@ -295,5 +316,59 @@ describe("permission resolution (server/auth.ts)", () => {
     db.data.customRoles.push(a, b);
     const u = user("candidate", { customRoleId: "role_cycle_a" });
     expect(() => resolvePermissions(u)).not.toThrow();
+  });
+});
+
+// Regression coverage for a real privilege-escalation chain found in a live
+// security review: POST /api/admin/roles (gated on roles.manage) accepted any
+// permission set with no ceiling against the caller's own permissions, and
+// PATCH /api/admin/team/:id/custom-role (gated on roles.team_manage) let the
+// caller assign any existing role — including to their own account, with no
+// self-assignment guard. Together, a staff member holding only those two keys
+// (a plausible "delegate role management" grant) could mint a role containing
+// every permission in the system and assign it to themselves, reaching full
+// admin-equivalent access without ever holding an admin permission directly.
+// permissionOverreach() is the fix both endpoints now call before writing.
+describe("permissionOverreach (privilege-escalation ceiling check)", () => {
+  it("is empty when every granted permission is already held", () => {
+    const actor = user("admin");
+    expect(permissionOverreach(actor, ["org.manage", "system.settings"])).toEqual([]);
+  });
+
+  it("flags a permission the actor does not hold", () => {
+    const actor = user("facilitator"); // has org.view, not org.manage
+    expect(permissionOverreach(actor, ["org.view", "org.manage"])).toEqual(["org.manage"]);
+  });
+
+  it("blocks a role-manager from minting a role above their own custom-role ceiling", () => {
+    // A facilitator delegated only roles.manage + roles.team_manage via a
+    // custom role — the exact shape of account that could exploit the bug.
+    const delegator: CustomRole = {
+      id: "role_delegator", name: "Role Delegate", permissions: ["roles.manage", "roles.team_manage"],
+      parentRoleId: null, createdAt: "", updatedAt: "",
+    };
+    db.data.customRoles.push(delegator);
+    const actor = user("facilitator", { customRoleId: delegator.id });
+    expect(hasPermission(actor, "roles.manage")).toBe(true);
+    expect(hasPermission(actor, "org.manage")).toBe(false);
+    // Attempting to mint a role containing org.manage/system.settings — the
+    // escalation payload — is rejected.
+    const overreach = permissionOverreach(actor, ["org.manage", "system.settings"]);
+    expect(overreach).toContain("org.manage");
+    expect(overreach).toContain("system.settings");
+  });
+
+  it("blocks self-assignment of a pre-existing role more powerful than the actor's own permissions", () => {
+    // An admin previously created a genuinely powerful role for legitimate
+    // delegation (e.g. a trusted IT contact) — its mere existence must not let
+    // an unrelated, lower-privileged role-manager assign it to themselves.
+    const powerful: CustomRole = {
+      id: "role_powerful", name: "IT Admin", permissions: ["org.manage", "students.delete"],
+      parentRoleId: null, createdAt: "", updatedAt: "",
+    };
+    db.data.customRoles.push(powerful);
+    const attacker = user("proctor"); // base role has neither org.manage nor students.delete
+    const overreach = permissionOverreach(attacker, ["org.manage", "students.delete"]);
+    expect(overreach.length).toBeGreaterThan(0);
   });
 });
