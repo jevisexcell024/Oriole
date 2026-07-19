@@ -1,6 +1,7 @@
 ﻿import { useEffect, useState } from "react";
 import { Webhook as WebhookIcon, KeyRound, Plus, Trash2, Loader2, Copy, Check, Send, Power } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
+import { ErrorBanner } from "@/components/ui";
 import { api } from "@/lib/api";
 import { PageHeader } from "@/components/PageHeader";
 import { useT } from "@/lib/i18n";
@@ -46,7 +47,7 @@ export function AdminIntegrations() {
     <AdminShell wide>
       <div className="fade-in max-w-4xl">
         <PageHeader title={t("aintg.title")} subtitle={t("aintg.subtitle")} />
-        {error && <p className="mt-6 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">{error}</p>}
+        {error && <ErrorBanner className="mt-6">{error}</ErrorBanner>}
         {!data ? <div className="mt-8 flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div> : (
           <>
             <h2 className="mt-6 flex items-center gap-2 text-sm font-semibold"><WebhookIcon className="h-4 w-4 text-[#c6ff34]" /> {t("aintg.webhooks")}</h2>

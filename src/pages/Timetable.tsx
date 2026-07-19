@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { CalendarClock, Clock, ShieldAlert, ChevronRight } from "lucide-react";
 import { Shell } from "@/components/Shell";
-import { Skeleton, EmptyState } from "@/components/ui";
+import { Skeleton, EmptyState, ErrorBanner } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { api } from "@/lib/api";
 import type { ExamListItem } from "@shared/types";
@@ -51,7 +51,7 @@ export function Timetable() {
       <div className="fade-in max-w-2xl">
         <PageHeader title="Timetable" subtitle="Your exam schedule, day by day." />
 
-        {error && <p className="mt-6 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">{error}</p>}
+        {error && <ErrorBanner className="mt-6">{error}</ErrorBanner>}
 
         {!items && !error && (
           <div className="mt-6 space-y-3">

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { CheckCircle2, XCircle, Hourglass, BarChart3, ChevronRight } from "lucide-react";
 import { Shell } from "@/components/Shell";
-import { TableSkeleton, EmptyState } from "@/components/ui";
+import { TableSkeleton, EmptyState, ErrorBanner } from "@/components/ui";
 import { api } from "@/lib/api";
 import { PageHeader } from "@/components/PageHeader";
 import { useT } from "@/lib/i18n";
@@ -27,7 +27,7 @@ export function MyResults() {
       <div className="fade-in">
         <PageHeader title={t("nav.myResults")} subtitle={t("res.subtitle")} />
 
-        {error && <p className="mt-6 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">{error}</p>}
+        {error && <ErrorBanner className="mt-6">{error}</ErrorBanner>}
         {!results && !error && <div className="card mt-6"><TableSkeleton rows={4} cells={2} /></div>}
 
         {results && results.length === 0 && (

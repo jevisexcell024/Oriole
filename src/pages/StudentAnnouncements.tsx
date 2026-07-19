@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Megaphone, AlertTriangle, Info, Bell, BellOff, Check, Pin } from "lucide-react";
 import { Shell } from "@/components/Shell";
-import { Skeleton, EmptyState } from "@/components/ui";
+import { Skeleton, EmptyState, ErrorBanner } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { PageHeader } from "@/components/PageHeader";
@@ -154,7 +154,7 @@ export function StudentAnnouncements() {
           }
         />
 
-        {error && <p className="mt-6 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">{error}</p>}
+        {error && <ErrorBanner className="mt-6">{error}</ErrorBanner>}
 
         {!anns && !error && (
           <div className="mt-6 space-y-3">

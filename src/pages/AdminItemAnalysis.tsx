@@ -2,6 +2,7 @@
 import { useNavigate, useParams } from "react-router-dom";
 import { Loader2, ArrowLeft, BarChart3, Users, Activity } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
+import { ErrorBanner } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { DataTable, type Column, type TableFilter } from "@/components/DataTable";
 import { api } from "@/lib/api";
@@ -17,7 +18,7 @@ interface Item {
 }
 interface Resp { exam: { id: string; title: string; code: string }; attempts: number; items: Item[]; alpha: number | null; }
 
-const TYPE_LABEL: Record<string, string> = { mcq: "MCQ", multi_select: "Multi", true_false: "T/F", short: "Text", numeric: "Numeric", essay: "Essay", code: "Code", matching: "Match", ordering: "Order", cloze: "Cloze", hotspot: "Hotspot", file_upload: "File" };
+const TYPE_LABEL: Record<string, string> = { mcq: "MCQ", multi_select: "Multi", true_false: "T/F", short: "Text", numeric: "Numeric", essay: "Essay", code: "Code", matching: "Match", ordering: "Order", cloze: "Cloze", hotspot: "Hotspot", file_upload: "File", media_comprehension: "Media" };
 const DIFF_CLS: Record<string, string> = { easy: "bg-emerald-500/15 text-emerald-500", medium: "bg-amber-500/15 text-amber-500", hard: "bg-rose-500/15 text-rose-500" };
 
 /** Interpretation band for Cronbach's alpha. */
@@ -80,7 +81,7 @@ export function AdminItemAnalysis() {
           actions={<button onClick={() => navigate("/admin/results")} className="btn btn-ghost-teal"><ArrowLeft className="h-4 w-4" /> {t("aitem.backResults")}</button>}
         />
 
-        {error && <p className="mt-6 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">{error}</p>}
+        {error && <ErrorBanner className="mt-6">{error}</ErrorBanner>}
         {!data && !error && <div className="mt-8 flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div>}
 
         {data && (

@@ -2,6 +2,7 @@
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Loader2, ArrowLeft, Copy, ShieldAlert, CheckCircle2, ExternalLink } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
+import { ErrorBanner } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { api } from "@/lib/api";
 import { clsx } from "clsx";
@@ -26,7 +27,7 @@ export function AdminSimilarity() {
           actions={<button onClick={() => navigate("/admin/results")} className="btn btn-ghost-teal"><ArrowLeft className="h-4 w-4" /> Back to Results</button>}
         />
 
-        {error && <p className="mt-6 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">{error}</p>}
+        {error && <ErrorBanner className="mt-6">{error}</ErrorBanner>}
         {!data && !error && <div className="mt-8 flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> Comparing answers…</div>}
 
         {data && (

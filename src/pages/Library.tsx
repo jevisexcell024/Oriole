@@ -4,8 +4,9 @@ import {
   BookOpen, NotebookPen, FileQuestion, Video, Music, ClipboardList, FlaskConical, GraduationCap, Newspaper,
   Presentation, Code2, FolderArchive, Link2, Library as LibraryIcon, ScrollText, ListTree, MoreHorizontal,
 } from "lucide-react";
+import DOMPurify from "dompurify";
 import { Shell } from "@/components/Shell";
-import { Skeleton, EmptyState } from "@/components/ui";
+import { Skeleton, EmptyState, ErrorBanner } from "@/components/ui";
 import { BookCover } from "@/components/BookCover";
 import { api } from "@/lib/api";
 import { useExamLock } from "@/lib/examLock";
@@ -98,7 +99,7 @@ export function Library() {
   return (
     <Shell>
       <div className="fade-in -m-4 sm:-m-6" style={{ background: "#08090a", minHeight: "calc(100vh - 69px)" }}>
-        {error && <p className="m-6 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">{error}</p>}
+        {error && <ErrorBanner className="m-6">{error}</ErrorBanner>}
 
         {!items && !error && (
           <div className="p-8">
@@ -456,7 +457,7 @@ function ResourceReaderOverlay({ book, kind, onClose }: { book: Book; kind: Read
         const mod = await import("mammoth");
         const mammoth = (mod as { default?: unknown }).default ?? mod;
         const { value: html } = await (mammoth as { convertToHtml: (i: { arrayBuffer: ArrayBuffer }) => Promise<{ value: string }> }).convertToHtml({ arrayBuffer });
-        if (!cancelled) setDocxHtml(html);
+        if (!cancelled) setDocxHtml(DOMPurify.sanitize(html));
       } catch (e) {
         if (!cancelled) setDocxError((e as Error).message);
       }

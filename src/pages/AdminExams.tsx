@@ -89,7 +89,7 @@ export function AdminExams() {
             <p style={{ fontFamily: DISPLAY, fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: "#9FA096" }}>
               Oriole · Exams
             </p>
-            <h1 className="mt-1 text-2xl font-bold tracking-tight" style={{ fontFamily: DISPLAY, color: "#ffffff" }}>
+            <h1 className="mt-1 text-2xl font-bold tracking-tight" style={{ color: "#ffffff" }}>
               {t("aex.title")}
             </h1>
             <p className="text-sm" style={{ color: "#9FA096", fontFamily: SANS }}>
@@ -139,7 +139,7 @@ export function AdminExams() {
               {/* ── Manage exams — 3 recent only ── */}
               <div className="card rounded-2xl p-5">
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <h2 className="flex items-center gap-2 text-base font-bold" style={{ fontFamily: DISPLAY }}>
+                  <h2 className="flex items-center gap-2 text-base font-bold">
                     <BookOpen className="h-4 w-4" style={{ color: C.lime }} />
                     {t("aex.manageAll")}
                   </h2>
@@ -179,7 +179,7 @@ export function AdminExams() {
 
               {/* Enrollment donut */}
               <div className="card rounded-2xl p-5">
-                <h2 className="text-sm font-bold" style={{ fontFamily: DISPLAY }}>{t("aex.mostInterested")}</h2>
+                <h2 className="text-sm font-bold">{t("aex.mostInterested")}</h2>
                 <div className="mt-3 flex justify-center">
                   <EnrollDonut data={data.subjectsEnroll} total={data.totalEnroll} t={t} />
                 </div>
@@ -199,7 +199,7 @@ export function AdminExams() {
 
               {/* Question pattern */}
               <div className="card rounded-2xl p-5">
-                <h2 className="text-sm font-bold" style={{ fontFamily: DISPLAY }}>{t("aex.questionPattern")}</h2>
+                <h2 className="text-sm font-bold">{t("aex.questionPattern")}</h2>
                 <div className="mt-3 flex items-center gap-5">
                   <SegmentDonut size={96} thickness={11}
                     segments={[
@@ -227,7 +227,7 @@ export function AdminExams() {
               {/* Subject-wise average score */}
               <div className="card rounded-2xl p-5">
                 <div className="flex items-center justify-between">
-                  <h2 className="text-sm font-bold" style={{ fontFamily: DISPLAY }}>{t("aex.subjectAvg")}</h2>
+                  <h2 className="text-sm font-bold">{t("aex.subjectAvg")}</h2>
                   <button onClick={() => navigate("/admin/analytics")} className="text-[var(--muted)] hover:text-[var(--fg)]">
                     <ArrowUpRight className="h-4 w-4" />
                   </button>
@@ -247,7 +247,7 @@ export function AdminExams() {
               <div className="flex h-10 w-10 items-center justify-center rounded-full" style={{ background: `${C.pink}20` }}>
                 <AlertTriangle className="h-5 w-5" style={{ color: C.pink }} />
               </div>
-              <h2 className="text-lg font-bold" style={{ fontFamily: DISPLAY }}>{t("aex.deleteTitle")}</h2>
+              <h2 className="text-lg font-bold">{t("aex.deleteTitle")}</h2>
             </div>
             <p className="mt-3 text-sm text-[var(--muted)]" style={{ fontFamily: SANS }}>
               {t("aex.deleteWarn", { title: confirm.title, n: confirm.questionCount })}
@@ -312,7 +312,7 @@ function ExamCard({ exam: e, t, onDelete, onNavigate }: {
           </div>
         </div>
 
-        <h3 className="mt-3 font-semibold leading-snug" style={{ fontFamily: DISPLAY }}>
+        <h3 className="mt-3 font-semibold leading-snug">
           {e.title || t("aex.untitled")}
         </h3>
         <p className="mt-0.5 text-xs text-[var(--muted)]" style={{ fontFamily: SANS }}>

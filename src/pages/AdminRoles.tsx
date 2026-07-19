@@ -4,6 +4,7 @@ import {
   Lock, GitBranch, Building2, Scale, ScrollText, Users,
 } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
+import { ErrorBanner } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { DataTable, type Column } from "@/components/DataTable";
 import { api } from "@/lib/api";
@@ -152,7 +153,7 @@ export function AdminRoles() {
           </div>
         </div>
 
-        {error && <p className="mt-4 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">{error}</p>}
+        {error && <ErrorBanner className="mt-4">{error}</ErrorBanner>}
 
         {/* System roles */}
         <div className="mt-6 flex items-center gap-2">
@@ -457,7 +458,7 @@ function DeleteRoleModal({ role, roles, team, roleOptions, roleName, onClose, on
         {err && <p className="mt-2 text-sm text-rose-500">{err}</p>}
         <div className="mt-5 flex justify-end gap-2">
           <button onClick={onClose} disabled={busy} className="rounded-lg px-3 py-2 text-sm font-medium text-[var(--muted)] hover:text-[var(--fg)]">{t("ateam.cancel")}</button>
-          <button onClick={del} disabled={busy} className="inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-3 py-2 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50">
+          <button onClick={del} disabled={busy} className="btn btn-danger">
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
             {blocked ? t("arole.reassignAndDelete") : t("arole.delete")}
           </button>

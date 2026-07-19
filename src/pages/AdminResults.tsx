@@ -6,9 +6,11 @@ import {
   FileText, Mic2, Pin, MoreHorizontal, ExternalLink, ArrowUpDown, Users2,
 } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
+import { ErrorBanner } from "@/components/ui";
 import { api } from "@/lib/api";
 import { PageHeader } from "@/components/PageHeader";
 import { useT } from "@/lib/i18n";
+import { timeAgo } from "@/lib/format";
 import { clsx } from "clsx";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -63,16 +65,6 @@ const typeMeta = (t: string) => TYPE_META[t] ?? { Icon: Folder, label: t };
 // ── Formatters ────────────────────────────────────────────────────────────────
 const fmt = (iso: string | null) =>
   iso ? new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
-
-const fmtAgo = (iso: string | null) => {
-  if (!iso) return "—";
-  const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
-  if (s < 60) return "just now";
-  const m = Math.round(s / 60); if (m < 60) return `${m}m ago`;
-  const h = Math.round(m / 60); if (h < 24) return `${h}h ago`;
-  const d = Math.round(h / 24); if (d === 1) return "Yesterday";
-  return `${d}d ago`;
-};
 
 // ── CSV helpers ───────────────────────────────────────────────────────────────
 const esc = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
@@ -209,7 +201,7 @@ export function AdminResults() {
         />
 
         {error && (
-          <p className="mt-6 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">{error}</p>
+          <ErrorBanner className="mt-6">{error}</ErrorBanner>
         )}
         {!data && !error && (
           <div className="mt-10 flex items-center gap-2 text-[var(--muted)]">
@@ -438,7 +430,7 @@ function ExamFolder({ folder, attempts, isOpen, onToggle, isPinned, onPin, relea
           <StatChip label="Attempts"      value={folder.attempts}               accent={p.accent} />
           <StatChip label="Avg Score"     value={`${folder.avgScore}%`}         accent={p.accent} />
           <StatChip label="Pass Rate"     value={`${folder.passRate}%`}         accent={folder.passRate >= 50 ? "#10b981" : "#ef4444"} />
-          <StatChip label="Last Activity" value={fmtAgo(folder.lastActivity)}   muted />
+          <StatChip label="Last Activity" value={timeAgo(folder.lastActivity)}   muted />
         </div>
 
         {/* Actions */}
@@ -647,7 +639,7 @@ function CohortFolder({ cohort, isOpen, onToggle, isPinned, onPin, onNavigate }:
         <div className="hidden items-center gap-6 lg:flex">
           <StatChip label="Avg Score"     value={`${cohort.avgScore}%`}       accent={p.accent} />
           <StatChip label="Pass Rate"     value={`${cohort.passRate}%`}       accent={cohort.passRate >= 50 ? "#10b981" : "#ef4444"} />
-          <StatChip label="Last Activity" value={fmtAgo(cohort.lastActivity)} muted />
+          <StatChip label="Last Activity" value={timeAgo(cohort.lastActivity)} muted />
         </div>
 
         <div className="flex shrink-0 items-center gap-2 pl-2" onClick={(e) => e.stopPropagation()}>

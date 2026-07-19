@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { HeartPulse, Loader2, Database, Mail, Server, Clock, CheckCircle2, Zap, FlaskConical, AlertTriangle, HardDriveDownload, ShieldCheck, Camera, MapPin, Mic, RefreshCw } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
+import { ErrorBanner } from "@/components/ui";
 import { api } from "@/lib/api";
 import { PageHeader } from "@/components/PageHeader";
 import { useT } from "@/lib/i18n";
@@ -70,7 +71,7 @@ export function AdminSystemHealth() {
           <PageHeader title={t("ahlt.title")} subtitle={t("ahlt.subtitle")} />
         </div>
 
-        {error && <p className="mt-6 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">{error}</p>}
+        {error && <ErrorBanner className="mt-6">{error}</ErrorBanner>}
         {!h && !error && <div className="mt-8 flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div>}
 
         {h && (

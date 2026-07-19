@@ -141,7 +141,7 @@
     padding: .5625rem .875rem; transition: background-color .15s ease, border-color .15s ease, opacity .15s ease;
     cursor: pointer; border: 1px solid transparent; white-space: nowrap;
   }
-  /* Primary action = Pumpkin with charcoal text (per the palette). */
+  /* Primary action = brand lime with near-black text. */
   .btn-primary {
     background: #c6ff34; color: #111110;
     box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.18), 0 1px 2px 0 rgba(0, 0, 0, 0.20);
@@ -154,12 +154,23 @@
   .btn-outline:disabled { opacity: .5; cursor: not-allowed; }
   .btn-ghost { background: transparent; color: var(--muted); }
   .btn-ghost:hover { background: rgba(255, 255, 255, 0.05); color: var(--fg); }
+  /* Destructive action — delete/remove confirmations. Codifies the solid-red
+     treatment call sites were already hand-rolling before this class existed. */
+  .btn-danger { background: #E11D48; color: #fff; }
+  .btn-danger:hover { background: #BE123C; }
+  .btn-danger:disabled { opacity: .5; cursor: not-allowed; }
 
-  /* Buttons that sit ON the charcoal page header — pumpkin for contrast/accent. */
+  /* Buttons that sit ON the near-black page header — brand lime for contrast/accent. */
   .btn-on-teal { background: #c6ff34; color: #111110; }
   .btn-on-teal:hover { background: #B7C523; }
   .btn-ghost-teal { background: rgba(255, 255, 255, 0.10); border-color: rgba(255, 255, 255, 0.25); color: #FFFFFF; }
   .btn-ghost-teal:hover { background: rgba(255, 255, 255, 0.20); }
+
+  /* Heading size scale — h1-h6 already get font-family/weight/tracking from
+     @layer base; these add the size tier so pages stop free-hand-picking one. */
+  .h1 { font-size: 1.5rem; line-height: 1.2; }
+  .h2 { font-size: 1.125rem; line-height: 1.3; font-weight: 700; }
+  .h3 { font-size: .875rem; line-height: 1.4; }
 
   .input {
     width: 100%; border: 1px solid var(--border); border-radius: 6px;

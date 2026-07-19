@@ -3,10 +3,11 @@ import { Users, Loader2, UserPlus, Trash2, X, ShieldCheck, ClipboardCheck, Radio
 import { Link } from "react-router-dom";
 import { AdminShell } from "@/components/AdminShell";
 import { PageHeader } from "@/components/PageHeader";
-import { TableSkeleton } from "@/components/ui";
+import { TableSkeleton, Modal, ErrorBanner } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
 import { useT, type TFn } from "@/lib/i18n";
+import { initials } from "@/lib/format";
 import { clsx } from "clsx";
 
 interface Member { id: string; name: string; email: string; role: string; customRoleId?: string | null; roleExpiresAt?: string | null; }
@@ -19,7 +20,6 @@ const ROLES = [
   { value: "facilitator", labelKey: "ateam.roleFacilitator", descKey: "ateam.roleFacilitatorDesc", respKey: "ateam.roleFacilitatorResp", accessKey: "ateam.accessAcademic", icon: ClipboardCheck },
   { value: "proctor", labelKey: "ateam.roleProctor", descKey: "ateam.roleProctorDesc", respKey: "ateam.roleProctorResp", accessKey: "ateam.accessMonitoring", icon: Radio },
 ];
-const initials = (n: string) => n.split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase();
 const ROLE_PILL: Record<string, string> = {
   admin: "bg-[#c6ff34]/15 text-[#c6ff34]", facilitator: "bg-[#06B6D4]/15 text-[#06B6D4]", proctor: "bg-[#F59E0B]/15 text-[#F59E0B]",
 };
@@ -119,7 +119,7 @@ export function AdminTeam() {
           </div>
         </div>
 
-        {error && <p className="mt-4 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">{error}</p>}
+        {error && <ErrorBanner className="mt-4">{error}</ErrorBanner>}
 
         {/* System roles */}
         <div className="mt-6 flex items-center gap-2">
@@ -290,22 +290,12 @@ function DeleteModal({ member, onClose, onDone }: { member: Member; onClose: () 
       {err && <p className="mt-2 text-sm text-rose-500">{err}</p>}
       <div className="mt-5 flex justify-end gap-2">
         <button onClick={onClose} disabled={busy} className="rounded-lg px-3 py-2 text-sm font-medium text-[var(--muted)] hover:text-[var(--fg)]">{t("ateam.cancel")}</button>
-        <button onClick={del} disabled={busy} className="inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-3 py-2 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />} {t("ateam.remove")}</button>
+        <button onClick={del} disabled={busy} className="btn btn-danger">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />} {t("ateam.remove")}</button>
       </div>
     </Modal>
   );
 }
 
-function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
-      <div className="w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between"><h2 className="text-lg font-bold">{title}</h2><button onClick={onClose} className="rounded-lg p-1 text-[var(--muted)] hover:bg-white/[0.05]"><X className="h-5 w-5" /></button></div>
-        {children}
-      </div>
-    </div>
-  );
-}
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return <label className="block"><span className="mb-1 block text-sm font-medium">{label}</span>{children}</label>;
 }

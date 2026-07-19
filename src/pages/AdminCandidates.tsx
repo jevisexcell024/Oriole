@@ -7,10 +7,11 @@ import {
 } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
 import { PageHeader } from "@/components/PageHeader";
-import { TableSkeleton, EmptyState } from "@/components/ui";
+import { TableSkeleton, EmptyState, Modal, ErrorBanner } from "@/components/ui";
 import { api } from "@/lib/api";
 import { IMPORT_ACCEPT, parseStudentFile, type ImportRow } from "@/lib/importTable";
 import { useT } from "@/lib/i18n";
+import { initials } from "@/lib/format";
 import { clsx } from "clsx";
 
 interface Student {
@@ -20,7 +21,6 @@ interface Student {
 interface ExamOpt { id: string; title: string }
 
 const PAGE = 10;
-const initials = (n: string) => n.split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase();
 const gradeTone = (n: number | null) => (n === null ? "text-[var(--muted)]" : n >= 80 ? "text-[#22C55E]" : n >= 60 ? "text-[#eab308]" : "text-[#EF4444]");
 
 export function AdminCandidates() {
@@ -108,7 +108,7 @@ export function AdminCandidates() {
           </div>
         )}
 
-        {error && <p className="mt-4 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">{error}</p>}
+        {error && <ErrorBanner className="mt-4">{error}</ErrorBanner>}
 
         {/* Table */}
         <div className="card mt-4">
@@ -236,17 +236,6 @@ function MenuItem({ icon: Icon, children, onClick, danger }: { icon: typeof Penc
     <button onClick={onClick} className={clsx("flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-white/[0.05]", danger ? "text-rose-400" : "text-[var(--fg)]")}>
       <Icon className="h-4 w-4" /> {children}
     </button>
-  );
-}
-
-function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
-      <div className="w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between"><h2 className="text-lg font-bold">{title}</h2><button onClick={onClose} className="rounded-lg p-1 text-[var(--muted)] hover:bg-white/[0.05]"><X className="h-5 w-5" /></button></div>
-        {children}
-      </div>
-    </div>
   );
 }
 
@@ -407,7 +396,7 @@ function DeleteModal({ student, onClose, onDone }: { student: Student; onClose: 
         <p className="text-sm text-[var(--muted)]">{t("acan.deleteWarn", { name: student.name })}</p></div>
       <div className="mt-5 flex justify-end gap-2">
         <button onClick={onClose} disabled={busy} className="rounded-lg px-3 py-2 text-sm font-medium text-[var(--muted)] hover:text-[var(--fg)]">{t("acan.cancel")}</button>
-        <button onClick={del} disabled={busy} className="inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-3 py-2 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />} {t("acan.delete")}</button>
+        <button onClick={del} disabled={busy} className="btn btn-danger">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />} {t("acan.delete")}</button>
       </div>
     </Modal>
   );

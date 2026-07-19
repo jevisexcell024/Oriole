@@ -1,17 +1,22 @@
 import { useEffect, useRef, useState } from "react";
-import { Loader2, CheckCircle2, Mail, Send, MessageSquare } from "lucide-react";
+import { Loader2, CheckCircle2, Mail, Send, MessageSquare, Gauge, Headphones } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
+import { ErrorBanner } from "@/components/ui";
 import { api } from "@/lib/api";
 import { PageHeader } from "@/components/PageHeader";
 import { useT } from "@/lib/i18n";
 import { clsx } from "clsx";
 
 interface Settings {
-  id: string; name: string; supportEmail: string; website: string; timezone: string;
+  id: string;
   defaultPassingScore: number; defaultProctored: boolean; autoConfirmEnrollment: boolean;
   digestFrequency?: "off" | "daily" | "weekly";
   auditRetentionDays?: number;
   smsReminders?: boolean;
+  reliabilityAlertEmails?: string[];
+  reliabilityAlertSmsNumbers?: string[];
+  reliabilityNotifyOnDegraded?: boolean;
+  mediaAssessmentEnabled?: boolean;
 }
 interface SmsStatus { mode: string; channel: string; live: boolean; from: string | null; }
 type SaveStatus = "idle" | "saving" | "saved";
@@ -27,6 +32,8 @@ export function AdminSettings() {
   const [smsTo, setSmsTo] = useState("");
   const [smsBusy, setSmsBusy] = useState(false);
   const [smsMsg, setSmsMsg] = useState<string | null>(null);
+  const [alertEmailsText, setAlertEmailsText] = useState("");
+  const [alertSmsText, setAlertSmsText] = useState("");
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const sendSmsTest = async () => {
@@ -43,7 +50,13 @@ export function AdminSettings() {
     finally { setDigestBusy(false); }
   };
 
-  useEffect(() => { api.get<{ settings: Settings }>("/admin/settings").then((d) => setS(d.settings)).catch((e) => setError(e.message)); }, []);
+  useEffect(() => {
+    api.get<{ settings: Settings }>("/admin/settings").then((d) => {
+      setS(d.settings);
+      setAlertEmailsText((d.settings.reliabilityAlertEmails ?? []).join(", "));
+      setAlertSmsText((d.settings.reliabilityAlertSmsNumbers ?? []).join(", "));
+    }).catch((e) => setError(e.message));
+  }, []);
   useEffect(() => { api.get<SmsStatus>("/admin/sms/status").then(setSms).catch(() => {}); }, []);
 
   // Optimistic autosave — persist each change (debounced) with a subtle indicator.
@@ -63,7 +76,7 @@ export function AdminSettings() {
       <div className="fade-in max-w-2xl">
         <PageHeader title={t("aset.title")} subtitle={t("aset.subtitle")} />
 
-        {error && <p className="mt-6 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">{error}</p>}
+        {error && <ErrorBanner className="mt-6">{error}</ErrorBanner>}
         {!s && !error && <div className="mt-8 flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div>}
 
         {s && (
@@ -147,6 +160,32 @@ export function AdminSettings() {
                   <span className="text-sm text-[var(--muted)]">{t("aset.days")}</span>
                 </span>
               </label>
+            </div>
+
+            <h2 className="mt-6 flex items-center gap-2 text-sm font-semibold"><Gauge className="h-4 w-4 text-brand-400" /> {t("aset.reliabilityAlerts")}</h2>
+            <p className="text-xs text-[var(--muted)]">{t("aset.reliabilityAlertsHint")}</p>
+            <div className="mt-3 space-y-3">
+              <label className="block rounded-xl border border-[var(--border)] p-3">
+                <span className="block text-sm font-medium">{t("aset.alertEmails")}</span>
+                <span className="mb-2 block text-xs text-[var(--muted)]">{t("aset.alertEmailsHint")}</span>
+                <input className="input h-9 w-full" value={alertEmailsText} placeholder="ops@example.com, oncall@example.com"
+                  onChange={(e) => setAlertEmailsText(e.target.value)}
+                  onBlur={() => update({ reliabilityAlertEmails: alertEmailsText.split(",").map((v) => v.trim()).filter(Boolean) })} />
+              </label>
+              <label className="block rounded-xl border border-[var(--border)] p-3">
+                <span className="block text-sm font-medium">{t("aset.alertSms")}</span>
+                <span className="mb-2 block text-xs text-[var(--muted)]">{t("aset.alertSmsHint")}</span>
+                <input className="input h-9 w-full" value={alertSmsText} placeholder="+14155550123, +14155550124"
+                  onChange={(e) => setAlertSmsText(e.target.value)}
+                  onBlur={() => update({ reliabilityAlertSmsNumbers: alertSmsText.split(",").map((v) => v.trim()).filter(Boolean) })} />
+              </label>
+              <Toggle label={t("aset.notifyOnDegraded")} hint={t("aset.notifyOnDegradedHint")} on={s.reliabilityNotifyOnDegraded ?? false} onChange={(v) => update({ reliabilityNotifyOnDegraded: v })} />
+            </div>
+
+            <h2 className="mt-6 flex items-center gap-2 text-sm font-semibold"><Headphones className="h-4 w-4 text-brand-400" /> {t("aset.mediaModule")}</h2>
+            <p className="text-xs text-[var(--muted)]">{t("aset.mediaModuleHint")}</p>
+            <div className="mt-3 space-y-3">
+              <Toggle label={t("aset.mediaModuleToggle")} hint={t("aset.mediaModuleToggleHint")} on={s.mediaAssessmentEnabled ?? false} onChange={(v) => update({ mediaAssessmentEnabled: v })} />
             </div>
           </div>
         )}

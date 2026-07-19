@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Loader2, ArrowRight, Radio, ShieldCheck } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
+import { ErrorBanner } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { api } from "@/lib/api";
 import { DataTable, type Column, type TableFilter } from "@/components/DataTable";
@@ -49,7 +50,7 @@ export function AdminViolations() {
         <PageHeader title={t("avio.title")} subtitle={t("avio.subtitle")}
           actions={<span className="inline-flex items-center gap-1 rounded-full bg-white/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white"><Radio className="h-3 w-3" /> {t("anav.live")}</span>} />
 
-        {error && <p className="mt-6 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">{error}</p>}
+        {error && <ErrorBanner className="mt-6">{error}</ErrorBanner>}
         {!data && !error && <div className="mt-8 flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div>}
 
         {data && (

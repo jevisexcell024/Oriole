@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Loader2, MessageSquareWarning, Check, X, ExternalLink, Inbox } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
+import { ErrorBanner } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { api } from "@/lib/api";
 import { useT } from "@/lib/i18n";
@@ -32,7 +33,7 @@ export function AdminRegrades() {
       <div className="fade-in max-w-3xl">
         <PageHeader title={t("areg.title")} subtitle={t("areg.subtitle")} />
 
-        {error && <p className="mt-6 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">{error}</p>}
+        {error && <ErrorBanner className="mt-6">{error}</ErrorBanner>}
         {!rows && !error && <div className="mt-10 flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div>}
 
         {rows && rows.length === 0 && (
