@@ -511,6 +511,19 @@ app.post("/api/registrations/:id/checkin", requireAuth, async (req, res) => {
   const user = currentUser(req)!;
   const reg = db.data!.registrations.find((r) => r.id === req.params.id && r.candidateId === user.id);
   if (!reg) return res.status(404).json({ error: "Registration not found." });
+  const exam = db.data!.exams.find((e) => e.id === reg.examId);
+  // Real enforcement, not just a client-side nag: a candidate can't check in
+  // without the correct code once an exam requires it, even by calling this
+  // endpoint directly. Not meant as an access-control barrier (the code is
+  // already visible in the check-in response) — it's a deliberate "confirm
+  // you're starting the right exam, right now" step.
+  if (exam?.lockdown?.requireExamCode) {
+    const submitted = typeof req.body?.examCode === "string" ? req.body.examCode.trim().toUpperCase() : "";
+    const expected = (exam.code || "").trim().toUpperCase();
+    if (!submitted || submitted !== expected) {
+      return res.status(400).json({ error: "That exam code doesn't match — check with your proctor and try again." });
+    }
+  }
   reg.systemCheckPassed = true;
   if (typeof req.body?.studentRef === "string") reg.studentRef = req.body.studentRef.trim();
   if (req.body?.accepted) reg.rulesAcceptedAt = now();
@@ -5518,24 +5531,45 @@ app.get("/api/admin/dashboard", requirePermission("monitor.view"), async (_req, 
     },
   };
 
-  // ---- Upcoming exams: future-scheduled class assignments ----
-  const upcomingExams = d.classes
-    .flatMap((c) =>
-      c.assignments
-        .filter((a) => a.scheduledStart && new Date(a.scheduledStart).getTime() > nowMs)
-        .map((a) => {
-          const exam = examById(a.examId);
-          return {
-            examId: a.examId,
-            subject: exam?.title ?? "Examination",
-            className: c.name,
-            scheduledStart: a.scheduledStart!,
-            durationMinutes: exam?.durationMinutes ?? 0,
-            candidates: c.memberIds.length,
-            msLeft: new Date(a.scheduledStart!).getTime() - nowMs,
-          };
-        }),
-    )
+  // ---- Upcoming exams: future-scheduled class assignments, PLUS any exam
+  // scheduled directly on the Scheduler page (exam.availableFrom) that isn't
+  // already covered by a class assignment. These are two independent
+  // scheduling paths — this card used to only look at the first, so an exam
+  // scheduled via the Scheduler (the more prominent of the two) never showed
+  // up here at all.
+  const classScheduledExamIds = new Set(
+    d.classes.flatMap((c) =>
+      c.assignments.filter((a) => a.scheduledStart && new Date(a.scheduledStart).getTime() > nowMs).map((a) => a.examId),
+    ),
+  );
+  const upcomingFromClasses = d.classes.flatMap((c) =>
+    c.assignments
+      .filter((a) => a.scheduledStart && new Date(a.scheduledStart).getTime() > nowMs)
+      .map((a) => {
+        const exam = examById(a.examId);
+        return {
+          examId: a.examId,
+          subject: exam?.title ?? "Examination",
+          className: c.name,
+          scheduledStart: a.scheduledStart!,
+          durationMinutes: exam?.durationMinutes ?? 0,
+          candidates: c.memberIds.length,
+          msLeft: new Date(a.scheduledStart!).getTime() - nowMs,
+        };
+      }),
+  );
+  const upcomingFromScheduler = d.exams
+    .filter((e) => e.status === "published" && e.availableFrom && new Date(e.availableFrom).getTime() > nowMs && !classScheduledExamIds.has(e.id))
+    .map((e) => ({
+      examId: e.id,
+      subject: e.title,
+      className: e.enrollment === "open" ? "All candidates" : "Assigned candidates",
+      scheduledStart: e.availableFrom!,
+      durationMinutes: e.durationMinutes,
+      candidates: d.registrations.filter((r) => r.examId === e.id).length,
+      msLeft: new Date(e.availableFrom!).getTime() - nowMs,
+    }));
+  const upcomingExams = [...upcomingFromClasses, ...upcomingFromScheduler]
     .sort((a, b) => a.msLeft - b.msLeft)
     .slice(0, 6);
 

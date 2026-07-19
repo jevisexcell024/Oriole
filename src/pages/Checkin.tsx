@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
 import {
-  Camera, Mic, Wifi, ScanFace, CheckCircle2, XCircle, Loader2, ArrowRight, ArrowLeft, ShieldCheck, ShieldAlert, FileCheck, MapPin,
+  Camera, Mic, Wifi, ScanFace, CheckCircle2, XCircle, Loader2, ArrowRight, ArrowLeft, ShieldCheck, ShieldAlert, FileCheck, MapPin, KeyRound,
 } from "lucide-react";
 import { Shell } from "@/components/Shell";
 import { api } from "@/lib/api";
@@ -40,6 +40,7 @@ export function Checkin() {
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [studentRef, setStudentRef] = useState("");
+  const [examCode, setExamCode] = useState("");
   const [agree, setAgree] = useState({ rules: false, integrity: false, privacy: false });
   const [photo, setPhoto] = useState<string | null>(null);
   const [incognito, setIncognito] = useState<CheckState>("pending");
@@ -144,6 +145,8 @@ export function Checkin() {
     : [["rules", "I have read and agree to the Examination Rules."],
        ["integrity", "I agree to the Academic Integrity Policy."]];
   const identityOk = !(proctored && (ld?.requireIdentity ?? false)) || studentRef.trim().length > 0;
+  const requireExamCode = ld?.requireExamCode ?? false;
+  const examCodeOk = !requireExamCode || examCode.trim().toUpperCase() === (data?.exam.code || "").trim().toUpperCase();
   const requireIdDoc = proctored && (ld?.requireIdDocument ?? false);
   const idDocOk = !requireIdDoc || !!idPhoto;
   const requireRoomScan = proctored && (ld?.requireRoomScan ?? false);
@@ -157,7 +160,7 @@ export function Checkin() {
   const sebHref = sebLaunchHref(ld?.sebLaunchUrl);
   const checks = proctored ? [camState, micState, netState, faceState, incognito] : [netState];
   if (requireGeofence) checks.push(geoState);
-  const allReady = checks.every((s) => s === "ok") && identityOk && idDocOk && roomScanOk && agreementOk && privateOk && sebOk;
+  const allReady = checks.every((s) => s === "ok") && identityOk && idDocOk && roomScanOk && agreementOk && privateOk && sebOk && examCodeOk;
 
   const start = async () => {
     if (!data) return;
@@ -170,6 +173,7 @@ export function Checkin() {
         verificationPhoto: photo,
         idDocumentPhoto: idPhoto,
         roomScan: roomScan ?? undefined,
+        examCode: requireExamCode ? examCode.trim() : undefined,
       });
       const { attempt } = await api.post<{ attempt: Attempt; questions: PublicQuestion[] }>("/attempts", {
         registrationId: data.registration.id,
@@ -203,6 +207,18 @@ export function Checkin() {
           </label>
         ))}
       </div>
+    </div>
+  );
+
+  // ---- Exam code confirmation block (shared) ----
+  const examCodeBlock = requireExamCode && (
+    <div className="rounded-xl border border-[var(--border)] p-4">
+      <label className="flex items-center gap-1.5 text-sm font-semibold"><KeyRound className="h-4 w-4" /> {t("chk.examCodeLabel")}</label>
+      <p className="mb-2 mt-0.5 text-xs text-[var(--muted)]">{t("chk.examCodeHint")}</p>
+      <input className="input h-9 uppercase tracking-wider" value={examCode} onChange={(e) => setExamCode(e.target.value)} placeholder={data.exam.code || ""} />
+      {examCode.trim().length > 0 && !examCodeOk && (
+        <p className="mt-2 flex items-center gap-1.5 text-xs text-rose-400"><XCircle className="h-3.5 w-3.5 shrink-0" /> {t("chk.examCodeMismatch")}</p>
+      )}
     </div>
   );
 
@@ -263,6 +279,7 @@ export function Checkin() {
             </div>
             <Row icon={Wifi} label={t("chk.network")} hint={t("chk.stableConnection")} state={netState} />
             {geoBlock}
+            {examCodeBlock}
             {agreementBlock}
             {startButton}
           </div>
@@ -338,6 +355,7 @@ export function Checkin() {
               </div>
             )}
 
+            {examCodeBlock}
             {agreementBlock}
 
             <div className="rounded-xl border border-brand-500/30 bg-brand-500/15 p-4">

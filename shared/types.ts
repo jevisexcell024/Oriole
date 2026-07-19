@@ -228,6 +228,12 @@ export interface LockdownConfig {
   requireIdDocument?: boolean;// capture a photo of a physical photo-ID at check-in for the proctor to verify
   audioMonitoring?: boolean;  // listen for sustained talking/noise during the exam and flag it
   requireRoomScan?: boolean;  // capture a short webcam room scan at check-in for the proctor
+  /** Require the candidate to type the exam's code at check-in before it lets them start.
+   *  Not an access-control mechanism (the code is already visible in the check-in
+   *  response) — a deliberate confirmation step so a candidate can't accidentally start
+   *  the wrong exam, and so a proctor can pace a room by only revealing the code when
+   *  everyone should begin together. Verified server-side too, not just client-side. */
+  requireExamCode?: boolean;
   requireAgreement: boolean;  // require accepting exam rules + integrity policy
   violationLimit: number;     // auto-submit after N violations (0 = zero tolerance, submit on first violation)
 

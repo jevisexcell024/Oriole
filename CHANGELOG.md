@@ -4,6 +4,14 @@ A running record of what shipped in each version. Newest first.
 
 ---
 
+## v1.12.2 — Exam code confirmation at check-in; fixed a blank dashboard schedule
+
+**"Upcoming Examinations" showed blank after scheduling.** There are two independent ways to schedule an exam — the Scheduler page (sets `exam.availableFrom`) and Classes → Assign Exam (sets a per-class `scheduledStart`) — but the admin dashboard's "Upcoming Examinations" card only ever read from the second one. An exam scheduled the more obvious way, through the Scheduler page, would never appear there. Fixed by merging both sources.
+
+**New: exam code confirmation at check-in.** A new per-exam toggle (Exam Builder → Proctoring → "Exam code confirmation") requires the candidate to type the exam's code before they can start — deliberately *not* an access-control mechanism (registration/approval still gates real access, and the code is already visible in the check-in API response), but a real requirement rather than cosmetic: a wrong or blank code is rejected server-side, not just disabled client-side, so it can't be bypassed by calling the check-in endpoint directly. Meant for two things: stopping an accidental wrong-exam start, and letting a proctor pace a room by only revealing the code once everyone should begin.
+
+---
+
 ## v1.12.1 — Custom-role privilege-escalation fix
 
 **Found during a live authorized penetration test.** `POST /api/admin/roles` (create a custom role, gated on `roles.manage`) accepted any set of permissions with no check against what the caller themselves actually holds, and `PATCH /api/admin/team/:id/custom-role` (assign a custom role, gated on `roles.team_manage`) let the caller assign any existing role to any staff member — including their own account, with no self-assignment guard at all. Together, a staff member holding only those two keys (a realistic "delegate role management" grant, not full admin) could mint a role containing every permission in the system — `org.manage`, `system.settings`, `students.delete`, everything — and assign it to themselves, reaching full admin-equivalent access without ever holding an admin permission directly. Two API calls, no admin credentials required.

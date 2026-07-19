@@ -41,6 +41,7 @@ const LOCKDOWN_RULES: { key: Exclude<keyof LockdownConfig, "violationLimit">; la
   { key: "requireIdDocument", labelKey: "eb.lockIdDocument", descKey: "eb.lockIdDocumentDesc" },
   { key: "audioMonitoring", labelKey: "eb.lockAudioMonitoring", descKey: "eb.lockAudioMonitoringDesc" },
   { key: "requireRoomScan", labelKey: "eb.lockRoomScan", descKey: "eb.lockRoomScanDesc" },
+  { key: "requireExamCode", labelKey: "eb.lockExamCode", descKey: "eb.lockExamCodeDesc" },
   { key: "requireAgreement", labelKey: "eb.lockAgreement", descKey: "eb.lockAgreementDesc" },
 ];
 
