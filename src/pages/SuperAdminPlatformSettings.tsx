@@ -80,7 +80,7 @@ export function SuperAdminPlatformSettings() {
 
             <p className="mb-3 mt-6 text-[11px] font-semibold uppercase tracking-wider text-[var(--muted)]">{t("sad.dataRetention")}</p>
             <div className="card p-4">
-              <Row label={t("sad.proctorRetention")} value={data.retention.proctorRetentionDays > 0 ? t("sad.retentionDays").replace("{n}", String(data.retention.proctorRetentionDays)) : t("sad.retentionUnlimited")} />
+              <Row label={t("sad.proctorRetention")} value={data.retention.proctorRetentionDays > 0 ? t("sad.retentionDays", { n: data.retention.proctorRetentionDays }) : t("sad.retentionUnlimited")} />
             </div>
 
             <p className="mb-3 mt-6 text-[11px] font-semibold uppercase tracking-wider text-[var(--muted)]">{t("sad.delivery")}</p>
@@ -105,8 +105,8 @@ export function SuperAdminPlatformSettings() {
               <div className="flex items-center gap-2 text-[var(--muted)]"><HardDriveDownload className="h-4 w-4" /><span className="text-[11px] font-semibold uppercase tracking-wider">{t("sad.backupSchedule")}</span></div>
               <Row label={t("sad.lastBackup")} value={data.backup.lastBackupAt ? new Date(data.backup.lastBackupAt).toLocaleString() : t("sad.never")} />
               {data.backup.lastBackupBytes != null && <Row label={t("sad.size")} value={fmtBytes(data.backup.lastBackupBytes)} />}
-              <Row label={t("sad.interval")} value={t("sad.everyHours").replace("{n}", String(data.backup.intervalHours))} />
-              <Row label={t("sad.retained")} value={t("sad.backupsKept").replace("{n}", String(data.backup.retentionCount))} />
+              <Row label={t("sad.interval")} value={t("sad.everyHours", { n: data.backup.intervalHours })} />
+              <Row label={t("sad.retained")} value={t("sad.backupsKept", { n: data.backup.retentionCount })} />
               {data.backup.lastBackupError && <p className="mt-2 flex items-center gap-1.5 text-xs text-rose-400"><ShieldAlert className="h-3.5 w-3.5 shrink-0" /> {data.backup.lastBackupError}</p>}
             </div>
           </>

@@ -70,8 +70,8 @@ export function SuperAdminSecurityCenter() {
             )}>
               {data.integrity.ok ? <ShieldCheck className="h-4 w-4 shrink-0" /> : <ShieldAlert className="h-4 w-4 shrink-0" />}
               {data.integrity.ok
-                ? t("sad.chainOk").replace("{n}", String(data.integrity.entries))
-                : t("sad.chainBroken").replace("{id}", data.integrity.brokenAt ?? "?")}
+                ? t("sad.chainOk", { n: data.integrity.entries })
+                : t("sad.chainBroken", { id: data.integrity.brokenAt ?? "?" })}
             </div>
 
             <p className="mb-3 mt-6 text-[11px] font-semibold uppercase tracking-wider text-[var(--muted)]">{t("sad.rateLimits")}</p>

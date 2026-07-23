@@ -36,7 +36,7 @@ const GROUPS: NavGroup[] = [
     { labelKey: "sanav.statusOverview", icon: Activity },
   ] },
   { key: "tenants", labelKey: "sanav.secTenants", items: [
-    { labelKey: "sanav.institutions", icon: Building2 },
+    { labelKey: "sanav.institutions", icon: Building2, to: "/super-admin/institutions" },
     { labelKey: "sanav.tenantRequests", icon: ClipboardList },
     { labelKey: "sanav.tenantSuspension", icon: PauseCircle },
     { labelKey: "sanav.tenantArchive", icon: Archive },
@@ -48,7 +48,7 @@ const GROUPS: NavGroup[] = [
     { labelKey: "sanav.usageLimits", icon: Gauge },
   ] },
   { key: "users", labelKey: "sanav.secUsers", items: [
-    { labelKey: "sanav.superAdmins", icon: ShieldCheck },
+    { labelKey: "sanav.superAdmins", icon: ShieldCheck, to: "/super-admin/team" },
     { labelKey: "sanav.platformSupportStaff", icon: Users },
     { labelKey: "sanav.activityLogs", icon: ScrollText },
   ] },
@@ -59,7 +59,7 @@ const GROUPS: NavGroup[] = [
     { labelKey: "sanav.activeSessions", icon: Monitor },
   ] },
   { key: "maintenance", labelKey: "sanav.secMaintenance", items: [
-    { labelKey: "sanav.maintenanceScheduler", icon: CalendarClock },
+    { labelKey: "sanav.maintenanceMode", icon: CalendarClock, to: "/super-admin/maintenance" },
     { labelKey: "sanav.maintenanceHistory", icon: History },
     { labelKey: "sanav.maintenanceQueue", icon: ClipboardList },
   ] },
@@ -80,11 +80,11 @@ const GROUPS: NavGroup[] = [
     { labelKey: "sanav.brandingDefaults", icon: Palette },
     { labelKey: "sanav.platformSettings", icon: Settings, to: "/super-admin/settings" },
     { labelKey: "sanav.featureFlags", icon: Flag },
-    { labelKey: "sanav.emailTemplates", icon: FileText },
+    { labelKey: "sanav.emailTemplates", icon: FileText, to: "/super-admin/email-templates" },
     { labelKey: "sanav.notificationTemplates", icon: Bell },
   ] },
   { key: "support", labelKey: "sanav.secSupport", items: [
-    { labelKey: "sanav.tickets", icon: LifeBuoy },
+    { labelKey: "sanav.tickets", icon: LifeBuoy, to: "/super-admin/tickets" },
     { labelKey: "sanav.feedback", icon: MessageSquare },
     { labelKey: "sanav.contactMessages", icon: MessageCircle },
   ] },
@@ -97,10 +97,10 @@ const GROUPS: NavGroup[] = [
   { key: "developer", labelKey: "sanav.secDeveloper", items: [
     { labelKey: "sanav.environment", icon: Code2 },
     { labelKey: "sanav.apiExplorer", icon: Braces },
-    { labelKey: "sanav.systemInformation", icon: Info },
+    { labelKey: "sanav.systemInformation", icon: Info, to: "/super-admin/system-info" },
   ] },
   { key: "profile", labelKey: "sanav.secProfile", items: [
-    { labelKey: "sanav.profile", icon: UserCircle },
+    { labelKey: "sanav.profile", icon: UserCircle, to: "/super-admin/profile" },
   ] },
 ];
 

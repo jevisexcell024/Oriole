@@ -85,6 +85,20 @@ describe("Super Admin session (server/superAdminAuth.ts)", () => {
     expect(currentSuperAdmin(mockReq(cookies))).toBeNull();
   });
 
+  it("rejects a session for an account disabled after the token was issued", async () => {
+    // Defense-in-depth check added alongside the team-management "disable"
+    // route (which also bumps tokenVersion) — this pins the second, independent
+    // guard so a disabled account can never authenticate even if tokenVersion
+    // somehow wasn't bumped.
+    const sa = superAdmin();
+    db.data!.superAdmins.push(sa);
+    const { res, cookies } = mockRes();
+    issueSuperAdminSession(res, sa);
+    expect(currentSuperAdmin(mockReq(cookies))?.id).toBe(sa.id);
+    sa.disabled = true;
+    expect(currentSuperAdmin(mockReq(cookies))).toBeNull();
+  });
+
   it("does not authenticate against a tenant user id that happens to collide", () => {
     // Sanity check for the isolation claim: a superAdmins-store lookup miss
     // (e.g. an id that only exists in db.data.users) must not silently pass.

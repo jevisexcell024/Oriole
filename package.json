@@ -4,8 +4,8 @@
   "type": "module",
   "version": "0.1.0",
   "scripts": {
-    "dev": "concurrently -k -n web,api -c cyan,magenta \"vite\" \"tsx watch --env-file-if-exists=.env server/index.ts\"",
-    "dev:api": "tsx watch --env-file-if-exists=.env server/index.ts",
+    "dev": "concurrently -k -n web,api -c cyan,magenta \"vite\" \"tsx watch --exclude 'server/.pgdata*/**' --exclude 'backups/**' --env-file-if-exists=.env server/index.ts\"",
+    "dev:api": "tsx watch --exclude 'server/.pgdata*/**' --exclude 'backups/**' --env-file-if-exists=.env server/index.ts",
     "dev:web": "vite",
     "build": "tsc -b && vite build",
     "build:server": "esbuild server/index.ts --bundle --platform=node --format=esm --target=node18 --outfile=dist-server/server.mjs --packages=external",

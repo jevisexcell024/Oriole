@@ -13,10 +13,17 @@ export type SaveState = "saved" | "saving" | "error" | "offline";
  *  - Offline-aware: distinguishes a full internet drop ("offline") from a
  *    transient server error ("error / reconnecting").
  *  - flushNow() lets submit block until everything is persisted.
+ *  - Each queued answer keeps the moment it was actually set on this device
+ *    (`at`), sent along with the save. If a full outage keeps the queue from
+ *    flushing until after this exam has already been auto-submitted for
+ *    running out of time, the server accepts a short late catch-up — but
+ *    only because this timestamp proves the answer was written before the
+ *    cutoff, not typed in afterward. See the grace-window check in
+ *    POST /api/attempts/:id/answer.
  */
 export function useAnswerSync(attemptId: string | undefined) {
   const key = attemptId ? `orcalis_pending_${attemptId}` : "";
-  const pending = useRef<Map<string, string>>(new Map());
+  const pending = useRef<Map<string, { value: string; at: number }>>(new Map());
   const inFlight = useRef(false);
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retry = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -39,10 +46,10 @@ export function useAnswerSync(attemptId: string | undefined) {
     if (pending.current.size === 0) { setState("saved"); return; }
     inFlight.current = true;
     setState("saving");
-    for (const [qid, value] of [...pending.current]) {
+    for (const [qid, entry] of [...pending.current]) {
       try {
-        await api.post(`/attempts/${attemptId}/answer`, { questionId: qid, value });
-        if (pending.current.get(qid) === value) pending.current.delete(qid);
+        await api.post(`/attempts/${attemptId}/answer`, { questionId: qid, value: entry.value, clientSavedAt: entry.at });
+        if (pending.current.get(qid)?.value === entry.value) pending.current.delete(qid);
       } catch (e) {
         if (e instanceof Error && /time is up|closed/i.test(e.message)) {
           pending.current.clear(); persist(); inFlight.current = false;
@@ -70,7 +77,7 @@ export function useAnswerSync(attemptId: string | undefined) {
   }, [attemptId, persist]);
 
   const setAnswer = useCallback((qid: string, value: string) => {
-    pending.current.set(qid, value);
+    pending.current.set(qid, { value, at: Date.now() });
     persist();
     if (!navigator.onLine) {
       setState("offline");
@@ -96,10 +103,10 @@ export function useAnswerSync(attemptId: string | undefined) {
     try {
       const raw = localStorage.getItem(key);
       if (!raw) return {};
-      const entries = JSON.parse(raw) as [string, string][];
+      const entries = JSON.parse(raw) as [string, { value: string; at: number }][];
       entries.forEach(([k, v]) => pending.current.set(k, v));
       if (pending.current.size) { setState("saving"); setTimeout(() => { void flush(); }, 300); }
-      return Object.fromEntries(entries);
+      return Object.fromEntries(entries.map(([k, v]) => [k, v.value]));
     } catch { return {}; }
   }, [key, flush]);
 

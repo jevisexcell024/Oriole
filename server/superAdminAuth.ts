@@ -42,6 +42,11 @@ export function currentSuperAdmin(req: Request): SuperAdmin | null {
     // Session revocation: void once tokenVersion has moved past the value
     // baked into the token (logout / password change / a future admin reset).
     if ((payload.tv ?? 0) !== (superAdmin.tokenVersion ?? 0)) return null;
+    // Defense in depth: a disabled account's tokenVersion is bumped at the
+    // moment it's disabled (see PATCH /api/super-admin/team/:id), which already
+    // invalidates every outstanding token — this is a second check in case that
+    // ever isn't true (e.g. disabled and re-enabled and disabled again quickly).
+    if (superAdmin.disabled) return null;
     return superAdmin;
   } catch {
     return null;

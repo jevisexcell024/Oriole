@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { gradeOne, parseMultiValue, rubricTotal } from "../server/grading.ts";
-import type { Question } from "../shared/types.ts";
+import { gradeOne, parseMultiValue, rubricTotal, lateSyncEligible, LATE_SYNC_GRACE_MS } from "../server/grading.ts";
+import type { Question, Attempt } from "../shared/types.ts";
 
 const q = (over: Partial<Question>): Question => ({
   id: "q", examId: "e", type: "mcq", prompt: "p", points: 10, correctAnswer: "", ...over,
@@ -145,5 +145,69 @@ describe("rubricTotal", () => {
   });
   it("returns 0 with no rubric", () => {
     expect(rubricTotal(undefined, { c1: 5 }, 10)).toBe(0);
+  });
+});
+
+describe("lateSyncEligible", () => {
+  const T0 = Date.parse("2026-01-01T12:00:00.000Z"); // the exam's deadline
+  const attempt = (over: Partial<Attempt> = {}): Attempt => ({
+    id: "a", registrationId: "r", examId: "e", candidateId: "c",
+    startedAt: "2026-01-01T11:00:00.000Z", submittedAt: new Date(T0).toISOString(),
+    durationMinutes: 60, score: null, passed: null, status: "submitted",
+    ...over,
+  });
+
+  it("accepts an answer saved locally before the deadline, synced shortly after auto-submit", () => {
+    const a = attempt();
+    const nowMs = T0 + 5 * 60_000; // 5 min after close
+    const savedBeforeDeadline = T0 - 60_000; // written 1 min before time ran out
+    expect(lateSyncEligible(a, T0, savedBeforeDeadline, nowMs)).toBe(true);
+  });
+
+  it("rejects an answer whose own timestamp is after the deadline — can't smuggle in a late answer", () => {
+    const a = attempt();
+    const nowMs = T0 + 5 * 60_000;
+    const savedAfterDeadline = T0 + 60_000; // claims to be written 1 min after time ran out
+    expect(lateSyncEligible(a, T0, savedAfterDeadline, nowMs)).toBe(false);
+  });
+
+  it("rejects once the grace window itself has elapsed", () => {
+    const a = attempt();
+    const nowMs = T0 + LATE_SYNC_GRACE_MS + 1000; // just past the window
+    const savedBeforeDeadline = T0 - 60_000;
+    expect(lateSyncEligible(a, T0, savedBeforeDeadline, nowMs)).toBe(false);
+  });
+
+  it("rejects a proctor/violation termination outright, regardless of timestamp", () => {
+    const a = attempt({ terminated: true, terminationReason: "Auto-submitted: reached the integrity-violation limit." });
+    const nowMs = T0 + 5 * 60_000;
+    const savedBeforeDeadline = T0 - 60_000;
+    expect(lateSyncEligible(a, T0, savedBeforeDeadline, nowMs)).toBe(false);
+  });
+
+  it("rejects a still-in-progress attempt (not the scenario this exists for)", () => {
+    const a = attempt({ status: "in_progress", submittedAt: null });
+    expect(lateSyncEligible(a, T0, T0 - 60_000, T0 + 60_000)).toBe(false);
+  });
+
+  it("rejects a missing or non-numeric clientSavedAt", () => {
+    const a = attempt();
+    const nowMs = T0 + 5 * 60_000;
+    expect(lateSyncEligible(a, T0, undefined, nowMs)).toBe(false);
+    expect(lateSyncEligible(a, T0, "not-a-number", nowMs)).toBe(false);
+  });
+
+  it("uses the earlier of the deadline and the candidate's own (early) submit time as the cutoff", () => {
+    // Candidate submitted 10 minutes before the exam's own deadline — a
+    // locally-saved answer timestamped between their submit and the full
+    // deadline must NOT be accepted, since it couldn't have existed on their
+    // device before they hit submit.
+    const earlySubmit = T0 - 10 * 60_000;
+    const a = attempt({ submittedAt: new Date(earlySubmit).toISOString() });
+    const nowMs = earlySubmit + 5 * 60_000;
+    const savedBetweenSubmitAndDeadline = earlySubmit + 2 * 60_000;
+    expect(lateSyncEligible(a, T0, savedBetweenSubmitAndDeadline, nowMs)).toBe(false);
+    const savedBeforeSubmit = earlySubmit - 60_000;
+    expect(lateSyncEligible(a, T0, savedBeforeSubmit, nowMs)).toBe(true);
   });
 });

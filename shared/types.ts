@@ -5,8 +5,26 @@ export type { GradeScale, GradeBand } from "./grades.ts";
 
 export type Role = "candidate" | "admin" | "facilitator" | "proctor";
 
+/** One school/organization on the platform — the unit every tenant-scoped
+ *  record (User, Exam, ...) belongs to. Named "Tenant" rather than
+ *  "Institution" because that word already means the internal structure of
+ *  a single school (Faculty/Department/Program/Campus/AcademicYear, see
+ *  below) — reusing it for the multi-tenant customer concept would collide.
+ *  Managed exclusively by Super Admins, never by a tenant's own admins. */
+export interface Tenant {
+  id: string;
+  name: string;
+  status: "active" | "suspended";
+  createdAt: string;
+}
+
 export interface User {
   id: string;
+  /** The school/organization this account belongs to. Every account is
+   *  single-tenant today (one row, backfilled at migration) — see
+   *  server/tenant.ts and the tenant-retrofit plan for the isolation model
+   *  this enables. */
+  tenantId?: string;
   email: string;
   passwordHash: string;
   name: string;
@@ -79,6 +97,12 @@ export interface SuperAdmin {
   /** Same self-clearing semantics as User.mustChangePassword — forces the
    *  bootstrap one-time password to be rotated before anything else is reachable. */
   mustChangePassword?: boolean;
+  /** Revokes access without deleting the account (preserves audit-trail
+   *  continuity — every past action still resolves to a real name). Checked
+   *  at both login and session-verification time; a disabled account is
+   *  treated identically to a nonexistent one for login-response purposes,
+   *  so revocation status is never leaked via the error message. */
+  disabled?: boolean;
 }
 
 /** Client-facing DTO for SuperAdmin — no passwordHash, mirrors SafeUser below. */
@@ -89,11 +113,76 @@ export interface SafeSuperAdmin {
   mustChangePassword?: boolean;
 }
 
+/** Row shape for the Super Admin team list — unlike SafeSuperAdmin (which is
+ *  "who am I"), this is "who else has access", so it includes disabled. */
+export interface SuperAdminSummary {
+  id: string;
+  email: string;
+  name: string;
+  createdAt: string;
+  mustChangePassword: boolean;
+  disabled: boolean;
+}
+
+/** Singleton (single row, id: "platform") — when enabled, the maintenance
+ *  gate middleware (server/index.ts) returns 503 for every tenant-facing
+ *  /api/* route, leaving only /api/super-admin/* and /api/status/* reachable.
+ *  This is real enforcement, not a cosmetic banner: it blocks login, exam
+ *  delivery, everything, for every tenant user until a Super Admin turns it
+ *  back off. */
+export interface PlatformMaintenance {
+  id: "platform";
+  enabled: boolean;
+  message: string;
+  updatedAt: string;
+  updatedBy: string;
+}
+
+/** A Super Admin override for one curated outbound-email flow (see
+ *  server/emailTemplates.ts for the default catalog and render logic).
+ *  Deliberately scoped to just subject + the intro paragraph, not full HTML —
+ *  the surrounding branded envelope (tables, CTA button, footer) stays fixed
+ *  so an edited template can't accidentally break layout or repoint a link. */
+export interface EmailTemplate {
+  id: string; // matches an EMAIL_TEMPLATE_DEFS key, e.g. "account.setup_link"
+  subject: string;
+  intro: string;
+  updatedAt: string;
+  updatedBy: string;
+}
+
+export type SupportTicketStatus = "open" | "in_progress" | "resolved" | "closed";
+
+export interface SupportTicketMessage {
+  id: string;
+  authorType: "tenant" | "superadmin";
+  authorName: string;
+  body: string;
+  at: string;
+}
+
+/** Platform support, not internal school support — for a tenant admin to
+ *  reach the platform operator (Super Admin), not for candidates to reach
+ *  their school. Single-tenant today, so every ticket is visible to every
+ *  admin with system.settings — the same "one team" visibility audit logs
+ *  already have, not a per-user inbox. */
+export interface SupportTicket {
+  id: string;
+  tenantId?: string;
+  subject: string;
+  status: SupportTicketStatus;
+  createdBy: { id: string; name: string; email: string };
+  createdAt: string;
+  updatedAt: string;
+  messages: SupportTicketMessage[];
+}
+
 /** A named, admin-defined bundle of fine-grained permissions (see
  *  shared/permissions.ts) that can be assigned to a staff member via
  *  User.customRoleId, on top of their base `role`. */
 export interface CustomRole {
   id: string;
+  tenantId?: string;
   name: string;
   description?: string;
   /** Permission keys from shared/permissions.ts granted directly by this role
@@ -136,6 +225,7 @@ export type QuestionType =
 
 export interface Question {
   id: string;
+  tenantId?: string;
   examId: string;
   type: QuestionType;
   prompt: string;
@@ -349,6 +439,7 @@ export const DEFAULT_LOCKDOWN: LockdownConfig = {
 
 export interface Exam {
   id: string;
+  tenantId?: string;
   title: string;
   code: string;
   description: string;
@@ -422,6 +513,7 @@ export type ApprovalStatus = "pending" | "confirmed" | "rejected";
 
 export interface Registration {
   id: string;
+  tenantId?: string;
   examId: string;
   candidateId: string;
   status: RegistrationStatus;
@@ -458,6 +550,7 @@ export type GradingStatus = "auto_graded" | "pending_review" | "released";
 
 export interface Attempt {
   id: string;
+  tenantId?: string;
   registrationId: string;
   examId: string;
   candidateId: string;
@@ -600,6 +693,7 @@ export interface Snapshot {
 
 export interface Certificate {
   id: string;
+  tenantId?: string;
   certNumber: string;
   attemptId: string;
   candidateId: string;
@@ -611,6 +705,10 @@ export interface Certificate {
 /** A message recorded by the mailer — viewable in the admin outbox. */
 export interface EmailMessage {
   id: string;
+  /** Which school this send belongs to — populated by call sites that have a
+   *  tenant context (most do); omitted only for platform-level mail with no
+   *  single owning tenant. */
+  tenantId?: string;
   to: string;
   subject: string;
   body: string;
@@ -629,6 +727,7 @@ export type AnnouncementStatus = "draft" | "scheduled" | "sent";
 /** An institution-wide announcement, optionally scheduled and delivered over channels. */
 export interface Announcement {
   id: string;
+  tenantId?: string;
   title: string;
   message: string;
   audience: AnnouncementAudience;
@@ -651,14 +750,17 @@ export interface Announcement {
  *  today, so this is candidate-scoped. */
 export interface AnnouncementRead {
   id: string;
+  tenantId?: string;
   announcementId: string;
   candidateId: string;
   readAt: string;
 }
 
-/** Institution-wide settings (a single record). Some fields drive real behavior. */
+/** One tenant's settings (a single record per tenant, id === that tenant's
+ *  id — no longer the literal constant "org"; see server/tenant.ts's
+ *  getOrgSettings()). Some fields drive real behavior. */
 export interface OrgSettings {
-  id: string; // always "org"
+  id: string;
   name: string;
   supportEmail: string;
   website: string;
@@ -862,6 +964,7 @@ export interface ReliabilityIncident {
  *  e.g. "2025/2026") — a Cohort *contains* classes via `academicYearId`, it isn't one. */
 export interface ClassGroup {
   id: string;
+  tenantId?: string;
   name: string;
   code?: string;
   description?: string;
@@ -918,6 +1021,7 @@ export interface ResourceVisibility {
  *  kept in the resourceVersions table. */
 export interface Book {
   id: string;
+  tenantId?: string;
   title: string;
   author: string;
   genre: BookGenre;
@@ -973,6 +1077,7 @@ export interface Book {
  *  admins can view history / restore, while students always see the latest. */
 export interface ResourceVersion {
   id: string;
+  tenantId?: string;
   bookId: string;
   version: number;
   fileData?: string | null;
@@ -987,6 +1092,7 @@ export interface ResourceVersion {
 
 export interface ResourceBookmark {
   id: string;
+  tenantId?: string;
   bookId: string;
   candidateId: string;
   createdAt: string;
@@ -994,6 +1100,7 @@ export interface ResourceBookmark {
 
 export interface ResourceRating {
   id: string;
+  tenantId?: string;
   bookId: string;
   candidateId: string;
   score: number; // 1-5
@@ -1006,6 +1113,7 @@ export interface ResourceRating {
  *  tamper-evident audit_logs chain). */
 export interface ResourceDownloadLog {
   id: string;
+  tenantId?: string;
   bookId: string;
   candidateId: string;
   at: string;
@@ -1015,6 +1123,7 @@ export interface ResourceDownloadLog {
  *  set by the student directly (there's no reader to auto-track pages). */
 export interface ReadingProgress {
   id: string;
+  tenantId?: string;
   bookId: string;
   candidateId: string;
   currentPage: number;
@@ -1022,11 +1131,11 @@ export interface ReadingProgress {
 }
 
 // ---- Institution structure ----
-export interface Faculty { id: string; name: string; createdAt: string; }
-export interface Department { id: string; name: string; facultyId?: string | null; createdAt: string; }
-export interface Program { id: string; name: string; departmentId?: string | null; level?: string; createdAt: string; }
-export interface Campus { id: string; name: string; location?: string; createdAt: string; }
-export interface AcademicYear { id: string; name: string; startDate?: string | null; endDate?: string | null; current?: boolean; createdAt: string; }
+export interface Faculty { id: string; tenantId?: string; name: string; createdAt: string; }
+export interface Department { id: string; tenantId?: string; name: string; facultyId?: string | null; createdAt: string; }
+export interface Program { id: string; tenantId?: string; name: string; departmentId?: string | null; level?: string; createdAt: string; }
+export interface Campus { id: string; tenantId?: string; name: string; location?: string; createdAt: string; }
+export interface AcademicYear { id: string; tenantId?: string; name: string; startDate?: string | null; endDate?: string | null; current?: boolean; createdAt: string; }
 
 /** Per-subject performance trend for one student. */
 export interface SubjectTrend {
@@ -1052,6 +1161,7 @@ export type RegradeStatus = "open" | "resolved" | "rejected";
 /** A student's request to have a released result reviewed, routed to a grader. */
 export interface RegradeRequest {
   id: string;
+  tenantId?: string;
   attemptId: string;
   candidateId: string;
   examId: string;
@@ -1069,6 +1179,12 @@ export interface RegradeRequest {
 export interface AuditLog {
   id: string;
   at: string;
+  /** Which school this entry belongs to — populated whenever the actor has a
+   *  tenant (i.e. every tenant-admin action); absent only for a handful of
+   *  pre-session/system events with no single owning tenant. Never part of
+   *  the tamper-evidence hash (see auditEntryHash in server/db.ts), so it can
+   *  be filtered on without touching the existing hash chain. */
+  tenantId?: string;
   actorId: string;
   actorName: string;
   action: string; // dot-namespaced, e.g. "exam.published"

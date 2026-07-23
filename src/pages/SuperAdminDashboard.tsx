@@ -61,7 +61,7 @@ export function SuperAdminDashboard() {
           <>
             <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-[var(--muted)]">{t("sad.secInstitutions")}</p>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-              <StatCard icon={Building2} label={t("sad.totalInstitutions")} value={data.institutions.total} hint={t("sad.singleTenantHint")} />
+              <StatCard icon={Building2} label={t("sad.totalInstitutions")} value={data.institutions.total} />
               <StatCard icon={Building2} label={t("sad.activeInstitutions")} value={data.institutions.active} />
               <StatCard icon={Building2} label={t("sad.suspendedInstitutions")} value={data.institutions.suspended} />
             </div>

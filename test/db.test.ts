@@ -43,8 +43,14 @@ describe("storage layer", () => {
     await expect(db.ping()).resolves.toBeUndefined();
   });
 
-  it("ensures the singleton org-settings row exists after init", () => {
-    expect(db.data.settings.find((s) => s.id === "org")).toBeTruthy();
+  it("ensures a tenant and its org-settings row exist after init", () => {
+    // OrgSettings.id is no longer the literal constant "org" — the tenant
+    // retrofit's boot-time migration renames it to the owning tenant's id
+    // (server/db.ts). See test/tenant-isolation.test.ts for the isolation
+    // behavior this enables.
+    expect(db.data.tenants.length).toBe(1);
+    const tenantId = db.data.tenants[0].id;
+    expect(db.data.settings.find((s) => s.id === tenantId)).toBeTruthy();
   });
 
   it("persists and reads back a row via upsert + read", async () => {

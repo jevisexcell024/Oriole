@@ -3,8 +3,10 @@ import { env } from "./env.ts";
 import { logger } from "./logger.ts";
 import { recordJobRun } from "./reliability.ts";
 
+// Not yet tenant-aware — safe today because exactly one tenant exists; see
+// server/tenant.ts's getOrgSettings.
 function auditRetentionDays(): number {
-  const v = db.data?.settings.find((s) => s.id === "org")?.auditRetentionDays;
+  const v = db.data?.settings.find((s) => s.id === db.data?.tenants[0]?.id)?.auditRetentionDays;
   return Number.isFinite(v) && (v as number) > 0 ? Math.floor(v as number) : 0;
 }
 

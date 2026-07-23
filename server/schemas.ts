@@ -71,6 +71,23 @@ export const passwordResetSchema = z.object({
   password: strongPassword,
 });
 
+// No password field — mirrors the bootstrap pattern (server/db.ts): an
+// inviting super admin never chooses another account's password, the server
+// generates a one-time one and the invite flow forces its rotation.
+export const superAdminCreateSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  email: z.string().trim().email().max(254),
+});
+
+// New tenant (school) + its first admin account, in one step — same no-password
+// convention as superAdminCreateSchema above (the platform operator never
+// chooses another organization's admin password).
+export const tenantCreateSchema = z.object({
+  tenantName: z.string().trim().min(1).max(160),
+  adminName: z.string().trim().min(1).max(120),
+  adminEmail: z.string().trim().email().max(254),
+});
+
 // Two-factor: the verify/enable steps take a 6-digit TOTP or a backup code;
 // disable accepts either the current password or a current code.
 export const twoFaCodeSchema = z.object({

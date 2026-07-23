@@ -56,6 +56,7 @@ const ROUTES: Record<string, CrumbDef> = {
   "/admin/organization": { labelKey: "anav.organization", parent: "/admin/dashboard" },
   "/admin/integrations": { labelKey: "anav.integrations", parent: "/admin/dashboard" },
   "/admin/audit-logs": { labelKey: "anav.auditLogs", parent: "/admin/dashboard" },
+  "/admin/support": { labelKey: "anav.support", parent: "/admin/dashboard" },
   "/admin/settings": { labelKey: "anav.settings", parent: "/admin/dashboard" },
   "/admin/account": { labelKey: "acct.title", parent: "/admin/dashboard" },
   "/admin/team": { labelKey: "anav.team", parent: "/admin/dashboard" },
@@ -67,6 +68,12 @@ const ROUTES: Record<string, CrumbDef> = {
   "/super-admin/dashboard": { labelKey: "sanav.dashboard" },
   "/super-admin/security": { labelKey: "sanav.securityCenter" },
   "/super-admin/settings": { labelKey: "sanav.platformSettings" },
+  "/super-admin/team": { labelKey: "sanav.superAdmins" },
+  "/super-admin/profile": { labelKey: "sanav.profile" },
+  "/super-admin/system-info": { labelKey: "sanav.systemInformation" },
+  "/super-admin/maintenance": { labelKey: "sanav.maintenanceMode" },
+  "/super-admin/email-templates": { labelKey: "sanav.emailTemplates" },
+  "/super-admin/tickets": { labelKey: "sanav.tickets" },
 };
 
 function matchRoute(path: string): { pattern: string; def: CrumbDef } | null {

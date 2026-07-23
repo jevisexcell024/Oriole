@@ -4,6 +4,148 @@ A running record of what shipped in each version. Newest first.
 
 ---
 
+## v2.11.0 — Multi-Tenant Retrofit, Phase E: cross-tenant security pass
+
+**Deliberately adversarial, not just a re-read of Phase C's own work.** A static sweep re-checked every tenant-scoped `.find()`/`.filter()` in `server/index.ts` for a missed check (none found beyond what this entry fixes), then a real attack: a second tenant ("Attacker School") was created through the new Institutions flow, logged into independently, and used to probe every high-value route with real IDs harvested from the actual seeded tenant — exam/question/candidate/admin reads, writes, and deletes; list endpoints; the public API v1 with a freshly-issued key. Every one of those held (clean 404s, empty lists) — Phase C's route-by-route work was solid. The pass still turned up three real, independent bugs along the way:
+
+**A whole admin-facing page was leaking, missed entirely by Phase C.** `GET /api/admin/dashboard` — the first screen every tenant admin sees after logging in — filtered `db.data` directly with no tenant check anywhere in the function (`_req` unused was the tell). Every card, chart, and list on it — active students, exam activity, subject performance, live exams, recent results (candidate names included), upcoming exams, the institution health score, at-risk-student predictions — was computed across every school on the platform, not just the admin's own. Rewritten to scope every collection access by `currentTenantId(req)`; verified live that an attacker tenant's dashboard now renders entirely empty (zeros and `[]`) while the real tenant's dashboard is unaffected.
+
+**The audit trail leaked another school's admin activity — actual names, actual actions.** `GET /api/admin/audit-logs` and the dashboard's "recent activity" widget both called the platform-wide `auditStore.recent()`, so any tenant admin holding `system.audit_log` (the default for every admin) could read every other school's activity log verbatim. Fixed by giving `AuditLog` a `tenantId` field, `recordAudit()`/`recordAuthAudit()` now populate it (the latter resolves it from whichever account matches the attempted email, so a school's admin still sees failed logins against their own accounts), and both routes now call a new `auditStore.recentForTenant()` instead of the global `recent()`. The tamper-evidence hash chain itself stays platform-wide by design (it's an internal integrity check — true/false plus which entry id broke, never entry content) and isn't part of what's hashed, so this doesn't touch the chain. Pre-existing entries written before this fix have no tenant on them and so won't appear in the scoped view — a completeness gap for old history, not a new leak, and not one this pass tried to backfill.
+
+**A quieter disclosure in the same family**: `GET /api/admin/system-health`'s collection counts (`users`, `exams`, `questions`, …) were platform-wide totals, letting any tenant admin infer the platform's total scale and every other customer's combined activity. The row counts now reflect only the requester's own tenant; the genuinely shared facts (engine, mailer/SMS/backup status, uptime) stay as they were.
+
+**A real bug the attack setup itself surfaced, not a leak**: creating a tenant through the new Institutions flow (`POST /api/super-admin/tenants`) never provisioned that tenant's `OrgSettings` row — every route touching org settings (webhooks, API keys, learning structure, reports, …) threw for a brand-new school, and because nothing in the route chain forwards an async throw to Express's error handler, the request didn't 500, it hung forever. Fixed by seeding a default `OrgSettings` row at tenant-creation time, matching the invariant `getOrgSettings()` already assumed. The silent-hang failure mode itself (any unguarded async throw stalls the client instead of returning 500) is a separate, broader reliability gap noted for later — out of scope for this pass, which was about tenant isolation specifically.
+
+---
+
+## v2.10.0 — Grace-window late sync: no answer lost to a mid-exam outage
+
+**Closes a real gap between what the client already protected and what the server would accept.** `useAnswerSync.ts` has always kept every unsynced answer safely in the candidate's own browser (localStorage) through a full internet outage, flushing it the instant connectivity returns — but if that outage outlasted the exam's own deadline, the server had already auto-submitted the exam (`autoSubmitOverdue`) and would flatly reject the catch-up as "exam already closed," even though the answer was written well before time ran out and never actually lost.
+
+**The fix has two halves.** The client now stamps every locally-queued answer with the moment it was actually set (`useAnswerSync.ts`); the server (`POST /api/attempts/:id/answer`) accepts a late sync for a short window after auto-submit, but only when a new pure helper — `lateSyncEligible()` (`server/grading.ts`, covered by 7 unit tests in `test/grading.test.ts`) — confirms every one of: the exam was closed purely for running out of time (never a proctor/violation termination — `attempt.terminated` always wins), the request lands within `LATE_SYNC_GRACE_MS` (30 minutes) of that submission, and — the actual proof, not just a courtesy — the answer's own client-recorded timestamp is at or before the earlier of the exam's deadline and the candidate's own submit time. A timestamp claiming to be from after that cutoff is rejected exactly like any other post-deadline answer; there's no window in which typing a new answer today gets accepted as if it were "found offline."
+
+**Accepted late syncs re-grade only that one answer** (`gradeOne`) and refresh the attempt's aggregate score, leaving every other already-graded answer and any already-completed manual review untouched — a certificate is only (re-)issued if the attempt's overall grading status is still `auto_graded` after the update. Logged to the audit trail (`attempt.late_sync_accepted`) since it's a genuine exception to a normally-hard exam close, worth being able to review later.
+
+**Deliberately scoped**: this covers minutes, not a whole-day outage — a longer one needs an admin to manually extend that one student's deadline (a separate, not-yet-built tool), not an ever-longer grace window that would start working against the point of a timed exam.
+
+---
+
+## v2.9.0 — Item Analysis: per-question response view, and a real disaster-recovery bug fix
+
+**"See every candidate's answer to this one question," not just its aggregate stats.** Item Analysis already showed correct-rate/difficulty/option-pick breakdowns per question; there was no way to actually read what everyone wrote to a short-answer or essay question without opening each attempt individually. A new "View responses" action per row (`GET /api/admin/exams/:id/questions/:qid/responses`) opens every submitted candidate's answer to that one question side by side — correctness/points for auto-graded types, a "needs review" flag for manually-graded ones, and each grader's feedback if left. Reuses the exact same `displayAnswer`/`displayCorrect` rendering and double-blind-grading (`isAnonymized`/`anonLabel`) logic the per-attempt review screen already relies on, so answer formatting and anonymity stay consistent between the two views.
+
+**A real, pre-existing disaster-recovery bug, found while verifying the above.** Restarting the dev server surfaced a hard crash in the embedded database's own self-healing path (`recoverFromLatestBackup()` in `server/db.ts`) — the exact code whose entire purpose is to survive an unclean shutdown instead of crash-looping. Two distinct bugs, both fixed:
+- The quarantine step's `fs.renameSync` had no error handling at all, so a Windows file handle that doesn't release the instant PGlite's `close()` resolves (observed lag well past a second — this is a WASM-backed engine, not a plain file) turned into an unhandled crash. Now retried, and if a handle genuinely never releases within this same process's lifetime, recovery falls back to a fresh sibling directory instead of fighting an unrenamable one — self-healing either way, matching what the code already claimed to do.
+- Once recovery could actually proceed, it hit a second, independent bug: restoring a backup into a freshly-created database failed with `column "tenant_id" of relation "emails" does not exist`. The 7 off-mirror tables' `tenant_id` column was only ever added by `backfillOffMirrorTenantId()`, called once from the normal boot path — never from `ensureSchema()` itself, which is what the recovery path calls against a brand-new database. Any tenant-aware write (e.g. `emailStore.add()`, fixed in the Phase C retrofit to actually write `tenant_id`) would fail the instant a real disaster-recovery ever ran. Fixed by adding the column unconditionally at the end of `ensureSchema()`, so it's guaranteed to exist regardless of which path created the database.
+
+Neither bug was reachable in normal operation — both only fire during an actual corruption-and-restore cycle — which is exactly why they'd stayed latent. Verified by deliberately forcing the recovery path to run and confirming the server now boots all the way to serving requests instead of crashing.
+
+---
+
+## v2.8.0 — Multi-Tenant Retrofit, Phase D: Institutions (tenant management)
+
+**The first real Super Admin screen for managing schools, not just single-tenant scaffolding.** Phase C made every tenant-admin route respect school boundaries; this phase gives the platform operator an actual UI to create schools and control access to them, closing out "tenant management (core)" from the original v1.6.0 plan.
+
+**New page**: `/super-admin/institutions` (Tenants → Institutions) — every school on the platform in one table (status, admin/staff/student/exam counts, created date), a "New Institution" flow that creates the school plus its first admin account in one step (same no-chosen-password convention as inviting a Super Admin: a one-time password is generated and shown exactly once), and a suspend/reactivate toggle per row.
+
+**Suspension is real enforcement, the same standard Maintenance Mode set in Workstream 4 — not a cosmetic status label.** A suspended school's accounts can't sign in (`POST /api/auth/login` now checks the tenant's status right after password verification, before issuing a session) — and, more importantly, every *already-issued* session for that school dies on its very next request too: `currentUser()` (`server/auth.ts`) now checks the tenant's live status the same way it already checks `tokenVersion`, so suspending a school doesn't wait for tokens to expire or need a bulk `tokenVersion` bump across every one of its users. Reactivating restores access immediately, with no need to log in again. Verified live end-to-end: created a test school, confirmed its admin could sign in normally, suspended it and confirmed both a fresh login attempt (403, specific message) and the *already-open* session (`/api/auth/me` → `null`) were blocked, then reactivated and confirmed the exact same credentials and cookie worked again immediately.
+
+**The Super Admin dashboard's institution counts were hardcoded** (`{ total: 1, active: 1, suspended: 0 }`, a placeholder from Workstream 1 before real tenants existed) — now computed from `db.data.tenants` for real.
+
+**A pre-existing bug caught by `tsc`, unrelated to this feature**: a leftover `_req` reference in the dev-only load-test-data purge route (introduced when Phase C added tenant scoping to that handler and renamed its parameter to `req`) had been silently surviving several incremental `tsc -b` runs — only surfaced on a subsequent run, then confirmed by a `--force` full rebuild. Fixed; a good reminder that an incremental TypeScript build isn't a substitute for an occasional clean one.
+
+---
+
+## v2.7.0 — Multi-Tenant Retrofit, Phase C: route migration sweep
+
+**The bulk migration Phase A+B deliberately deferred.** Phase A+B proved the pattern on one route (`GET /api/admin/exams`) and left the other ~228 routes on the old, single-tenant-honest hardcoded lookups. This phase works through nearly all of them, resource area by resource area, filtering every tenant-scoped collection access by the requester's `tenantId`.
+
+**`getSettings()` — the hardcoded-to-tenant-0 shortcut — is gone.** Every one of its ~30 call sites (Settings, Learning Structure, Rubric Library, Webhooks, API Keys, Integrations, the admin digest trigger, Reports + its 3 CSV exports) now resolves `getOrgSettings(tenantId)` for the actual requester instead. The now-unused function itself was deleted rather than left as dead code. Two background sweeps that used to run once, globally, now loop per-tenant: `digestSweep()` and `reportSweep()`.
+
+**`dispatchWebhook` now takes the owning tenant as its first argument** (returns early, no-op, if null) and looks up that tenant's own webhook config instead of tenant 0's. All 5 call sites updated, including the Reliability Center's incident-open/incident-resolve notifications (`server/reliability.ts`) — that subsystem measures the platform as a whole, not one tenant, so it deliberately keeps notifying through the original bootstrap tenant rather than pretending to be tenant-aware; only the type signature changed there.
+
+**The public API v1** (`requireApiKey` + `GET /api/v1/exams|results|certificates`) had no session to read a tenant from — it authenticates by a bearer key alone, and that key lives inside its owning tenant's `OrgSettings.apiKeys`. Fixed by scanning every tenant's settings for the matching key hash at auth time, then scoping the three endpoints to whichever tenant owned it. Previously every valid key could read every tenant's data.
+
+**Two real cross-tenant leaks found and fixed along the way, not just theoretical gaps:**
+- `GET /api/exams` (the single highest-traffic candidate-facing route) was showing every tenant's published exams to every candidate, and lazily-created registrations weren't tagged with the candidate's tenant.
+- The class-roster CSV importer (`POST /api/admin/classes/:id/import`) would silently pull a real user belonging to a *different* tenant into the importing tenant's own class and exam registrations if a row's email happened to match — email stays globally unique by design (see Phase A+B's login decision), so a match is a real, taken account, not a name collision to paper over. Now rejected with "Email already registered to another account."
+
+**Full resource-area sweep**: Exam & question builder (create/edit/duplicate/publish, question CRUD/import/clone/reorder, question bank, media upload), Results & Analytics (results, results-by-cohort, item-analysis, similarity, analytics ×3, integrity, violations), Grading & live monitor (grading queue, answer grading, release/release-all/recompute, second-mark, live monitor, attempt intervene actions), Students/attendance/reports (SIS records, attendance ×2, reports + CSVs), Team management (invite/change-role/remove, with the "last admin" guard now counted per-tenant instead of platform-wide). Four smaller leaks caught by a full audit rather than assumption: the candidate score-trend and per-student report both averaged a "class score" across every tenant instead of just the student's own; practice exams leaked across tenants the same way `GET /api/exams` did; the notifications feed's announcement/library-resource/staff-grading items had no tenant filter at all.
+
+**Off-mirror stores (proctor events, answers, snapshots, etc.) still don't carry their own `tenantId` column** — deferred, tracked as follow-up work. They're accessed exclusively through an already tenant-checked owning attempt/exam in every route now, so this is a defense-in-depth gap rather than a currently reachable one; the two admin-facing aggregate views that used to scan them platform-wide (`/api/admin/integrity`, `/api/admin/violations`) now filter by joining back through the owning attempt's tenant instead.
+
+---
+
+## v2.6.0 — Multi-Tenant Retrofit, Phase A+B: schema foundation + auth plumbing
+
+**The foundational piece the whole Super Admin platform was built to eventually need.** Every Workstream so far (1–6) was deliberately scaffolded single-tenant-honest — "Tenants," "Licensing," and "Branding Defaults" stayed disabled because building real screens against fake multi-tenant data would have violated the standard the rest of the platform holds to. This phase is the schema + auth foundation that makes tenant scoping real, without yet migrating the ~228 remaining routes (that's Phase C, future multi-session batched work — this phase intentionally touches exactly one representative route to prove the pattern).
+
+**New `Tenant` entity** (`shared/types.ts`) — deliberately not named "Institution," since that word already means a single school's internal structure (Faculty/Department/Program/Campus/AcademicYear). A `tenantId` field was added to the 23 tenant-scoped types (`User`, `Exam`, `Question`, `Registration`, `Attempt`, `Certificate`, `Announcement`, `OrgSettings`, and 16 more); `SuperAdmin`, `PlatformMaintenance`, `EmailTemplate`, and `ReliabilityIncident` stay platform-global by design.
+
+**A real, one-time boot migration** (`server/db.ts`) creates the platform's first Tenant from the existing `OrgSettings.name`, then backfills `tenantId` onto every existing row of every tenant-scoped collection — mirrored collections via the same in-memory-mutate-then-flush pattern the codebase already uses for other backfills, and 7 off-mirror tables (`snapshots`, `answers`, `proctor_events`, `geofence_logs`, `media_assets`, `audit_logs`, `emails`) via a new parameterized `ALTER TABLE ADD COLUMN` + `UPDATE` step (these needed a literal new value, not something extractable from the existing JSON the way prior backfills worked). Verified live against the real dev database: exactly one Tenant created, every existing exam/user backfilled with its real id, the admin dashboard and exams page work identically for the existing tenant admin.
+
+**`OrgSettings`'s hardcoded `id: "org"` was a real landmine, not just a rename.** Four separate files independently looked it up by that literal constant, two with an immediate non-null assertion — becoming one-row-per-tenant would have silently crashed all four the moment a settings row's id stopped being `"org"`. Fixed in this same pass, not deferred: a new `getOrgSettings(tenantId)` helper (`server/tenant.ts`), plus a tenant-aware fallback in `server/db.ts`'s own bootstrap so the lookup doesn't create a duplicate row on every subsequent boot once the real id has changed — a bug caught and fixed before it ever shipped.
+
+**Auth**: `issueSession()` now signs a `tenantId` claim (one function, covers all 6 call sites); `currentUser()` validates it against the fresh DB row the same way it already validates `tokenVersion` — a stale or forged tenant claim invalidates the session exactly like a stale `tv` does. Every currently-logged-in session is invalidated by this deploy (old tokens have no `tenantId` claim) — a one-time, expected re-login, the same class of event a `tokenVersion` bump already causes elsewhere.
+
+**One fully-proven route**: `GET /api/admin/exams` now filters through a new `tenantExams(tenantId)` helper (`server/tenant.ts`) — the first of a small library Phase C grows one resource area at a time. Pinned by `test/tenant-isolation.test.ts`, which creates two tenants' worth of exams in a real database and asserts neither can see the other's.
+
+**A scope correction made mid-implementation**: the plan called for `tenantId` as a required field, but making it required cascaded into ~40 compile errors across every not-yet-migrated route's object construction (and the dev seed script) — fixing all of them would have meant touching most of the 229 routes in what was scoped as a "one representative route" pass. Changed to optional instead: existing rows are still fully backfilled, the one migrated route works identically, and nothing outside it reads `tenantId` yet, so an unset field on a future not-yet-migrated route's new row is inert. Each type tightens back to required as Phase C actually migrates that resource area.
+
+---
+
+## Not shipped — API Keys (duplicate of an existing feature)
+
+Building a Super Admin "API Keys" section was planned as a fourth new subsystem alongside Workstreams 5–6, and was fully built (issuance, SHA-256-hashed storage, revocation, a `requireApiKey` middleware, one gated endpoint, a page) before a `tsc` naming collision (`requireApiKey` already declared) surfaced that `server/index.ts` already has a complete, real, tenant-admin-facing API key system: `POST/DELETE /api/admin/apikeys`, a `requireApiKey` middleware, and three already-working gated endpoints (`GET /api/v1/exams`, `/results`, `/certificates`), all with a working UI already in `src/pages/AdminIntegrations.tsx`. Building a second, parallel key system under Super Admin — different key prefix, different storage location, no shared endpoints — would have been exactly the kind of confusing duplicate this whole effort has deliberately avoided everywhere else (see Workstream 4's System Health discussion). Fully reverted rather than shipped once the duplication was found; nothing about this exists in the codebase.
+
+---
+
+## v2.5.0 — Super Admin Platform, Workstream 6: Support Tickets
+
+**A tenant admin can now reach the platform operator directly**, closing a real gap: previously there was no in-app way for the one tenant's administrators to contact Oriole's platform team at all. New `supportTickets` collection, shared between two permission tiers on the same records — tenant admins (gated by the existing `system.settings` permission, same tier as Settings/Integrations) can open a ticket and reply; only a Super Admin can change its status. Single-tenant today, so every ticket is visible to every tenant admin, the same "one team" visibility the audit log already has — not a per-user inbox.
+
+**New tenant-side page**: `/admin/support` (Administration → Platform Support in `AdminShell`) — list, new-ticket form, threaded reply modal.
+
+**New Super Admin page**: `/super-admin/tickets` (Support → Tickets) — list with a status filter bar, the same threaded modal plus a status dropdown (open/in progress/resolved/closed).
+
+**Status transitions are automatic where it makes sense**: a Super Admin reply on an `open` ticket moves it to `in_progress`; a tenant reply on a `resolved` ticket reopens it to `open`; a `closed` ticket rejects new tenant replies with a clear message (no reopening — the tenant starts a new ticket instead). Verified live end-to-end via direct API calls through the full lifecycle (open → Super Admin reply → auto in-progress → resolved → tenant reply → auto-reopened → closed → reply correctly rejected), confirming both the tenant and Super Admin hash-chained audit trails recorded every step with the chain still verifying clean on both sides afterward.
+
+---
+
+## v2.4.0 — Super Admin Platform, Workstream 5: Email Templates
+
+**Scoped deliberately narrow: subject + intro paragraph, not full HTML.** The four most representative outbound emails (new-device sign-in alert, account setup link, result-released notification, exam starting-soon reminder) had their subject line and opening paragraph extracted into `server/emailTemplates.ts`'s `EMAIL_TEMPLATE_DEFS` catalog, each with a documented set of `{{variable}}` placeholders. A Super Admin can now override either field per template from `/super-admin/email-templates`; every other email in the app, and every structured part of these four (data tables, CTA button + its URL, footer), stays exactly as coded — an override can reword a message, never restructure or repoint an email's link. Not every `sendMail()` call site in the app routes through this yet; the four chosen are the ones worth customizing first, and adding more later is the same one-line change each of these got.
+
+Resetting a template removes its override row entirely rather than flipping a flag, so "customized" is derived from whether a row exists — no way for the two to drift out of sync.
+
+**Caught by its own test before shipping**: the first version of the HTML-safe rendering path escaped the template's own text but not the per-send variable values substituted into it — a candidate or exam titled with `<img onerror=...>` would have had that markup injected unescaped into the rendered email. Fixed to escape both independently, pinned in `test/email-templates.test.ts`.
+
+---
+
+## v2.3.0 — Super Admin Platform, Workstream 4: System Information, Maintenance Mode
+
+**Every remaining "Soon" section was checked against one question first: does this app being single-tenant make it a duplicate of something a tenant admin already sees?** For most of the spec's remaining groups (Monitoring, most of Infrastructure, most of Reports) the honest answer is yes — "platform-wide" live sessions, database stats, or email logs are, today, identical to the one tenant's own `/admin/live`, `/admin/system-health`, and communication pages. Building second copies of those under Super Admin would repeat the exact mistake Workstream 2 explicitly avoided with System Health. Two sections cleared that bar as genuinely new: one because it shows data no tenant admin can ever see, the other because it's a real capability that doesn't exist anywhere yet.
+
+**System Information** (`/super-admin/system-info`, Developer → System Information) — Node version, OS/platform, CPU count, load average, process and system memory, PID. This is the server's own runtime, not tenant data, so it's a genuinely new surface, not a second window onto the same information.
+
+**Maintenance Mode** (`/super-admin/maintenance`, Maintenance → Maintenance Mode) is real enforcement, not a cosmetic banner: a new gate middleware sits in front of every `/api/*` route and returns 503 with an operator-set message while enabled — blocking tenant login, exam sessions, everything — except `/api/super-admin/*` (so turning it back off is never blocked by itself) and `/api/status/*` (so the public status page can keep working while the app is intentionally down). Verified live end-to-end: enabled it, confirmed `/api/auth/login` and `/api/auth/me` both 503 with the exact message set, confirmed `/api/super-admin/*` and `/api/status/summary` stayed at 200 throughout, then disabled it and confirmed normal service resumed — all captured in the Security Center audit trail with the hash chain still verifying clean afterward.
+
+A real path-matching bug was caught by its own pinning test before this shipped: the first implementation used a bare `path.startsWith("/api/super-admin")`, which would have also exempted a hypothetical `/api/super-admin-evil/...` route from the gate. Fixed to require an exact segment boundary (`test/security.test.ts`).
+
+---
+
+## v2.2.0 — Super Admin Platform, Workstream 3: team management, own profile
+
+**Until now there was exactly one way to get a Super Admin account: set `SUPER_ADMIN_EMAIL` and restart the server.** No way to add a colleague, no way to revoke access, no way to rename yourself or rotate your own password outside the forced first-login flow. This closes those gaps — real operational capability, not more surface area for its own sake.
+
+**Team management** (`/super-admin/team`, Users → Super Admins) lists every Super Admin account and its status (Active / Pending setup / Disabled). Inviting one generates a one-time password server-side — same as the env-var bootstrap — shown once in the UI, never chosen by the inviter and never emailed (a real email template is Configuration → Email Templates, still "Soon"). Revoking access disables rather than deletes, so past audit entries still resolve to a real name; two guards prevent self-lockout: an admin can't disable their own account, and the last remaining enabled account can't be disabled by anyone. A disabled account gets the exact same "Invalid email or password" response as a wrong password at login — revocation status is never observable from the outside. Verified live end-to-end: invited a second account, confirmed its one-time password actually works, disabled it, confirmed login then correctly fails, and watched every step land in the Security Center audit trail with the chain still verifying clean.
+
+**Own profile** (`/super-admin/profile`) — rename yourself, and change your own password any time (not just the one-time forced rotation from Workstream 1). Mirrors the tenant side's existing `POST /api/me/password` exactly: current password required, new session issued, old sessions revoked.
+
+**Two new database fields, zero new tables.** `SuperAdmin.disabled` and the team/profile routes ride on the existing generic (id, doc jsonb) mirrored-table storage — no migration needed for either.
+
+---
+
 ## v2.1.0 — Super Admin Platform, Workstream 2: Security Center, Platform Settings
 
 **Two more sections wired for real, two deliberately skipped.** Continuing Workstream 1's rule — no section ships until it's backed by real data, not a mock. Security Center and Platform Settings had real backing data already; System Health and Feature Flags didn't, so they stayed disabled ("Soon") rather than shipping placeholders.

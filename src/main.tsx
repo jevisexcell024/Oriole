@@ -55,6 +55,7 @@ import { AdminReliabilityIncident } from "@/pages/AdminReliabilityIncident";
 import { StatusPage } from "@/pages/StatusPage";
 import { AdminOrganization } from "@/pages/AdminOrganization";
 import { AdminAuditLogs } from "@/pages/AdminAuditLogs";
+import { AdminSupport } from "@/pages/AdminSupport";
 import { AdminSettings } from "@/pages/AdminSettings";
 import { AdminAccount } from "@/pages/AdminAccount";
 // Lazy-loaded so recharts (heavy) ships in its own chunk, fetched only when an
@@ -165,6 +166,7 @@ function App() {
         <Route path="/admin/organization" element={<Protected cap="org"><AdminOrganization /></Protected>} />
         <Route path="/admin/integrations" element={<Protected cap="org"><AdminIntegrations /></Protected>} />
         <Route path="/admin/audit-logs" element={<Protected cap="org"><AdminAuditLogs /></Protected>} />
+        <Route path="/admin/support" element={<Protected cap="org"><AdminSupport /></Protected>} />
         <Route path="/admin/settings" element={<Protected cap="org"><AdminSettings /></Protected>} />
         <Route path="/admin/account" element={<Protected staff><AdminAccount /></Protected>} />
         <Route path="/admin/team" element={<Protected cap="org"><AdminTeam /></Protected>} />

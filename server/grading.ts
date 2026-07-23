@@ -1,4 +1,4 @@
-import type { Question, RubricCriterion } from "../shared/types.ts";
+import type { Question, RubricCriterion, Attempt } from "../shared/types.ts";
 
 /** Sum rubric scores, clamping each criterion to its max and the whole to `cap`. */
 export function rubricTotal(rubric: RubricCriterion[] | undefined, scores: Record<string, number> | undefined, cap: number): number {
@@ -192,4 +192,45 @@ export function gradeOne(q: Question, rawValue: string | undefined, opts: GradeO
       return ok ? { awarded: q.points, correct: true, needsReview: false } : wrong(norm(value).length > 0);
     }
   }
+}
+
+/** How long after an attempt is auto-submitted for running out of time a
+ *  late, locally-queued answer can still be accepted (see useAnswerSync.ts
+ *  on the client and POST /api/attempts/:id/answer on the server). */
+export const LATE_SYNC_GRACE_MS = 30 * 60_000;
+
+/**
+ * True if a late answer-save for an already-submitted attempt should be
+ * accepted rather than rejected as "exam already closed." Pure — no DB, no
+ * side effects — so this can't be gamed by anything the route itself does.
+ *
+ * Exists to close a real gap: a candidate's browser keeps unsynced answers
+ * queued on their own device while offline (localStorage) and flushes them
+ * the instant connectivity returns, which can be after autoSubmitOverdue()
+ * has already closed the exam out for running out of time. Without this,
+ * that answer — genuinely written before the deadline, just never
+ * transmitted — is silently discarded even though it was sitting right there
+ * on the candidate's device the whole time.
+ *
+ * Every condition here exists specifically so this can't become a way to
+ * sneak in a late, post-deadline answer:
+ *  - Only for an attempt closed purely by running out of time. An attempt a
+ *    proctor or the violation-enforcement path force-submitted (`terminated`)
+ *    never qualifies — ending an exam for misconduct must stay final.
+ *  - Only within a short window after that submission — not "whenever the
+ *    candidate's internet happens to come back," which could be hours later.
+ *  - The actual proof: `clientSavedAt` (the moment this exact answer was
+ *    written on the candidate's own device, per useAnswerSync.ts) must be at
+ *    or before the earlier of the exam's deadline and this candidate's own
+ *    submit time. A timestamp from after that cutoff — meaning it was typed
+ *    once the exam was already known to be over — is rejected exactly like
+ *    any other overdue answer.
+ */
+export function lateSyncEligible(attempt: Attempt, deadlineMs: number, clientSavedAt: unknown, nowMs: number = Date.now()): boolean {
+  if (attempt.status !== "submitted" || attempt.terminated || !attempt.submittedAt) return false;
+  const submittedAtMs = new Date(attempt.submittedAt).getTime();
+  if (nowMs - submittedAtMs > LATE_SYNC_GRACE_MS) return false;
+  const cutoff = Math.min(deadlineMs, submittedAtMs);
+  const savedAt = Number(clientSavedAt);
+  return Number.isFinite(savedAt) && savedAt <= cutoff;
 }

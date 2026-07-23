@@ -151,6 +151,7 @@ export async function sendMail(
   subject: string,
   text: string,
   html?: string,
+  tenantId?: string,
 ): Promise<SendResult> {
   let delivery: SendResult["delivery"] = "logged";
   let error: string | null = null;
@@ -181,7 +182,7 @@ export async function sendMail(
   }
 
   const msg: EmailMessage = {
-    id: nanoid(10), to, subject,
+    id: nanoid(10), tenantId, to, subject,
     body: text,
     sentAt: now(),
     delivery, error, provider: transporter ? MODE : "mock",

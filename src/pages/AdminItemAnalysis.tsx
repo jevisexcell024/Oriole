@@ -1,8 +1,8 @@
 ﻿import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Loader2, ArrowLeft, BarChart3, Users, Activity } from "lucide-react";
+import { Loader2, ArrowLeft, BarChart3, Users, Activity, MessageSquareText, Sheet } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
-import { ErrorBanner } from "@/components/ui";
+import { ErrorBanner, Modal, TableSkeleton } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { DataTable, type Column, type TableFilter } from "@/components/DataTable";
 import { api } from "@/lib/api";
@@ -37,8 +37,26 @@ export function AdminItemAnalysis() {
   const navigate = useNavigate();
   const [data, setData] = useState<Resp | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [openQuestion, setOpenQuestion] = useState<Item | null>(null);
+  const [exportingSheet, setExportingSheet] = useState(false);
 
   useEffect(() => { api.get<Resp>(`/admin/exams/${examId}/item-analysis`).then(setData).catch((e) => setError(e.message)); }, [examId]);
+
+  async function exportAnswerSheet() {
+    if (!examId || !data) return;
+    setExportingSheet(true);
+    try {
+      const res = await fetch(`/api/admin/exams/${examId}/answers.csv`, { credentials: "include" });
+      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `${data.exam.code || data.exam.id}-answers.csv`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) { setError((e as Error).message); }
+    finally { setExportingSheet(false); }
+  }
 
   const columns: Column<Item>[] = [
     { key: "q", header: t("aitem.colQuestion"), sortValue: (i) => i.prompt, csv: (i) => i.prompt, td: "max-w-[360px]", render: (i) => <span className="line-clamp-2">{i.prompt || <span className="text-[var(--muted)]">{t("aitem.noPrompt")}</span>}</span> },
@@ -65,6 +83,11 @@ export function AdminItemAnalysis() {
         ))}
       </div>
     ) },
+    { key: "actions", header: t("aitem.colActions"), sortValue: () => 0, th: "text-right", td: "text-right", render: (i) => (
+      <button onClick={() => setOpenQuestion(i)} className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-[#c6ff34] hover:bg-[#c6ff34]/10" title={t("aitem.viewResponses")}>
+        <MessageSquareText className="h-3.5 w-3.5" /> {t("aitem.viewResponses")}
+      </button>
+    ) },
   ];
 
   const filters: TableFilter<Item>[] = [
@@ -78,7 +101,16 @@ export function AdminItemAnalysis() {
         <PageHeader
           title={<span className="inline-flex items-center gap-2"><BarChart3 className="h-6 w-6" /> {t("aitem.title")}</span>}
           subtitle={data ? `${data.exam.title}${data.exam.code ? ` · ${data.exam.code}` : ""}` : t("aitem.subtitleFallback")}
-          actions={<button onClick={() => navigate("/admin/results")} className="btn btn-ghost-teal"><ArrowLeft className="h-4 w-4" /> {t("aitem.backResults")}</button>}
+          actions={
+            <div className="flex items-center gap-2">
+              {data && (
+                <button onClick={exportAnswerSheet} disabled={exportingSheet} className="btn btn-ghost-teal disabled:opacity-50">
+                  {exportingSheet ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sheet className="h-4 w-4" />} {t("aitem.exportAnswerSheet")}
+                </button>
+              )}
+              <button onClick={() => navigate("/admin/results")} className="btn btn-ghost-teal"><ArrowLeft className="h-4 w-4" /> {t("aitem.backResults")}</button>
+            </div>
+          }
         />
 
         {error && <ErrorBanner className="mt-6">{error}</ErrorBanner>}
@@ -120,6 +152,76 @@ export function AdminItemAnalysis() {
           </>
         )}
       </div>
+
+      {openQuestion && examId && <QuestionResponsesModal examId={examId} question={openQuestion} onClose={() => setOpenQuestion(null)} />}
     </AdminShell>
+  );
+}
+
+interface QResponse {
+  attemptId: string; candidateName: string; anonymous: boolean; answered: boolean;
+  answer: string | null; correct: boolean; awardedPoints: number; needsReview: boolean; feedback: string | null; submittedAt: string | null;
+}
+interface QResponsesResp {
+  exam: { id: string; title: string; code: string };
+  question: { id: string; prompt: string; type: string; points: number; correctAnswer: string };
+  total: number; answered: number; responses: QResponse[];
+}
+
+const GRADED_TYPES = new Set(["essay", "code", "file_upload"]);
+
+function QuestionResponsesModal({ examId, question, onClose }: { examId: string; question: Item; onClose: () => void }) {
+  const t = useT();
+  const [data, setData] = useState<QResponsesResp | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.get<QResponsesResp>(`/admin/exams/${examId}/questions/${question.id}/responses`).then(setData).catch((e) => setError(e.message));
+  }, [examId, question.id]);
+
+  const showCorrectness = !GRADED_TYPES.has(question.type);
+
+  return (
+    <Modal title={t("aitem.responsesTitle")} onClose={onClose}>
+      <p className="mt-1 text-sm font-medium">{question.prompt || t("aitem.noPrompt")}</p>
+      {error && <ErrorBanner className="mt-3">{error}</ErrorBanner>}
+      {!data && !error && <TableSkeleton rows={4} cells={2} avatar={false} />}
+      {data && (
+        <>
+          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[var(--muted)]">
+            <span>{t("aitem.responsesSummary", { answered: data.answered, total: data.total })}</span>
+            {showCorrectness && data.question.correctAnswer && <span>{t("aitem.correctAnswerLabel")}: <span className="font-medium text-[var(--fg)]">{data.question.correctAnswer}</span></span>}
+          </div>
+          <div className="mt-4 max-h-[55vh] space-y-2 overflow-y-auto pr-1">
+            {data.responses.length === 0 && <p className="py-6 text-center text-sm text-[var(--muted)]">{t("aitem.responsesEmpty")}</p>}
+            {data.responses.map((r) => (
+              <div key={r.attemptId} className="rounded-lg border border-[var(--border)] bg-[var(--card-2)] p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-semibold">{r.candidateName}</span>
+                  <div className="flex items-center gap-1.5">
+                    {r.needsReview && <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-semibold text-amber-500">{t("aitem.needsReview")}</span>}
+                    {r.answered && !r.needsReview && showCorrectness && (
+                      <span className={clsx("rounded-full px-2 py-0.5 text-[11px] font-semibold", r.correct ? "bg-emerald-500/15 text-emerald-500" : "bg-rose-500/15 text-rose-500")}>
+                        {r.correct ? "✓" : "✕"} {t("aitem.pointsAwarded", { awarded: r.awardedPoints, points: question.points })}
+                      </span>
+                    )}
+                    {r.answered && !showCorrectness && (
+                      <span className="rounded-full bg-[var(--card)] px-2 py-0.5 text-[11px] font-semibold text-[var(--muted)]">{t("aitem.pointsAwarded", { awarded: r.awardedPoints, points: question.points })}</span>
+                    )}
+                  </div>
+                </div>
+                <p className="mt-1.5 whitespace-pre-wrap text-sm">
+                  {r.answered ? r.answer : <span className="italic text-[var(--muted)]">{t("aitem.notAnswered")}</span>}
+                </p>
+                {r.feedback && <p className="mt-1.5 border-t border-[var(--border)] pt-1.5 text-xs text-[var(--muted)]">{r.feedback}</p>}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      <div className="mt-5 flex justify-end">
+        <button onClick={onClose} className="rounded-lg px-3 py-2 text-sm font-medium text-[var(--muted)] hover:text-[var(--fg)]">{t("aitem.close")}</button>
+      </div>
+    </Modal>
   );
 }

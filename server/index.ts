@@ -6,10 +6,13 @@ import bcrypt from "bcryptjs";
 import { nanoid } from "nanoid";
 import path from "node:path";
 import fs from "node:fs";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { createHmac, createHash, randomBytes } from "node:crypto";
 import { db, initDb, snapshotStore, proctorStore, answerStore, auditStore, superAdminAuditStore, emailStore, geofenceStore, reliabilityStore, reliabilityRollupStore, mediaAssetStore } from "./db.ts";
+import { currentTenantId, tenantExams, getOrgSettings } from "./tenant.ts";
 import { sendMail, mailerStatus, verifySmtp, buildHtml, ctaButton, esc } from "./mailer.ts";
+import { renderEmailTemplate, EMAIL_TEMPLATE_DEFS } from "./emailTemplates.ts";
 import { sendSms, smsEnabled, smsStatus, recentSms } from "./sms.ts";
 import {
   clearSession, currentUser, issueSession, requireAuth, requireRole, requireRoles, toSafeUser,
@@ -23,7 +26,7 @@ import { generateSecret, verifyTotp, verifyTotpStep, otpauthUrl, generateBackupC
 import { microsoftEnabled, authorizeUrl, exchangeCode } from "./sso.ts";
 import { tryEvalExpr } from "../shared/expr.ts";
 import { env, assertProductionEnv, BCRYPT_COST } from "./env.ts";
-import { securityHeaders, permissionsPolicy, authLimiter, apiLimiter, twoFaLimiter, superAdminAuthLimiter, assertSafeWebhookUrl } from "./security.ts";
+import { securityHeaders, permissionsPolicy, authLimiter, apiLimiter, twoFaLimiter, superAdminAuthLimiter, assertSafeWebhookUrl, isMaintenanceExempt } from "./security.ts";
 import { logger, httpLogger } from "./logger.ts";
 import { encryptString, decryptString, encryptionEnabled } from "./crypto.ts";
 import { scheduleRetention, stopRetention } from "./retention.ts";
@@ -36,7 +39,7 @@ import { classifyStatus, aggregateDailyRollup, computeReliabilityScore, DEFAULT_
 import { validate } from "./validate.ts";
 import {
   loginSchema, teamCreateSchema, passwordChangeSchema, passwordResetSchema, twoFaCodeSchema, twoFaDisableSchema,
-  customRoleCreateSchema, customRoleUpdateSchema, roleAssignSchema, passwordSetupSchema,
+  customRoleCreateSchema, customRoleUpdateSchema, roleAssignSchema, passwordSetupSchema, superAdminCreateSchema, tenantCreateSchema,
 } from "./schemas.ts";
 import { verifySeb } from "./seb.ts";
 import { nextStreak, displayStreak } from "./streak.ts";
@@ -44,7 +47,7 @@ import { studentCanSeeBook, studentsInScope, ratingSummary, audiencesFor } from 
 import { looksLikeMarkupOrScript } from "./uploads.ts";
 import { shuffle, chooseQuestionIds, deadlineMs } from "./exam-delivery.ts";
 import { runCode, CODE_LANGUAGES } from "./code-runner.ts";
-import { gradeOne, parseMultiValue, rubricTotal } from "./grading.ts";
+import { gradeOne, parseMultiValue, rubricTotal, lateSyncEligible } from "./grading.ts";
 import { applyCurve, letterFor, cleanBands } from "../shared/grades.ts";
 import { nearestGeofence, graceExpired, graceSecondsRemaining } from "../shared/geo.ts";
 import type { GeofenceLog } from "../shared/types.ts";
@@ -57,6 +60,7 @@ import type {
   Answer, Attempt, Certificate, Exam, ExamListItem, ProctorEvent, PublicQuestion, Question, Registration, RubricCriterion, RegradeRequest, WebhookEvent,
   Book, BookGenre, ReadingProgress, ResourceType, ResourceDifficulty, ResourceVersion, ResourceBookmark, ResourceRating, ResourceDownloadLog, User,
   LearningStructureMode, AnnouncementRead, CustomRole, ReliabilitySubsystemKey, ReliabilityIncident, MediaAsset,
+  SuperAdminSummary, SuperAdmin, SupportTicket, Tenant, OrgSettings,
 } from "../shared/types.ts";
 import { PERMISSIONS, PERMISSION_KEYS, isPermissionKey, SYSTEM_ROLE_PERMISSIONS, systemParentId, parseSystemParentId, type PermissionKey } from "../shared/permissions.ts";
 import {
@@ -116,11 +120,6 @@ async function latestSnapshot(attemptId: string): Promise<string | null> {
   return latest ? (decryptString(latest.dataUrl) ?? null) : null;
 }
 
-/** The single org-settings record (always present after initDb). */
-function getSettings() {
-  return db.data!.settings.find((s) => s.id === "org")!;
-}
-
 /** Stable anonymized candidate label for double-blind grading. */
 function anonLabel(attemptId: string) { return `Candidate #${attemptId.slice(-4).toUpperCase()}`; }
 /** True when this attempt's identity should be hidden from graders (anonymous exam, not yet released). */
@@ -131,15 +130,19 @@ function isAnonymized(attempt: Attempt, exam: Exam | undefined): boolean {
 /** Record an administrative action to the audit trail. */
 async function recordAudit(req: Request, action: string, target: string) {
   const u = currentUser(req);
-  const log = { id: nanoid(10), at: now(), actorId: u?.id ?? "system", actorName: u?.name ?? "System", action, target };
+  const log = { id: nanoid(10), at: now(), tenantId: u?.tenantId, actorId: u?.id ?? "system", actorName: u?.name ?? "System", action, target };
   await auditStore.add(log);
 }
 
 /** Record an authentication event (failed login / failed 2FA) where there's no
- *  session yet — the "actor" is the claimed email itself, not currentUser(req). */
+ *  session yet — the "actor" is the claimed email itself, not currentUser(req).
+ *  Resolves the tenant from whichever account (if any) matches that email, so
+ *  a school's admin can still see failed attempts against their own accounts
+ *  in their own tenant-scoped audit view. */
 async function recordAuthAudit(req: Request, action: string, email: string) {
+  const matchedUser = db.data!.users.find((u) => u.email.toLowerCase() === email.toLowerCase());
   const log = {
-    id: nanoid(10), at: now(), actorId: email.toLowerCase(), actorName: email,
+    id: nanoid(10), at: now(), tenantId: matchedUser?.tenantId, actorId: email.toLowerCase(), actorName: email,
     action, target: `from ${req.ip ?? "unknown IP"}`,
   };
   await auditStore.add(log);
@@ -187,10 +190,11 @@ async function checkNewDeviceAndAlert(req: Request, user: User) {
   const when = new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
   const ip = req.ip ?? "an unknown address";
   const ua = req.get("user-agent") ?? "an unrecognized browser";
-  const text = `Hi ${user.name},\n\nYour Oriole account was just signed in to from a new device or location.\n\nWhen: ${when}\nIP address: ${ip}\nDevice: ${ua}\n\nIf this was you, no action is needed. If you don't recognize this sign-in, change your password immediately and contact your administrator.\n\n— Oriole`;
+  const tpl = renderEmailTemplate("auth.new_signin", { name: user.name });
+  const text = `Hi ${user.name},\n\n${tpl.introText}\n\nWhen: ${when}\nIP address: ${ip}\nDevice: ${ua}\n\nIf this was you, no action is needed. If you don't recognize this sign-in, change your password immediately and contact your administrator.\n\n— Oriole`;
   const html = buildHtml(
     `<p style="margin:0 0 12px;font-size:15px;color:#111827"><strong>Hi ${esc(user.name)},</strong></p>
-     <p style="margin:0 0 16px">Your Oriole account was just signed in to from a new device or location.</p>
+     <p style="margin:0 0 16px">${tpl.introHtml}</p>
      <table role="presentation" cellpadding="0" cellspacing="0" style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:14px 18px;margin:0 0 20px;width:100%">
        <tr><td style="font-size:13px;color:#6b7280;padding-bottom:4px">When</td></tr>
        <tr><td style="font-size:15px;font-weight:700;color:#111827;padding-bottom:12px">${esc(when)}</td></tr>
@@ -202,7 +206,7 @@ async function checkNewDeviceAndAlert(req: Request, user: User) {
      <p style="margin:0;font-size:13px;color:#6b7280">If this was you, no action is needed. If you don't recognize this sign-in, change your password immediately and contact your administrator.</p>`,
     user.email,
   );
-  try { await sendMail(user.email, "New sign-in to your Oriole account", text, html); } catch { /* best-effort */ }
+  try { await sendMail(user.email, tpl.subject, text, html); } catch { /* best-effort */ }
 }
 
 // Replaces the old "here's your temporary password" email. Putting a real
@@ -213,17 +217,18 @@ async function checkNewDeviceAndAlert(req: Request, user: User) {
 // picks their own password on a page they land on directly, and no password
 // (temporary or otherwise) ever travels through email at all.
 function setupLinkEmail(name: string, email: string, setupUrl: string) {
+  const tpl = renderEmailTemplate("account.setup_link", { name });
   const text =
-    `Hi ${name},\n\nAn account has been created for you on Oriole. Set your password to finish getting started:\n\n${setupUrl}\n\n` +
+    `Hi ${name},\n\n${tpl.introText}:\n\n${setupUrl}\n\n` +
     `This link works once and expires in 72 hours.\n\n— Oriole`;
   const html = buildHtml(
     `<p style="margin:0 0 12px;font-size:15px;color:#111827"><strong>Hi ${esc(name)},</strong></p>
-     <p style="margin:0 0 16px">An account has been created for you on <strong>Oriole</strong>. Set your password to finish getting started.</p>
+     <p style="margin:0 0 16px">${tpl.introHtml}</p>
      ${ctaButton("Set my password", setupUrl)}
      <p style="margin:16px 0 0;font-size:13px;color:#6b7280">This link works once and expires in 72 hours.</p>`,
     email,
   );
-  return { subject: "Finish setting up your Oriole account", text, html };
+  return { subject: tpl.subject, text, html };
 }
 
 const app = express();
@@ -259,6 +264,19 @@ app.use("/api", apiLimiter); // global API rate limit
 // Never let a proxy/browser cache API responses — a cached /auth/me (user:null)
 // would log users out on refresh, and stale data would mask updates.
 app.use("/api", (_req, res, next) => { res.setHeader("Cache-Control", "no-store"); next(); });
+// Maintenance-mode gate — real enforcement (503s every tenant-facing route),
+// not a cosmetic banner. See PlatformMaintenance's doc comment (shared/types.ts)
+// and isMaintenanceExempt (server/security.ts) for the always-reachable paths.
+app.use("/api", (req, res, next) => {
+  // req.path is relative to the "/api" mount point (Express strips it), but
+  // isMaintenanceExempt's contract is full paths like "/api/super-admin/..." —
+  // req.originalUrl keeps the real prefix (and req.path would silently pass
+  // "/super-admin/..." as if it started with "/api/status", which it doesn't).
+  if (isMaintenanceExempt(req.originalUrl.split("?")[0])) return next();
+  const m = db.data?.maintenance.find((r) => r.id === "platform");
+  if (!m?.enabled) return next();
+  res.status(503).json({ error: m.message || "The platform is temporarily down for maintenance. Please check back shortly.", maintenance: true });
+});
 
 const PORT = env.port;
 const now = () => new Date().toISOString();
@@ -313,6 +331,13 @@ app.post("/api/auth/login", validate(loginSchema), async (req, res) => {
   if (!user || !passwordOk) {
     await recordAuthAudit(req, "auth.login_failed", String(email));
     return res.status(401).json({ error: "Invalid email or password." });
+  }
+  // A suspended school's accounts can't sign in at all — checked after password
+  // verification (not before) so a wrong-password attempt against a suspended
+  // tenant still takes the same ~100ms as any other, giving nothing away via timing.
+  if (user.tenantId && db.data!.tenants.find((t) => t.id === user.tenantId)?.status === "suspended") {
+    await recordAuthAudit(req, "auth.login_blocked_suspended", String(email));
+    return res.status(403).json({ error: "This school's account has been suspended. Contact your platform administrator." });
   }
   // Fire-and-forget: don't add hashing latency to this response, especially
   // under a login-storm where speed matters most.
@@ -464,7 +489,10 @@ app.post("/api/super-admin/auth/login", validate(loginSchema), async (req, res) 
   // bcrypt.compare always runs, even for a nonexistent email, against the same
   // DUMMY_BCRYPT_HASH — no email-enumeration timing side-channel.
   const passwordOk = await bcrypt.compare(String(password), superAdmin?.passwordHash ?? DUMMY_BCRYPT_HASH);
-  if (!superAdmin || !passwordOk) {
+  if (!superAdmin || !passwordOk || superAdmin.disabled) {
+    // A disabled account gets the exact same generic error as a wrong
+    // password — revocation status must never be observable from the
+    // login response (see the `disabled` field's doc comment in shared/types.ts).
     await recordSuperAdminAuthAudit(req, "superadmin.login_failed", String(email));
     return res.status(401).json({ error: "Invalid email or password." });
   }
@@ -520,8 +548,13 @@ app.get("/api/super-admin/dashboard", requireSuperAdmin, (_req, res) => {
   const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
   const examsToday = db.data!.attempts.filter((a) => new Date(a.startedAt).getTime() >= startOfToday.getTime()).length;
   const liveSessions = db.data!.attempts.filter((a) => a.status === "in_progress").length;
+  const tenants = db.data!.tenants;
   res.json({
-    institutions: { total: 1, active: 1, suspended: 0 },
+    institutions: {
+      total: tenants.length,
+      active: tenants.filter((t) => t.status === "active").length,
+      suspended: tenants.filter((t) => t.status === "suspended").length,
+    },
     users: { total: users.length, students, facilitators, proctors, administrators },
     exams: { active: activeExams, today: examsToday },
     liveSessions,
@@ -547,6 +580,171 @@ app.get("/api/super-admin/audit-logs", requireSuperAdmin, async (_req, res) => {
   });
 });
 
+// Voluntary password change — mirrors POST /api/me/password exactly, distinct
+// from complete-password-setup above (which only fires once, gated by
+// mustChangePassword). This one works any time, for any already-authenticated
+// Super Admin, same as a tenant admin rotating their own password.
+app.post("/api/super-admin/auth/password", requireSuperAdmin, validate(passwordChangeSchema), async (req, res) => {
+  const superAdmin = currentSuperAdmin(req)!;
+  const { current, password } = req.body as { current: string; password: string };
+  if (!current || !(await bcrypt.compare(String(current), superAdmin.passwordHash))) {
+    return res.status(400).json({ error: "Current password is incorrect." });
+  }
+  await recordSuperAdminAudit(req, "superadmin.password_changed", superAdmin.name);
+  superAdmin.passwordHash = await bcrypt.hash(String(password), BCRYPT_COST);
+  superAdmin.tokenVersion = (superAdmin.tokenVersion ?? 0) + 1;
+  await db.upsert("superAdmins", superAdmin);
+  issueSuperAdminSession(res, superAdmin);
+  res.json({ ok: true });
+});
+
+app.patch("/api/super-admin/profile", requireSuperAdmin, async (req, res) => {
+  const superAdmin = currentSuperAdmin(req)!;
+  const name = String(req.body?.name ?? "").trim();
+  if (!name || name.length > 120) return res.status(400).json({ error: "Name must be 1–120 characters." });
+  superAdmin.name = name;
+  await db.upsert("superAdmins", superAdmin);
+  await recordSuperAdminAudit(req, "superadmin.profile.updated", name);
+  res.json({ superAdmin: toSafeSuperAdmin(superAdmin) });
+});
+
+// System Information — process/OS-level detail no tenant admin view shows at
+// all (AdminSystemHealth.tsx surfaces app-level status; this is the raw
+// runtime a tenant admin has no reason to ever see).
+app.get("/api/super-admin/system-info", requireSuperAdmin, (_req, res) => {
+  const mem = process.memoryUsage();
+  res.json({
+    node: process.version,
+    pid: process.pid,
+    platform: os.platform(),
+    release: os.release(),
+    arch: os.arch(),
+    cpuCount: os.cpus().length,
+    totalMemBytes: os.totalmem(),
+    freeMemBytes: os.freemem(),
+    processMemory: { rss: mem.rss, heapUsed: mem.heapUsed, heapTotal: mem.heapTotal },
+    uptimeSeconds: Math.round(process.uptime()),
+    loadAvg: os.loadavg(),
+  });
+});
+
+app.get("/api/super-admin/maintenance", requireSuperAdmin, (_req, res) => {
+  const m = db.data!.maintenance.find((r) => r.id === "platform");
+  res.json(m ?? { id: "platform", enabled: false, message: "", updatedAt: null, updatedBy: null });
+});
+
+app.patch("/api/super-admin/maintenance", requireSuperAdmin, async (req, res) => {
+  const superAdmin = currentSuperAdmin(req)!;
+  const enabled = !!req.body?.enabled;
+  const message = String(req.body?.message ?? "").slice(0, 500);
+  const record = {
+    id: "platform" as const,
+    enabled,
+    message,
+    updatedAt: new Date().toISOString(),
+    updatedBy: superAdmin.name,
+  };
+  db.data!.maintenance = [record];
+  await db.upsert("maintenance", record);
+  await recordSuperAdminAudit(req, enabled ? "superadmin.maintenance.enabled" : "superadmin.maintenance.disabled", message || "(no message)");
+  res.json(record);
+});
+
+// Email Templates — scoped to subject + intro paragraph only (see
+// server/emailTemplates.ts). Lists every curated template with its current
+// effective text (override if set, default otherwise) so the UI never has to
+// separately fetch "what's the default" to show a diff.
+app.get("/api/super-admin/email-templates", requireSuperAdmin, (_req, res) => {
+  const templates = EMAIL_TEMPLATE_DEFS.map((def) => {
+    const override = db.data!.emailTemplates.find((t) => t.id === def.key);
+    return {
+      key: def.key,
+      label: def.label,
+      description: def.description,
+      variables: def.variables,
+      defaultSubject: def.defaultSubject,
+      defaultIntro: def.defaultIntro,
+      subject: override?.subject || def.defaultSubject,
+      intro: override?.intro || def.defaultIntro,
+      customized: !!override,
+      updatedAt: override?.updatedAt ?? null,
+      updatedBy: override?.updatedBy ?? null,
+    };
+  });
+  res.json({ templates });
+});
+
+app.patch("/api/super-admin/email-templates/:key", requireSuperAdmin, async (req, res) => {
+  const def = EMAIL_TEMPLATE_DEFS.find((d) => d.key === req.params.key);
+  if (!def) return res.status(404).json({ error: "Unknown template." });
+  const superAdmin = currentSuperAdmin(req)!;
+  // An empty/missing body resets to default — simplest possible "reset"
+  // affordance: remove the override row entirely rather than a separate flag.
+  const subject = String(req.body?.subject ?? "").trim();
+  const intro = String(req.body?.intro ?? "").trim();
+  if (!subject && !intro) {
+    db.data!.emailTemplates = db.data!.emailTemplates.filter((t) => t.id !== def.key);
+    await db.remove("emailTemplates", def.key);
+    await recordSuperAdminAudit(req, "superadmin.email_template.reset", def.label);
+    return res.json({ key: def.key, customized: false, subject: def.defaultSubject, intro: def.defaultIntro });
+  }
+  if (subject.length > 200) return res.status(400).json({ error: "Subject must be 200 characters or fewer." });
+  if (intro.length > 1000) return res.status(400).json({ error: "Intro must be 1000 characters or fewer." });
+  const record = {
+    id: def.key,
+    subject: subject || def.defaultSubject,
+    intro: intro || def.defaultIntro,
+    updatedAt: new Date().toISOString(),
+    updatedBy: superAdmin.name,
+  };
+  db.data!.emailTemplates = [...db.data!.emailTemplates.filter((t) => t.id !== def.key), record];
+  await db.upsert("emailTemplates", record);
+  await recordSuperAdminAudit(req, "superadmin.email_template.updated", def.label);
+  res.json({ key: def.key, customized: true, subject: record.subject, intro: record.intro });
+});
+
+// Super Admin side of the same support-ticket store the tenant routes above
+// write to — one collection, two sets of permitted actions (a tenant admin
+// can open/reply; only a Super Admin can change status).
+app.get("/api/super-admin/tickets", requireSuperAdmin, (_req, res) => {
+  const tickets = [...db.data!.supportTickets].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  res.json({ tickets });
+});
+
+app.get("/api/super-admin/tickets/:id", requireSuperAdmin, (req, res) => {
+  const ticket = db.data!.supportTickets.find((t) => t.id === req.params.id);
+  if (!ticket) return res.status(404).json({ error: "Not found." });
+  res.json({ ticket });
+});
+
+app.post("/api/super-admin/tickets/:id/messages", requireSuperAdmin, async (req, res) => {
+  const superAdmin = currentSuperAdmin(req)!;
+  const ticket = db.data!.supportTickets.find((t) => t.id === req.params.id);
+  if (!ticket) return res.status(404).json({ error: "Not found." });
+  const body = String(req.body?.body ?? "").trim();
+  if (!body || body.length > 5000) return res.status(400).json({ error: "Message is required (max 5000 characters)." });
+  const at = new Date().toISOString();
+  ticket.messages.push({ id: nanoid(10), authorType: "superadmin", authorName: superAdmin.name, body, at });
+  ticket.updatedAt = at;
+  if (ticket.status === "open") ticket.status = "in_progress";
+  await db.upsert("supportTickets", ticket);
+  await recordSuperAdminAudit(req, "superadmin.ticket.replied", ticket.subject);
+  res.json({ ticket });
+});
+
+app.patch("/api/super-admin/tickets/:id", requireSuperAdmin, async (req, res) => {
+  const ticket = db.data!.supportTickets.find((t) => t.id === req.params.id);
+  if (!ticket) return res.status(404).json({ error: "Not found." });
+  const status = String(req.body?.status ?? "");
+  const VALID = ["open", "in_progress", "resolved", "closed"];
+  if (!VALID.includes(status)) return res.status(400).json({ error: "Invalid status." });
+  ticket.status = status as SupportTicket["status"];
+  ticket.updatedAt = new Date().toISOString();
+  await db.upsert("supportTickets", ticket);
+  await recordSuperAdminAudit(req, "superadmin.ticket.status_changed", `${ticket.subject} → ${status}`);
+  res.json({ ticket });
+});
+
 // Platform Settings — read-only. No persisted settings store exists yet, so
 // there's nothing to edit here; this just surfaces the env-derived config
 // that already governs the running process, in one place.
@@ -565,6 +763,124 @@ app.get("/api/super-admin/platform-settings", requireSuperAdmin, (_req, res) => 
     sms: smsStatus(),
     backup: backupStatus(),
   });
+});
+
+function toSuperAdminSummary(s: SuperAdmin): SuperAdminSummary {
+  return { id: s.id, email: s.email, name: s.name, createdAt: s.createdAt, mustChangePassword: !!s.mustChangePassword, disabled: !!s.disabled };
+}
+
+app.get("/api/super-admin/team", requireSuperAdmin, (_req, res) => {
+  res.json({ team: db.data!.superAdmins.map(toSuperAdminSummary) });
+});
+
+// Invites a new Super Admin — same shape as the env-var bootstrap in db.ts:
+// the inviter never chooses the new account's password, a random one-time
+// password is generated and returned once in the response (not emailed —
+// Configuration → Email Templates, which this would need, is still "Soon").
+app.post("/api/super-admin/team", requireSuperAdmin, validate(superAdminCreateSchema), async (req, res) => {
+  const { name, email } = req.body as { name: string; email: string };
+  if (db.data!.superAdmins.some((s) => s.email.toLowerCase() === email.toLowerCase())) {
+    return res.status(409).json({ error: "A Super Admin with that email already exists." });
+  }
+  const oneTimePassword = randomBytes(18).toString("base64url");
+  const superAdmin = {
+    id: nanoid(10),
+    email,
+    name,
+    passwordHash: await bcrypt.hash(oneTimePassword, BCRYPT_COST),
+    createdAt: new Date().toISOString(),
+    mustChangePassword: true,
+  };
+  db.data!.superAdmins.push(superAdmin);
+  await db.upsert("superAdmins", superAdmin);
+  await recordSuperAdminAudit(req, "superadmin.team.invited", `${name} <${email}>`);
+  res.status(201).json({ superAdmin: toSuperAdminSummary(superAdmin), oneTimePassword });
+});
+
+// Disable/enable — never a hard delete, so past audit entries still resolve
+// to a real name. Two guards against self-lockout: an admin can't disable
+// their own account, and the last remaining enabled account can't be disabled.
+app.patch("/api/super-admin/team/:id", requireSuperAdmin, async (req, res) => {
+  const actor = currentSuperAdmin(req)!;
+  const target = db.data!.superAdmins.find((s) => s.id === req.params.id);
+  if (!target) return res.status(404).json({ error: "Not found." });
+  const disabled = !!req.body?.disabled;
+  if (disabled) {
+    if (target.id === actor.id) return res.status(400).json({ error: "You can't disable your own account." });
+    const otherActiveCount = db.data!.superAdmins.filter((s) => s.id !== target.id && !s.disabled).length;
+    if (otherActiveCount === 0) return res.status(400).json({ error: "At least one Super Admin account must stay enabled." });
+  }
+  target.disabled = disabled;
+  target.tokenVersion = (target.tokenVersion ?? 0) + 1; // force any existing session to re-authenticate
+  await db.upsert("superAdmins", target);
+  await recordSuperAdminAudit(req, disabled ? "superadmin.team.disabled" : "superadmin.team.enabled", `${target.name} <${target.email}>`);
+  res.json({ superAdmin: toSuperAdminSummary(target) });
+});
+
+// ---- Tenants (Institutions) — core multi-tenant lifecycle: create a new
+// school (with its first admin account), see every school at a glance, and
+// suspend/reactivate one. Suspension is real enforcement, not a cosmetic
+// status label — see the checks in POST /api/auth/login and auth.ts's
+// currentUser(), which both block a suspended tenant's accounts outright.
+app.get("/api/super-admin/tenants", requireSuperAdmin, (_req, res) => {
+  const tenants = db.data!.tenants
+    .map((t) => {
+      const users = db.data!.users.filter((u) => u.tenantId === t.id);
+      return {
+        id: t.id, name: t.name, status: t.status, createdAt: t.createdAt,
+        admins: users.filter((u) => u.role === "admin").length,
+        staff: users.filter((u) => u.role === "facilitator" || u.role === "proctor").length,
+        students: users.filter((u) => u.role === "candidate").length,
+        exams: db.data!.exams.filter((e) => e.tenantId === t.id).length,
+      };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+  res.json({ tenants });
+});
+
+app.post("/api/super-admin/tenants", requireSuperAdmin, validate(tenantCreateSchema), async (req, res) => {
+  const { tenantName, adminName, adminEmail } = req.body as { tenantName: string; adminName: string; adminEmail: string };
+  if (db.data!.users.some((u) => u.email.toLowerCase() === adminEmail.toLowerCase())) {
+    return res.status(409).json({ error: "An account with that email already exists." });
+  }
+  const tenant: Tenant = { id: nanoid(10), name: tenantName, status: "active", createdAt: new Date().toISOString() };
+  db.data!.tenants.push(tenant);
+  await db.upsert("tenants", tenant);
+
+  // getOrgSettings(tenantId) throws if a tenant has no matching settings row —
+  // true for tenant #1 only because the boot-time migration provisions it.
+  // A tenant created here, after boot, needs the exact same guarantee, or
+  // every route that touches org settings (webhooks, API keys, learning
+  // structure, reports, the admin digest, …) throws for this school forever.
+  const settings: OrgSettings = {
+    id: tenant.id, name: tenantName, supportEmail: "", website: "", timezone: "UTC",
+    defaultPassingScore: 60, defaultProctored: true, autoConfirmEnrollment: false,
+  };
+  db.data!.settings.push(settings);
+  await db.upsert("settings", settings);
+
+  // Same no-password convention as the Super Admin team invite above: the
+  // platform operator never chooses another organization's admin password.
+  const oneTimePassword = randomBytes(18).toString("base64url");
+  const admin: User = {
+    id: nanoid(10), tenantId: tenant.id, email: adminEmail, name: adminName,
+    passwordHash: await bcrypt.hash(oneTimePassword, BCRYPT_COST), role: "admin", mustChangePassword: true,
+  };
+  db.data!.users.push(admin);
+  await db.upsert("users", admin);
+
+  await recordSuperAdminAudit(req, "superadmin.tenant.created", `${tenant.name} (admin: ${admin.email})`);
+  res.status(201).json({ tenant, admin: { id: admin.id, name: admin.name, email: admin.email }, oneTimePassword });
+});
+
+app.patch("/api/super-admin/tenants/:id", requireSuperAdmin, async (req, res) => {
+  const tenant = db.data!.tenants.find((t) => t.id === req.params.id);
+  if (!tenant) return res.status(404).json({ error: "Not found." });
+  if (typeof req.body?.name === "string" && req.body.name.trim()) tenant.name = req.body.name.trim().slice(0, 160);
+  if (req.body?.status === "active" || req.body?.status === "suspended") tenant.status = req.body.status;
+  await db.upsert("tenants", tenant);
+  await recordSuperAdminAudit(req, tenant.status === "suspended" ? "superadmin.tenant.suspended" : "superadmin.tenant.updated", tenant.name);
+  res.json({ tenant });
 });
 
 // ---- Single Sign-On (Microsoft / Entra) ----
@@ -608,9 +924,10 @@ app.get("/api/exams", requireAuth, async (req, res) => {
   // Candidates only ever see PUBLISHED exams. Each published exam is auto-enrolled
   // for the candidate (a registration is created lazily) so it appears in their
   // panel the moment an admin publishes it. Drafts/unpublished exams never show.
-  const published = db.data!.exams.filter((e) => e.status === "published" && !e.practice);
+  const published = db.data!.exams.filter((e) => e.tenantId === user.tenantId && e.status === "published" && !e.practice);
   let mutated = false;
   const items: ExamListItem[] = [];
+  const orgSettings = user.tenantId ? getOrgSettings(user.tenantId) : null;
 
   for (const exam of published) {
     let registration = db.data!.registrations.find(
@@ -622,10 +939,11 @@ app.get("/api/exams", requireAuth, async (req, res) => {
       if (exam.enrollment === "assigned") continue;
       registration = {
         id: nanoid(10),
+        tenantId: user.tenantId,
         examId: exam.id,
         candidateId: user.id,
         status: "registered",
-        approval: getSettings().autoConfirmEnrollment ? "confirmed" : "pending",
+        approval: orgSettings?.autoConfirmEnrollment ? "confirmed" : "pending",
         scheduledStart: null,
         systemCheckPassed: false,
         createdAt: now(),
@@ -870,7 +1188,7 @@ app.post("/api/attempts/:id/geofence-ping", requireAuth, async (req, res) => {
 // integrity dashboard is GRADERS-only, so it uses results.view instead.
 app.post("/api/admin/registrations/:id/verify-id", requirePermission("monitor.control"), async (req, res) => {
   const actor = currentUser(req)!;
-  const reg = db.data!.registrations.find((r) => r.id === req.params.id);
+  const reg = db.data!.registrations.find((r) => r.id === req.params.id && r.tenantId === actor.tenantId);
   if (!reg) return res.status(404).json({ error: "Registration not found." });
   const verified = req.body?.verified !== false;
   reg.idVerified = verified;
@@ -1025,15 +1343,15 @@ async function notifyResultReleased(attempt: Attempt) {
   if (!u || exam?.practice) return;
   const title = exam?.title ?? "your examination";
   const resultUrl = `${env.appUrl}/attempts/${attempt.id}/result`;
-  const subject = `Your result is available — ${title}`;
+  const tpl = renderEmailTemplate("results.released", { name: u.name, examTitle: title });
   const scoreLabel = `${attempt.score}% — ${attempt.passed ? "Passed ✓" : "Not passed"}`;
   const text =
-    `Hi ${u.name},\n\nYour result for "${title}" is now available.\n` +
+    `Hi ${u.name},\n\n${tpl.introText}\n` +
     `Score: ${scoreLabel}\n\n` +
     `View the full breakdown at ${resultUrl}${attempt.passed ? "\nYour certificate is also available to download." : ""}\n\n— Oriole`;
   const html = buildHtml(
     `<p style="margin:0 0 12px;font-size:15px;color:#111827"><strong>Hi ${esc(u.name)},</strong></p>
-     <p style="margin:0 0 16px">Your result for <strong>${esc(title)}</strong> is now available.</p>
+     <p style="margin:0 0 16px">${tpl.introHtml}</p>
      <table role="presentation" cellpadding="0" cellspacing="0" style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:14px 18px;margin:0 0 20px;width:100%">
        <tr><td style="font-size:13px;color:#6b7280;padding-bottom:4px">Score</td></tr>
        <tr><td style="font-size:22px;font-weight:700;color:${attempt.passed ? "#059669" : "#dc2626"}">${attempt.score}%</td></tr>
@@ -1043,7 +1361,7 @@ async function notifyResultReleased(attempt: Attempt) {
      ${ctaButton("View full result", resultUrl)}`,
     u.email,
   );
-  try { await sendMail(u.email, subject, text, html); } catch { /* best-effort */ }
+  try { await sendMail(u.email, tpl.subject, text, html); } catch { /* best-effort */ }
 }
 
 async function notifyRegistered(reg: Registration) {
@@ -1090,10 +1408,11 @@ async function sendExamReminders() {
       if (sent.includes(tag)) return false;
       const when = new Date(startIso).toLocaleString();
       const portalUrl = `${env.appUrl}/exams`;
-      const text = `Hi ${u.name},\n\n"${exam.title}" starts ${label} (${when}).\nMake sure you're ready and run your system check beforehand.\n${portalUrl}\n\n— Oriole`;
+      const tpl = renderEmailTemplate("exam.reminder", { name: u.name, examTitle: exam.title, label });
+      const text = `Hi ${u.name},\n\n${tpl.introText}\nMake sure you're ready and run your system check beforehand.\n${portalUrl}\n\n— Oriole`;
       const html = buildHtml(
         `<p style="margin:0 0 12px;font-size:15px;color:#111827"><strong>Hi ${esc(u.name)},</strong></p>
-         <p style="margin:0 0 16px">This is a reminder that <strong>${esc(exam.title)}</strong> starts <strong>${label}</strong>.</p>
+         <p style="margin:0 0 16px">${tpl.introHtml}</p>
          <table role="presentation" cellpadding="0" cellspacing="0" style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:14px 18px;margin:0 0 20px;width:100%">
            <tr><td style="font-size:13px;color:#6b7280;padding-bottom:4px">Starts at</td></tr>
            <tr><td style="font-size:15px;font-weight:700;color:#111827">${when}</td></tr>
@@ -1102,9 +1421,9 @@ async function sendExamReminders() {
          ${ctaButton("Go to my exams", portalUrl)}`,
         u.email,
       );
-      try { await sendMail(u.email, `Reminder — ${exam.title} starts ${label}`, text, html); } catch { /* best-effort */ }
+      try { await sendMail(u.email, tpl.subject, text, html); } catch { /* best-effort */ }
       // Optional SMS/WhatsApp reminder (only when enabled in settings, a provider is configured, and the student has a phone).
-      if ((getSettings().smsReminders ?? false) && smsEnabled() && u.phone) {
+      if (reg.tenantId && (getOrgSettings(reg.tenantId).smsReminders ?? false) && smsEnabled() && u.phone) {
         const phoneNumber = decryptString(u.phone);
         if (phoneNumber) {
           try { await sendSms(phoneNumber, `Oriole: "${exam.title}" starts ${label} (${new Date(startIso).toLocaleString()}). Run your system check beforehand.`); } catch { /* best-effort */ }
@@ -1120,19 +1439,19 @@ async function sendExamReminders() {
   }
 }
 
-/** Build the admin summary digest over the trailing `sinceMs`. Returns null if no activity. */
-function buildDigest(sinceMs: number, periodLabel: string): { subject: string; text: string; html: string } | null {
+/** Build the admin summary digest over the trailing `sinceMs`, for one tenant. Returns null if no activity. */
+function buildDigest(tenantId: string, sinceMs: number, periodLabel: string): { subject: string; text: string; html: string } | null {
   const since = new Date(sinceMs).toISOString();
-  const examOf = (id: string) => db.data!.exams.find((e) => e.id === id);
-  const newSubs = db.data!.attempts.filter((a) => a.status === "submitted" && (a.submittedAt ?? "") >= since && !examOf(a.examId)?.practice);
-  const pendingGrading = db.data!.attempts.filter((a) => a.gradingStatus === "pending_review").length;
-  const openAppeals = db.data!.regradeRequests.filter((r) => r.status === "open").length;
+  const examOf = (id: string) => db.data!.exams.find((e) => e.id === id && e.tenantId === tenantId);
+  const newSubs = db.data!.attempts.filter((a) => a.tenantId === tenantId && a.status === "submitted" && (a.submittedAt ?? "") >= since && !examOf(a.examId)?.practice);
+  const pendingGrading = db.data!.attempts.filter((a) => a.tenantId === tenantId && a.gradingStatus === "pending_review").length;
+  const openAppeals = db.data!.regradeRequests.filter((r) => r.tenantId === tenantId && r.status === "open").length;
   const scores = newSubs.map((a) => a.score ?? 0);
   const avg = scores.length ? Math.round(scores.reduce((s, x) => s + x, 0) / scores.length) : null;
   const passed = newSubs.filter((a) => a.passed).length;
-  const inProgress = db.data!.attempts.filter((a) => a.status === "in_progress").length;
+  const inProgress = db.data!.attempts.filter((a) => a.tenantId === tenantId && a.status === "in_progress").length;
   if (newSubs.length === 0 && pendingGrading === 0 && openAppeals === 0 && inProgress === 0) return null;
-  const org = getSettings().name || "Oriole";
+  const org = getOrgSettings(tenantId).name || "Oriole";
   const consoleUrl = `${env.appUrl}/dashboard`;
   const subject = `${org} ${periodLabel} digest — ${newSubs.length} new submission${newSubs.length === 1 ? "" : "s"}`;
   const text = [
@@ -1170,30 +1489,32 @@ function buildDigest(sinceMs: number, periodLabel: string): { subject: string; t
   return { subject, text, html };
 }
 
-/** Email the summary digest to all admins. Returns the number emailed. */
-async function sendAdminDigest(sinceMs: number, periodLabel: string): Promise<number> {
-  const digest = buildDigest(sinceMs, periodLabel);
+/** Email the summary digest to one tenant's admins. Returns the number emailed. */
+async function sendAdminDigest(tenantId: string, sinceMs: number, periodLabel: string): Promise<number> {
+  const digest = buildDigest(tenantId, sinceMs, periodLabel);
   if (!digest) return 0;
-  const admins = db.data!.users.filter((u) => u.role === "admin");
+  const admins = db.data!.users.filter((u) => u.tenantId === tenantId && u.role === "admin");
   let sent = 0;
   for (const a of admins) {
-    try { await sendMail(a.email, digest.subject, digest.text, digest.html); sent++; } catch { /* best-effort */ }
+    try { await sendMail(a.email, digest.subject, digest.text, digest.html, tenantId); sent++; } catch { /* best-effort */ }
   }
-  const s = getSettings();
+  const s = getOrgSettings(tenantId);
   s.digestLastSentAt = now();
   await db.upsert("settings", s);
   return sent;
 }
 
-/** Periodic check: send the configured daily/weekly digest when one is due. */
+/** Periodic check: send each tenant's configured daily/weekly digest when due. */
 async function digestSweep() {
-  const s = getSettings();
-  const freq = s.digestFrequency ?? "off";
-  if (freq === "off") return;
-  const periodMs = freq === "daily" ? 24 * 3_600_000 : 7 * 24 * 3_600_000;
-  const last = s.digestLastSentAt ? new Date(s.digestLastSentAt).getTime() : 0;
-  if (Date.now() - last < periodMs) return;
-  await sendAdminDigest(Date.now() - periodMs, freq === "daily" ? "daily" : "weekly");
+  for (const tenant of db.data!.tenants) {
+    const s = getOrgSettings(tenant.id);
+    const freq = s.digestFrequency ?? "off";
+    if (freq === "off") continue;
+    const periodMs = freq === "daily" ? 24 * 3_600_000 : 7 * 24 * 3_600_000;
+    const last = s.digestLastSentAt ? new Date(s.digestLastSentAt).getTime() : 0;
+    if (Date.now() - last < periodMs) continue;
+    await sendAdminDigest(tenant.id, Date.now() - periodMs, freq === "daily" ? "daily" : "weekly");
+  }
 }
 
 app.post("/api/attempts", requireAuth, async (req, res) => {
@@ -1253,6 +1574,7 @@ app.post("/api/attempts", requireAuth, async (req, res) => {
     }
     attempt = {
       id: nanoid(12),
+      tenantId: user.tenantId,
       registrationId: reg.id,
       examId: exam.id,
       candidateId: user.id,
@@ -1479,15 +1801,16 @@ const MEDIA_MAX_BYTES: Record<MediaAsset["kind"], number> = {
 // Lightweight status check for the Exam Builder's type picker — an exam author
 // (facilitator) may not hold system.settings, so this doesn't expose full
 // OrgSettings, just the one flag needed to decide whether to show the type.
-app.get("/api/admin/media/status", requirePermission("exams.view"), (_req, res) => {
-  res.json({ enabled: !!getSettings().mediaAssessmentEnabled });
+app.get("/api/admin/media/status", requirePermission("exams.view"), (req, res) => {
+  const tenantId = currentTenantId(req);
+  res.json({ enabled: !!(tenantId && getOrgSettings(tenantId).mediaAssessmentEnabled) });
 });
 
 app.post("/api/admin/media", requirePermission("exams.edit"), async (req, res) => {
   const user = currentUser(req)!;
   const { kind, examId, data } = req.body ?? {};
   if (!["image", "audio", "video", "pdf"].includes(kind)) return res.status(400).json({ error: "Invalid media kind." });
-  const exam = db.data!.exams.find((e) => e.id === examId);
+  const exam = db.data!.exams.find((e) => e.id === examId && e.tenantId === currentTenantId(req));
   if (!exam) return res.status(404).json({ error: "Exam not found." });
   if (typeof data !== "string" || !data.startsWith("data:")) return res.status(400).json({ error: "Invalid upload." });
   const type = data.slice(5, data.indexOf(";")).toLowerCase();
@@ -1519,6 +1842,8 @@ function serveMediaAsset(res: Response, asset: MediaAsset) {
 app.get("/api/admin/media/:id", requirePermission("exams.view"), async (req, res) => {
   const asset = await mediaAssetStore.get(String(req.params.id));
   if (!asset) return res.status(404).json({ error: "Media not found." });
+  const exam = db.data!.exams.find((e) => e.id === asset.examId && e.tenantId === currentTenantId(req));
+  if (!exam) return res.status(404).json({ error: "Media not found." });
   serveMediaAsset(res, asset);
 });
 
@@ -1543,13 +1868,16 @@ app.post("/api/attempts/:id/answer", requireAuth, async (req, res) => {
   const user = currentUser(req)!;
   const attempt = db.data!.attempts.find((a) => a.id === req.params.id && a.candidateId === user.id);
   if (!attempt) return res.status(404).json({ error: "Attempt not found." });
-  if (attempt.status !== "in_progress") return res.status(409).json({ error: "Attempt already submitted." });
+  const deadline = attemptDeadlineMs(attempt);
+  const { questionId, value, clientSavedAt } = req.body ?? {};
+  const lateSync = attempt.status !== "in_progress" && lateSyncEligible(attempt, deadline, clientSavedAt);
+  if (attempt.status !== "in_progress" && !lateSync) return res.status(409).json({ error: "Attempt already submitted." });
   const examForAnswer = db.data!.exams.find((e) => e.id === attempt.examId);
   const sebAns = verifySeb(req, examForAnswer);
   if (!sebAns.ok) return res.status(403).json({ error: sebAns.reason, sebRequired: true });
-  // Hard close: no answers accepted once the server-side deadline has passed.
-  if (Date.now() > attemptDeadlineMs(attempt)) return res.status(409).json({ error: "Time is up — this exam has closed." });
-  const { questionId, value } = req.body ?? {};
+  // Hard close: no answers accepted once the server-side deadline has passed
+  // — unless this is a legitimate late-grace catch-up (checked above).
+  if (Date.now() > deadline && !lateSync) return res.status(409).json({ error: "Time is up — this exam has closed." });
   const question = servedQuestions(attempt).find((q) => q.id === questionId);
   if (!question) return res.status(400).json({ error: "Invalid question." });
   if (question.type === "file_upload" && value) {
@@ -1563,6 +1891,30 @@ app.post("/api/attempts/:id/answer", requireAuth, async (req, res) => {
   } else {
     answer = { id: nanoid(10), attemptId: attempt.id, questionId, value: String(value ?? ""), correct: null };
   }
+
+  if (lateSync) {
+    // Re-grade just this one answer and refresh the attempt's aggregate score
+    // — the attempt is already submitted, so every other already-graded
+    // answer is left untouched rather than re-running the whole exam's grading.
+    const exam = db.data!.exams.find((e) => e.id === attempt.examId);
+    const r = gradeOne(paramComputed(question, attempt), answer.value, { negativeMarking: exam?.negativeMarking ?? 0, partialCredit: exam?.partialCredit ?? false });
+    answer.awardedPoints = r.awarded;
+    answer.correct = r.correct;
+    answer.needsReview = r.needsReview;
+    answer.gradedBy = r.needsReview ? null : "auto";
+    await answerStore.upsert(answer);
+    if (r.needsReview) attempt.gradingStatus = "pending_review";
+    const allAnswers = await answerStore.forAttempt(attempt.id);
+    const { passed } = recomputeAttempt(attempt, allAnswers);
+    if (attempt.gradingStatus === "auto_graded" && passed) {
+      const cert = issueCertificate(attempt);
+      if (cert) await db.upsert("certificates", cert);
+    }
+    await db.upsert("attempts", attempt);
+    await recordAudit(req, "attempt.late_sync_accepted", `${attempt.id} · ${question.prompt.slice(0, 60)}`);
+    return res.json({ ok: true, lateSync: true });
+  }
+
   await answerStore.upsert(answer);
   res.json({ ok: true });
 });
@@ -1715,7 +2067,7 @@ function gradeAttempt(attempt: Attempt, answers: Answer[]) {
   attempt.gradingStatus = needsReview ? "pending_review" : "auto_graded";
   attempt.releasedAt = needsReview ? null : now();
   const { score, passed, exam } = recomputeAttempt(attempt, answers);
-  dispatchWebhook("attempt.submitted", { attemptId: attempt.id, examId: attempt.examId, candidateId: attempt.candidateId, score, passed, gradingStatus: attempt.gradingStatus });
+  dispatchWebhook(attempt.tenantId ?? null, "attempt.submitted", { attemptId: attempt.id, examId: attempt.examId, candidateId: attempt.candidateId, score, passed, gradingStatus: attempt.gradingStatus });
   return { score, passed, exam, needsReview };
 }
 
@@ -1736,7 +2088,7 @@ function issueCertificate(attempt: Attempt): Certificate | null {
     issuedAt: now(),
   };
   db.data!.certificates.push(cert);
-  dispatchWebhook("certificate.issued", { certNumber: cert.certNumber, candidateId: cert.candidateId, examId: cert.examId, score: cert.score });
+  dispatchWebhook(cert.tenantId ?? null, "certificate.issued", { certNumber: cert.certNumber, candidateId: cert.candidateId, examId: cert.examId, score: cert.score });
   return cert;
 }
 
@@ -1942,7 +2294,7 @@ app.post("/api/attempts/:id/regrade", requireAuth, async (req, res) => {
   const existing = db.data!.regradeRequests.find((r) => r.attemptId === attempt.id && r.status === "open");
   if (existing) return res.status(409).json({ error: "You already have an open review request for this result." });
   const reqRow: RegradeRequest = {
-    id: nanoid(10), attemptId: attempt.id, candidateId: user.id, examId: attempt.examId,
+    id: nanoid(10), tenantId: user.tenantId, attemptId: attempt.id, candidateId: user.id, examId: attempt.examId,
     reason: reason.slice(0, 2000), status: "open", scoreBefore: attempt.score ?? null, createdAt: now(),
   };
   db.data!.regradeRequests.push(reqRow);
@@ -2009,8 +2361,12 @@ function questionDefaults(type: Question["type"]): QDefaults {
 // list/overview reads match GRADERS via exams.view; every mutation below
 // (create/duplicate/edit/assign/questions/publish/delete) was
 // requireRole("admin") alone and maps to exams.edit/create/publish/delete.
-app.get("/api/admin/exams", requirePermission("exams.view"), (_req, res) => {
-  const items = db.data!.exams.map((exam) => ({
+// First route migrated for the tenant retrofit (Phase C proof-of-pattern —
+// see the tenant-retrofit plan). questions/attempts joined by examId don't
+// need their own tenantId check: those FKs only ever point at same-tenant
+// exams once the top-level list below is filtered.
+app.get("/api/admin/exams", requirePermission("exams.view"), (req, res) => {
+  const items = tenantExams(currentTenantId(req)).map((exam) => ({
     exam,
     questionCount: db.data!.questions.filter((q) => q.examId === exam.id).length,
     attemptCount: db.data!.attempts.filter((a) => a.examId === exam.id).length,
@@ -2019,22 +2375,25 @@ app.get("/api/admin/exams", requirePermission("exams.view"), (_req, res) => {
 });
 
 // Aggregated data for the Manage-Exams dashboard (cards, charts, exam cards).
-app.get("/api/admin/exams-overview", requirePermission("exams.view"), (_req, res) => {
+app.get("/api/admin/exams-overview", requirePermission("exams.view"), (req, res) => {
+  const tenantId = currentTenantId(req);
   const d = db.data!;
-  const realExams = d.exams.filter((e) => !e.practice);
-  const candidateIds = new Set(d.users.filter((u) => u.role === "candidate").map((u) => u.id));
-  const submitted = d.attempts.filter((a) => a.status === "submitted" && !examById(a.examId)?.practice);
+  const realExams = d.exams.filter((e) => !e.practice && e.tenantId === tenantId);
+  const realExamIds = new Set(realExams.map((e) => e.id));
+  const candidateIds = new Set(d.users.filter((u) => u.role === "candidate" && u.tenantId === tenantId).map((u) => u.id));
+  const submitted = d.attempts.filter((a) => a.status === "submitted" && realExamIds.has(a.examId));
   const nowMs = Date.now();
 
   // Map a question type to a coarse pattern bucket used by the tabs + pattern chart.
   const bucketOf = (t: string): "mcq" | "shorts" | "written" | "viva" =>
     (["mcq", "multi_select", "true_false"].includes(t) ? "mcq" : t === "short" ? "shorts" : t === "code" ? "viva" : "written");
 
+  const tenantQuestions = d.questions.filter((q) => realExamIds.has(q.examId));
   const qByExam = new Map<string, Question[]>();
-  for (const q of d.questions) { const a = qByExam.get(q.examId) ?? []; a.push(q); qByExam.set(q.examId, a); }
-  const classOf = (examId: string) => d.classes.find((c) => c.assignments.some((a) => a.examId === examId))?.name ?? null;
+  for (const q of tenantQuestions) { const a = qByExam.get(q.examId) ?? []; a.push(q); qByExam.set(q.examId, a); }
+  const classOf = (examId: string) => d.classes.find((c) => c.tenantId === tenantId && c.assignments.some((a) => a.examId === examId))?.name ?? null;
 
-  const pendingReviews = d.attempts.filter((a) => a.gradingStatus === "pending_review").length;
+  const pendingReviews = d.attempts.filter((a) => a.gradingStatus === "pending_review" && realExamIds.has(a.examId)).length;
   const reviewPct = submitted.length ? Math.round((pendingReviews / submitted.length) * 100) : 0;
   const upcoming = realExams.filter((e) => e.availableFrom && new Date(e.availableFrom).getTime() > nowMs).length;
 
@@ -2050,7 +2409,7 @@ app.get("/api/admin/exams-overview", requirePermission("exams.view"), (_req, res
 
   // Question-pattern distribution (shorts folded into written for a 3-way display).
   const patt = { mcq: 0, written: 0, viva: 0 };
-  for (const q of d.questions) { const b = bucketOf(q.type); patt[b === "shorts" ? "written" : b]++; }
+  for (const q of tenantQuestions) { const b = bucketOf(q.type); patt[b === "shorts" ? "written" : b]++; }
   const pTotal = patt.mcq + patt.written + patt.viva || 1;
   const questionPattern = {
     mcq: Math.round((patt.mcq / pTotal) * 100),
@@ -2083,22 +2442,25 @@ app.get("/api/admin/exams-overview", requirePermission("exams.view"), (_req, res
     };
   });
 
+  const certified = d.certificates.filter((c) => c.tenantId === tenantId).length;
   res.json({
-    cards: { totalExams: realExams.length, totalStudents: candidateIds.size, certified: d.certificates.length, upcoming, reviewPct, pendingReviews },
+    cards: { totalExams: realExams.length, totalStudents: candidateIds.size, certified, upcoming, reviewPct, pendingReviews },
     subjectsEnroll, totalEnroll, questionPattern, subjectScores, exams,
   });
 });
 
 app.post("/api/admin/exams", requirePermission("exams.create"), async (req, res) => {
-  const settings = getSettings();
+  const tenantId = currentTenantId(req);
+  const settings = tenantId ? getOrgSettings(tenantId) : null;
   const exam: Exam = {
     id: nanoid(10),
+    tenantId: tenantId ?? undefined,
     title: (req.body?.title ?? "").trim() || "Untitled examination",
     code: (req.body?.code ?? "").trim(),
     description: "",
     durationMinutes: 30,
-    passingScore: settings.defaultPassingScore,
-    proctored: settings.defaultProctored,
+    passingScore: settings?.defaultPassingScore ?? 60,
+    proctored: settings?.defaultProctored ?? true,
     status: "draft",
     enrollment: "open",
     lockdown: { ...DEFAULT_LOCKDOWN },
@@ -2118,7 +2480,8 @@ app.post("/api/admin/exams", requirePermission("exams.create"), async (req, res)
 
 // Duplicate an exam as a template — clones the exam and all its questions (draft).
 app.post("/api/admin/exams/:id/duplicate", requirePermission("exams.create"), async (req, res) => {
-  const src = db.data!.exams.find((e) => e.id === req.params.id);
+  const tenantId = currentTenantId(req);
+  const src = db.data!.exams.find((e) => e.id === req.params.id && e.tenantId === tenantId);
   if (!src) return res.status(404).json({ error: "Exam not found." });
   const clone: Exam = JSON.parse(JSON.stringify(src));
   clone.id = nanoid(10);
@@ -2144,7 +2507,7 @@ app.post("/api/admin/exams/:id/duplicate", requirePermission("exams.create"), as
 });
 
 app.get("/api/admin/exams/:id", requirePermission("exams.edit"), (req, res) => {
-  const exam = db.data!.exams.find((e) => e.id === req.params.id);
+  const exam = db.data!.exams.find((e) => e.id === req.params.id && e.tenantId === currentTenantId(req));
   if (!exam) return res.status(404).json({ error: "Exam not found." });
   const questions = db.data!.questions.filter((q) => q.examId === exam.id);
   const assignedIds = db.data!.registrations.filter((r) => r.examId === exam.id).map((r) => r.candidateId);
@@ -2156,9 +2519,10 @@ app.get("/api/admin/exams/:id", requirePermission("exams.edit"), (req, res) => {
 // directory list stays GRADERS-equivalent via students.view; every write
 // below was requireRole("admin") alone and maps to students.manage (or
 // students.delete for the one actual account-deletion route).
-app.get("/api/admin/candidates", requirePermission("students.view"), (_req, res) => {
+app.get("/api/admin/candidates", requirePermission("students.view"), (req, res) => {
+  const tenantId = currentTenantId(req);
   const candidates = db.data!.users
-    .filter((u) => u.role === "candidate")
+    .filter((u) => u.tenantId === tenantId && u.role === "candidate")
     .map((u) => ({ id: u.id, name: u.name, email: u.email }));
   res.json({ candidates });
 });
@@ -2168,14 +2532,19 @@ app.post("/api/admin/candidates", requirePermission("students.manage"), async (r
   if (!name?.trim() || !email?.trim()) {
     return res.status(400).json({ error: "Name and email are required." });
   }
+  // Email stays globally unique across the whole platform (see the
+  // tenant-retrofit login design) — a match belonging to another tenant is
+  // still a real, taken email, not a name collision to work around.
   const exists = db.data!.users.find((u) => u.email.toLowerCase() === String(email).trim().toLowerCase());
   if (exists) return res.status(409).json({ error: "An account with that email already exists." });
   const b = req.body ?? {};
+  const tenantId = currentTenantId(req);
   // Never emailed or shown anywhere — the student sets their real password via
   // the setup link below. This hash only exists so passwordHash has a value.
   const placeholderPassword = "dti-" + nanoid(6);
   const user = {
     id: nanoid(10),
+    tenantId: tenantId ?? undefined,
     email: String(email).trim(),
     passwordHash: await bcrypt.hash(placeholderPassword, BCRYPT_COST),
     name: String(name).trim(),
@@ -2191,23 +2560,25 @@ app.post("/api/admin/candidates", requirePermission("students.manage"), async (r
   await recordAudit(req, "candidate.created", `${user.name} <${user.email}>`);
   const setupUrl = `${env.appUrl}/setup-password?token=${passwordSetupToken(user.id)}`;
   const mail = setupLinkEmail(user.name, user.email, setupUrl);
-  await sendMail(user.email, mail.subject, mail.text, mail.html);
+  await sendMail(user.email, mail.subject, mail.text, mail.html, tenantId ?? undefined);
   res.json({ user: { id: user.id, name: user.name, email: user.email } });
 });
 
 // Resend the onboarding email with a fresh setup link — for when the original
 // never arrived (e.g. an SMTP outage) or its 72h window expired.
 app.post("/api/admin/candidates/:id/resend-invite", requirePermission("students.manage"), async (req, res) => {
-  const user = db.data!.users.find((u) => u.id === req.params.id && u.role === "candidate");
+  const tenantId = currentTenantId(req);
+  const user = db.data!.users.find((u) => u.id === req.params.id && u.tenantId === tenantId && u.role === "candidate");
   if (!user) return res.status(404).json({ error: "Student not found." });
   await recordAudit(req, "candidate.invite_resent", `${user.name} <${user.email}>`);
   const setupUrl = `${env.appUrl}/setup-password?token=${passwordSetupToken(user.id)}`;
   const mail = setupLinkEmail(user.name, user.email, setupUrl);
-  const result = await sendMail(user.email, mail.subject, mail.text, mail.html);
+  const result = await sendMail(user.email, mail.subject, mail.text, mail.html, tenantId ?? undefined);
   res.json({ ok: result.delivery !== "failed", delivery: result.delivery, error: result.error });
 });
 
 app.post("/api/admin/candidates/bulk", requirePermission("students.manage"), async (req, res) => {
+  const tenantId = currentTenantId(req);
   type Row = { name?: string; email?: string; studentRef?: string; studentClass?: string; gender?: string; age?: unknown; phone?: string };
   let rows: Row[] = Array.isArray(req.body?.rows) ? req.body.rows : [];
   if (typeof req.body?.csv === "string") {
@@ -2228,7 +2599,7 @@ app.post("/api/admin/candidates/bulk", requirePermission("students.manage"), asy
     const tempPassword = "dti-" + nanoid(6);
     const ageNum = Number(row?.age);
     const user: User = {
-      id: nanoid(10), email, passwordHash: await bcrypt.hash(tempPassword, BCRYPT_COST), name, role: "candidate",
+      id: nanoid(10), tenantId: tenantId ?? undefined, email, passwordHash: await bcrypt.hash(tempPassword, BCRYPT_COST), name, role: "candidate",
       gender: typeof row?.gender === "string" && row.gender.trim() ? row.gender.trim() : undefined,
       age: row?.age !== undefined && row?.age !== "" && Number.isFinite(ageNum) ? ageNum : undefined,
       studentClass: typeof row?.studentClass === "string" && row.studentClass.trim() ? row.studentClass.trim() : undefined,
@@ -2253,7 +2624,7 @@ app.post("/api/admin/candidates/bulk", requirePermission("students.manage"), asy
       const user = createdUsers.find((u) => u.email === c.email)!;
       const setupUrl = `${env.appUrl}/setup-password?token=${passwordSetupToken(user.id)}`;
       const mail = setupLinkEmail(c.name, c.email, setupUrl);
-      await sendMail(c.email, mail.subject, mail.text, mail.html);
+      await sendMail(c.email, mail.subject, mail.text, mail.html, tenantId ?? undefined);
     } catch (e) {
       logger.error({ err: e, email: c.email }, "bulk-import invitation email failed");
     }
@@ -2264,18 +2635,20 @@ app.post("/api/admin/candidates/bulk", requirePermission("students.manage"), asy
 // mapping here reuses an established key against its already-correct default
 // bundle. communication.view_log is the email delivery log (should have been
 // part of Batch 2's communication group, caught here instead).
-app.get("/api/admin/emails", requirePermission("communication.view_log"), async (_req, res) => {
-  res.json({ emails: await emailStore.recent(100) });
+app.get("/api/admin/emails", requirePermission("communication.view_log"), async (req, res) => {
+  const tenantId = currentTenantId(req);
+  res.json({ emails: tenantId ? await emailStore.recentForTenant(tenantId, 100) : [] });
 });
 
 /** Bulk-remove disposable data created by scripts/load-test.mjs (candidate
  *  accounts with a @test.local email, and exams titled "Load Test Exam*") in a
  *  single filter pass + single db.write(), instead of N one-by-one deletes
  *  (each of which does its own full-mirror write — O(n²) for N accounts). */
-app.post("/api/admin/dev/purge-load-test-data", requireRole("admin"), async (_req, res) => {
-  const isLoadTestUser = (u: User) => u.role === "candidate" && u.email.endsWith("@test.local");
+app.post("/api/admin/dev/purge-load-test-data", requireRole("admin"), async (req, res) => {
+  const tenantId = currentTenantId(req);
+  const isLoadTestUser = (u: User) => u.role === "candidate" && u.tenantId === tenantId && u.email.endsWith("@test.local");
   const removedUserIds = new Set(db.data!.users.filter(isLoadTestUser).map((u) => u.id));
-  const removedExamIds = new Set(db.data!.exams.filter((e) => e.title.startsWith("Load Test Exam")).map((e) => e.id));
+  const removedExamIds = new Set(db.data!.exams.filter((e) => e.tenantId === tenantId && e.title.startsWith("Load Test Exam")).map((e) => e.id));
   const attemptIds = db.data!.attempts
     .filter((a) => removedUserIds.has(a.candidateId) || removedExamIds.has(a.examId))
     .map((a) => a.id);
@@ -2297,12 +2670,12 @@ app.post("/api/admin/dev/purge-load-test-data", requireRole("admin"), async (_re
   await proctorStore.removeForAttempts(attemptIds);
   await snapshotStore.removeForAttempts(attemptIds);
   await db.write();
-  await recordAudit(_req, "dev.purge_load_test_data", JSON.stringify(removedCounts));
+  await recordAudit(req, "dev.purge_load_test_data", JSON.stringify(removedCounts));
   res.json({ ok: true, removed: removedCounts });
 });
 
 app.patch("/api/admin/candidates/:id/password", requirePermission("students.manage"), validate(passwordResetSchema), async (req, res) => {
-  const user = db.data!.users.find((u) => u.id === req.params.id && u.role === "candidate");
+  const user = db.data!.users.find((u) => u.id === req.params.id && u.tenantId === currentTenantId(req) && u.role === "candidate");
   if (!user) return res.status(404).json({ error: "Candidate not found." });
   const { password } = req.body ?? {};
   if (!password || String(password).length < 12) {
@@ -2317,7 +2690,7 @@ app.patch("/api/admin/candidates/:id/password", requirePermission("students.mana
 
 app.delete("/api/admin/candidates/:id", requirePermission("students.delete"), async (req, res) => {
   const id = req.params.id;
-  const user = db.data!.users.find((u) => u.id === id && u.role === "candidate");
+  const user = db.data!.users.find((u) => u.id === id && u.tenantId === currentTenantId(req) && u.role === "candidate");
   if (!user) return res.status(404).json({ error: "Candidate not found." });
   const attemptIds = db.data!.attempts.filter((a) => a.candidateId === id).map((a) => a.id);
   db.data!.users = db.data!.users.filter((u) => u.id !== id);
@@ -2325,7 +2698,7 @@ app.delete("/api/admin/candidates/:id", requirePermission("students.delete"), as
   db.data!.attempts = db.data!.attempts.filter((a) => a.candidateId !== id);
   db.data!.certificates = db.data!.certificates.filter((c) => c.candidateId !== id);
   for (const cls of db.data!.classes) {
-    if (cls.memberIds.includes(id as string)) cls.memberIds = cls.memberIds.filter((m) => m !== id);
+    if (cls.tenantId === user.tenantId && cls.memberIds.includes(id as string)) cls.memberIds = cls.memberIds.filter((m) => m !== id);
   }
   await answerStore.removeForAttempts(attemptIds);
   await proctorStore.removeForAttempts(attemptIds);
@@ -2335,15 +2708,16 @@ app.delete("/api/admin/candidates/:id", requirePermission("students.delete"), as
 });
 
 app.post("/api/admin/exams/:id/assignments", requirePermission("exams.edit"), async (req, res) => {
-  const exam = db.data!.exams.find((e) => e.id === req.params.id);
+  const tenantId = currentTenantId(req);
+  const exam = db.data!.exams.find((e) => e.id === req.params.id && e.tenantId === tenantId);
   if (!exam) return res.status(404).json({ error: "Exam not found." });
   const candidateId: string = req.body?.candidateId;
-  const candidate = db.data!.users.find((u) => u.id === candidateId && u.role === "candidate");
+  const candidate = db.data!.users.find((u) => u.id === candidateId && u.tenantId === tenantId && u.role === "candidate");
   if (!candidate) return res.status(400).json({ error: "Unknown candidate." });
   const exists = db.data!.registrations.find((r) => r.examId === exam.id && r.candidateId === candidateId);
   if (!exists) {
     db.data!.registrations.push({
-      id: nanoid(10), examId: exam.id, candidateId,
+      id: nanoid(10), tenantId: tenantId ?? undefined, examId: exam.id, candidateId,
       status: "registered", approval: "pending", scheduledStart: null, systemCheckPassed: false, createdAt: now(),
     });
     await db.write();
@@ -2352,18 +2726,19 @@ app.post("/api/admin/exams/:id/assignments", requirePermission("exams.edit"), as
 });
 
 app.post("/api/admin/exams/:id/assign-bulk", requirePermission("exams.edit"), async (req, res) => {
-  const exam = db.data!.exams.find((e) => e.id === req.params.id);
+  const tenantId = currentTenantId(req);
+  const exam = db.data!.exams.find((e) => e.id === req.params.id && e.tenantId === tenantId);
   if (!exam) return res.status(404).json({ error: "Exam not found." });
   const candidateIds: string[] = Array.isArray(req.body?.candidateIds) ? req.body.candidateIds : [];
   const confirm = req.body?.confirm === true;
   let assigned = 0, confirmed = 0;
   for (const cid of candidateIds) {
-    const cand = db.data!.users.find((u) => u.id === cid && u.role === "candidate");
+    const cand = db.data!.users.find((u) => u.id === cid && u.tenantId === tenantId && u.role === "candidate");
     if (!cand) continue;
     let reg = db.data!.registrations.find((r) => r.examId === exam.id && r.candidateId === cid);
     if (!reg) {
       reg = {
-        id: nanoid(10), examId: exam.id, candidateId: cid,
+        id: nanoid(10), tenantId: tenantId ?? undefined, examId: exam.id, candidateId: cid,
         status: "registered", approval: confirm ? "confirmed" : "pending",
         scheduledStart: null, systemCheckPassed: false, createdAt: now(),
       };
@@ -2381,6 +2756,9 @@ app.post("/api/admin/exams/:id/assign-bulk", requirePermission("exams.edit"), as
 
 app.delete("/api/admin/exams/:id/assignments/:candidateId", requirePermission("exams.edit"), async (req, res) => {
   const { id, candidateId } = req.params;
+  const tenantId = currentTenantId(req);
+  const exam = db.data!.exams.find((e) => e.id === id && e.tenantId === tenantId);
+  if (!exam) return res.status(404).json({ error: "Exam not found." });
   // Don't unassign a candidate who already has an attempt (preserve their record).
   const hasAttempt = db.data!.attempts.some((a) => a.examId === id && a.candidateId === candidateId);
   if (hasAttempt) return res.status(409).json({ error: "Candidate already started this exam." });
@@ -2392,7 +2770,7 @@ app.delete("/api/admin/exams/:id/assignments/:candidateId", requirePermission("e
 });
 
 app.patch("/api/admin/exams/:id", requirePermission("exams.edit"), async (req, res) => {
-  const exam = db.data!.exams.find((e) => e.id === req.params.id);
+  const exam = db.data!.exams.find((e) => e.id === req.params.id && e.tenantId === currentTenantId(req));
   if (!exam) return res.status(404).json({ error: "Exam not found." });
   const b = req.body ?? {};
   if (typeof b.title === "string") exam.title = b.title;
@@ -2491,6 +2869,8 @@ app.patch("/api/admin/exams/:id", requirePermission("exams.edit"), async (req, r
 
 app.delete("/api/admin/exams/:id", requirePermission("exams.delete"), async (req, res) => {
   const examId = req.params.id;
+  const exam = db.data!.exams.find((e) => e.id === examId && e.tenantId === currentTenantId(req));
+  if (!exam) return res.status(404).json({ error: "Exam not found." });
   // Cascade: remove the exam and everything tied to it (no orphaned records).
   const attemptIds = db.data!.attempts.filter((a) => a.examId === examId).map((a) => a.id);
   db.data!.exams = db.data!.exams.filter((e) => e.id !== examId);
@@ -2507,10 +2887,11 @@ app.delete("/api/admin/exams/:id", requirePermission("exams.delete"), async (req
 });
 
 app.post("/api/admin/exams/:id/questions", requirePermission("exams.edit"), async (req, res) => {
-  const exam = db.data!.exams.find((e) => e.id === req.params.id);
+  const tenantId = currentTenantId(req);
+  const exam = db.data!.exams.find((e) => e.id === req.params.id && e.tenantId === tenantId);
   if (!exam) return res.status(404).json({ error: "Exam not found." });
   const type: Question["type"] = req.body?.type ?? "mcq";
-  const q: Question = { id: nanoid(10), examId: exam.id, type, prompt: "", points: 10, ...questionDefaults(type) };
+  const q: Question = { id: nanoid(10), tenantId: tenantId ?? undefined, examId: exam.id, type, prompt: "", points: 10, ...questionDefaults(type) };
   db.data!.questions.push(q);
   await db.write();
   res.json({ question: q });
@@ -2518,7 +2899,8 @@ app.post("/api/admin/exams/:id/questions", requirePermission("exams.edit"), asyn
 
 // Bulk-import questions into an exam (client parses CSV → array of drafts).
 app.post("/api/admin/exams/:id/questions/import", requirePermission("exams.edit"), async (req, res) => {
-  const exam = db.data!.exams.find((e) => e.id === req.params.id);
+  const tenantId = currentTenantId(req);
+  const exam = db.data!.exams.find((e) => e.id === req.params.id && e.tenantId === tenantId);
   if (!exam) return res.status(404).json({ error: "Exam not found." });
   const rows = Array.isArray(req.body?.questions) ? req.body.questions : [];
   if (!rows.length) return res.status(400).json({ error: "No questions to import." });
@@ -2534,7 +2916,7 @@ app.post("/api/admin/exams/:id/questions/import", requirePermission("exams.edit"
         ? r.options.split("|").map((s: string) => s.trim()).filter(Boolean)
         : undefined;
     const q: Question = {
-      id: nanoid(10), examId: exam.id, type,
+      id: nanoid(10), tenantId: tenantId ?? undefined, examId: exam.id, type,
       prompt: prompt.slice(0, 2000),
       points: Number(r?.points) > 0 ? Math.floor(Number(r.points)) : 1,
       ...questionDefaults(type),
@@ -2552,12 +2934,13 @@ app.post("/api/admin/exams/:id/questions/import", requirePermission("exams.edit"
 
 // Clone existing bank questions into this exam (reuse across exams — "pick from bank").
 app.post("/api/admin/exams/:id/questions/clone", requirePermission("exams.edit"), async (req, res) => {
-  const exam = db.data!.exams.find((e) => e.id === req.params.id);
+  const tenantId = currentTenantId(req);
+  const exam = db.data!.exams.find((e) => e.id === req.params.id && e.tenantId === tenantId);
   if (!exam) return res.status(404).json({ error: "Exam not found." });
   const ids: string[] = Array.isArray(req.body?.questionIds) ? req.body.questionIds.map(String) : [];
   const created: Question[] = [];
   for (const qid of ids) {
-    const src = db.data!.questions.find((q) => q.id === qid);
+    const src = db.data!.questions.find((q) => q.id === qid && q.tenantId === tenantId);
     if (!src) continue;
     const copy: Question = JSON.parse(JSON.stringify(src));
     copy.id = nanoid(10);
@@ -2573,7 +2956,7 @@ app.post("/api/admin/exams/:id/questions/clone", requirePermission("exams.edit")
 });
 
 app.patch("/api/admin/questions/:id", requirePermission("exams.edit"), async (req, res) => {
-  const q = db.data!.questions.find((x) => x.id === req.params.id);
+  const q = db.data!.questions.find((x) => x.id === req.params.id && x.tenantId === currentTenantId(req));
   if (!q) return res.status(404).json({ error: "Question not found." });
   const b = req.body ?? {};
   if (typeof b.type === "string" && b.type !== q.type) {
@@ -2659,7 +3042,10 @@ app.patch("/api/admin/questions/:id", requirePermission("exams.edit"), async (re
 });
 
 app.delete("/api/admin/questions/:id", requirePermission("exams.edit"), async (req, res) => {
-  db.data!.questions = db.data!.questions.filter((q) => q.id !== req.params.id);
+  const tenantId = currentTenantId(req);
+  const q = db.data!.questions.find((x) => x.id === req.params.id && x.tenantId === tenantId);
+  if (!q) return res.status(404).json({ error: "Question not found." });
+  db.data!.questions = db.data!.questions.filter((x) => x.id !== req.params.id);
   await db.write();
   res.json({ ok: true });
 });
@@ -2667,7 +3053,7 @@ app.delete("/api/admin/questions/:id", requirePermission("exams.edit"), async (r
 // AI difficulty checker: estimate a question's difficulty band via Claude.
 app.post("/api/admin/questions/:id/assess-difficulty", requirePermission("exams.edit"), async (req, res) => {
   if (!aiEnabled()) return res.status(503).json({ error: "AI is not configured. Set ANTHROPIC_API_KEY on the server to enable difficulty suggestions." });
-  const q = db.data!.questions.find((x) => x.id === req.params.id);
+  const q = db.data!.questions.find((x) => x.id === req.params.id && x.tenantId === currentTenantId(req));
   if (!q) return res.status(404).json({ error: "Question not found." });
   if (!q.prompt.trim()) return res.status(400).json({ error: "Add a question prompt first." });
   try {
@@ -2681,6 +3067,8 @@ app.post("/api/admin/questions/:id/assess-difficulty", requirePermission("exams.
 
 app.post("/api/admin/exams/:id/questions/reorder", requirePermission("exams.edit"), async (req, res) => {
   const examId = req.params.id;
+  const exam = db.data!.exams.find((e) => e.id === examId && e.tenantId === currentTenantId(req));
+  if (!exam) return res.status(404).json({ error: "Exam not found." });
   const orderedIds: string[] = req.body?.orderedIds ?? [];
   const others = db.data!.questions.filter((q) => q.examId !== examId);
   const mine = db.data!.questions.filter((q) => q.examId === examId);
@@ -2696,7 +3084,7 @@ app.post("/api/admin/exams/:id/questions/reorder", requirePermission("exams.edit
 });
 
 app.post("/api/admin/exams/:id/publish", requirePermission("exams.publish"), async (req, res) => {
-  const exam = db.data!.exams.find((e) => e.id === req.params.id);
+  const exam = db.data!.exams.find((e) => e.id === req.params.id && e.tenantId === currentTenantId(req));
   if (!exam) return res.status(404).json({ error: "Exam not found." });
   const publish = req.body?.publish !== false;
   if (!publish) {
@@ -2779,13 +3167,14 @@ app.post("/api/admin/exams/:id/publish", requirePermission("exams.publish"), asy
   exam.status = "published";
   await db.write();
   await recordAudit(req, "exam.published", exam.title);
-  dispatchWebhook("exam.published", { examId: exam.id, title: exam.title, code: exam.code });
+  dispatchWebhook(exam.tenantId ?? null, "exam.published", { examId: exam.id, title: exam.title, code: exam.code });
   res.json({ exam });
 });
 
-// ---- admin: question bank (every question across all exams) ----
-app.get("/api/admin/questions", requirePermission("exams.edit"), (_req, res) => {
-  const questions = db.data!.questions.map((q) => {
+// ---- admin: question bank (every question across all of this tenant's exams) ----
+app.get("/api/admin/questions", requirePermission("exams.edit"), (req, res) => {
+  const tenantId = currentTenantId(req);
+  const questions = db.data!.questions.filter((q) => q.tenantId === tenantId).map((q) => {
     const exam = db.data!.exams.find((e) => e.id === q.examId);
     return { ...q, examTitle: exam?.title ?? "—", examCode: exam?.code ?? "", examStatus: exam?.status ?? "draft" };
   });
@@ -2796,14 +3185,14 @@ app.get("/api/admin/questions", requirePermission("exams.edit"), (_req, res) => 
 // Batch 4 of the permission migration (see test/permissions.test.ts):
 // results.view/release/export and grading.regrade already matched GRADERS
 // exactly; results.manage (new) covers the one admin-only recompute action.
-app.get("/api/admin/results", requirePermission("results.view"), async (_req, res) => {
+app.get("/api/admin/results", requirePermission("results.view"), async (req, res) => {
+  const tenantId = currentTenantId(req);
   const usersById = new Map(db.data!.users.map((u) => [u.id, u]));
   const examsById = new Map(db.data!.exams.map((e) => [e.id, e]));
   const userName = (id: string) => usersById.get(id)?.name ?? "Candidate";
   const examOf = (id: string) => examsById.get(id);
-  const submitted = db.data!.attempts.filter((a) => a.status === "submitted" && !examOf(a.examId)?.practice);
+  const submitted = db.data!.attempts.filter((a) => a.status === "submitted" && a.tenantId === tenantId && !examOf(a.examId)?.practice);
   const evMap = await proctorStore.forAttempts(submitted.map((a) => a.id));
-  const flaggedAll = await proctorStore.allFlagged();
   const attemptsByExam = new Map<string, typeof submitted>();
   for (const a of submitted) { const list = attemptsByExam.get(a.examId) ?? []; list.push(a); attemptsByExam.set(a.examId, list); }
 
@@ -2858,11 +3247,11 @@ app.get("/api/admin/results", requirePermission("results.view"), async (_req, re
   res.json({
     overview: {
       attempts: submitted.length,
-      inProgress: db.data!.attempts.filter((a) => a.status === "in_progress").length,
+      inProgress: db.data!.attempts.filter((a) => a.status === "in_progress" && a.tenantId === tenantId).length,
       passRate: submitted.length ? Math.round((submitted.filter((a) => a.passed).length / submitted.length) * 100) : 0,
       avgScore: scores.length ? Math.round(scores.reduce((p, c) => p + c, 0) / scores.length) : 0,
-      certificates: db.data!.certificates.length,
-      flags: flaggedAll.length,
+      certificates: db.data!.certificates.filter((c) => c.tenantId === tenantId).length,
+      flags: attempts.reduce((s, a) => s + a.flagCount, 0),
     },
     perExam,
     attempts,
@@ -2870,9 +3259,10 @@ app.get("/api/admin/results", requirePermission("results.view"), async (_req, re
 });
 
 // Results grouped by cohort (class) — each class's assigned exams with member-scoped stats.
-app.get("/api/admin/results-by-cohort", requirePermission("results.view"), async (_req, res) => {
+app.get("/api/admin/results-by-cohort", requirePermission("results.view"), async (req, res) => {
+  const tenantId = currentTenantId(req);
   const examOf = (id: string) => db.data!.exams.find((e) => e.id === id);
-  const cohorts = db.data!.classes.map((cls) => {
+  const cohorts = db.data!.classes.filter((cls) => cls.tenantId === tenantId).map((cls) => {
     const memberSet = new Set(cls.memberIds);
     const byExam = new Map<string, { scheduledStart: string | null; assignedAt: string }>();
     for (const a of cls.assignments) {
@@ -2900,7 +3290,7 @@ app.get("/api/admin/results-by-cohort", requirePermission("results.view"), async
 
 // Item analysis: per-question correct-rate, difficulty and discrimination for an exam.
 app.get("/api/admin/exams/:id/item-analysis", requirePermission("results.view"), async (req, res) => {
-  const exam = db.data!.exams.find((e) => e.id === req.params.id);
+  const exam = db.data!.exams.find((e) => e.id === req.params.id && e.tenantId === currentTenantId(req));
   if (!exam) return res.status(404).json({ error: "Exam not found." });
   const questions = db.data!.questions.filter((q) => q.examId === exam.id);
   const submitted = db.data!.attempts.filter((a) => a.examId === exam.id && a.status === "submitted");
@@ -2967,9 +3357,90 @@ app.get("/api/admin/exams/:id/item-analysis", requirePermission("results.view"),
   res.json({ exam: { id: exam.id, title: exam.title, code: exam.code }, attempts: submitted.length, items, alpha });
 });
 
+// Every candidate's answer to one specific question, side by side — the
+// per-question counterpart to the per-attempt review screen. Item Analysis
+// already shows aggregate stats per question (correct rate, option-pick
+// breakdown); this is the drill-down for actually reading what everyone
+// wrote, without opening each attempt one at a time. Respects double-blind
+// grading (isAnonymized/anonLabel) exactly like the attempt review route.
+app.get("/api/admin/exams/:id/questions/:qid/responses", requirePermission("results.view"), async (req, res) => {
+  const exam = db.data!.exams.find((e) => e.id === req.params.id && e.tenantId === currentTenantId(req));
+  if (!exam) return res.status(404).json({ error: "Exam not found." });
+  const question = db.data!.questions.find((q) => q.id === req.params.qid && q.examId === exam.id);
+  if (!question) return res.status(404).json({ error: "Question not found." });
+  const submitted = db.data!.attempts.filter((a) => a.examId === exam.id && a.status === "submitted");
+  const ansMap = await answerStore.forAttempts(submitted.map((a) => a.id));
+
+  const responses = submitted
+    .map((a) => {
+      const ans = (ansMap.get(a.id) ?? []).find((x) => x.questionId === question.id);
+      const answered = !!ans && (ans.value ?? "") !== "";
+      const anon = isAnonymized(a, exam);
+      const candidate = db.data!.users.find((u) => u.id === a.candidateId);
+      return {
+        attemptId: a.id,
+        candidateName: anon ? anonLabel(a.id) : (candidate?.name ?? "Candidate"),
+        anonymous: anon,
+        answered,
+        answer: answered ? displayAnswer(question, ans!.value) : null,
+        correct: ans?.correct ?? false,
+        awardedPoints: ans?.awardedPoints ?? 0,
+        needsReview: ans?.needsReview ?? false,
+        feedback: ans?.feedback ?? null,
+        submittedAt: a.submittedAt,
+      };
+    })
+    .sort((a, b) => (a.submittedAt ?? "").localeCompare(b.submittedAt ?? ""));
+
+  res.json({
+    exam: { id: exam.id, title: exam.title, code: exam.code },
+    question: { id: question.id, prompt: question.prompt, type: question.type, points: question.points, correctAnswer: displayCorrect(question) },
+    total: submitted.length,
+    answered: responses.filter((r) => r.answered).length,
+    responses,
+  });
+});
+
+// Full answer sheet: every candidate as a row, every question as a column —
+// the "export everyone's answer to everything at once" counterpart to the
+// single-question view above (mirrors what a form-response tool would call
+// "open in a spreadsheet": one row per respondent, one column per question).
+app.get("/api/admin/exams/:id/answers.csv", requirePermission("results.export"), async (req, res) => {
+  const exam = db.data!.exams.find((e) => e.id === req.params.id && e.tenantId === currentTenantId(req));
+  if (!exam) return res.status(404).json({ error: "Exam not found." });
+  const questions = db.data!.questions.filter((q) => q.examId === exam.id);
+  const submitted = db.data!.attempts.filter((a) => a.examId === exam.id && a.status === "submitted");
+  const ansMap = await answerStore.forAttempts(submitted.map((a) => a.id));
+
+  const headers = [
+    "Student", "Email", "Score", "Result", "Grading",
+    ...questions.map((q, i) => `Q${i + 1}: ${q.prompt.replace(/\s+/g, " ").trim().slice(0, 80)}`),
+  ];
+  const rows = submitted
+    .sort((a, b) => (a.submittedAt ?? "").localeCompare(b.submittedAt ?? ""))
+    .map((a) => {
+      const anon = isAnonymized(a, exam);
+      const candidate = db.data!.users.find((u) => u.id === a.candidateId);
+      const answers = ansMap.get(a.id) ?? [];
+      const answerCells = questions.map((q) => {
+        const ans = answers.find((x) => x.questionId === q.id);
+        return ans && (ans.value ?? "") !== "" ? displayAnswer(q, ans.value) : "";
+      });
+      return [
+        anon ? anonLabel(a.id) : (candidate?.name ?? "Candidate"),
+        anon ? "" : (candidate?.email ?? ""),
+        a.score ?? 0,
+        a.passed ? "Pass" : "Fail",
+        a.gradingStatus ?? "auto_graded",
+        ...answerCells,
+      ];
+    });
+  sendCsv(res, `${exam.code || exam.id}-answers.csv`, toCsv(headers, rows));
+});
+
 // Essay similarity: flag pairs of candidates whose written answers are highly similar.
 app.get("/api/admin/exams/:id/similarity", requirePermission("results.view"), async (req, res) => {
-  const exam = db.data!.exams.find((e) => e.id === req.params.id);
+  const exam = db.data!.exams.find((e) => e.id === req.params.id && e.tenantId === currentTenantId(req));
   if (!exam) return res.status(404).json({ error: "Exam not found." });
   const questions = db.data!.questions.filter((q) => q.examId === exam.id && (q.type === "essay" || q.type === "short" || q.type === "code"));
   const submitted = db.data!.attempts.filter((a) => a.examId === exam.id && a.status === "submitted");
@@ -2997,15 +3468,17 @@ app.get("/api/admin/exams/:id/similarity", requirePermission("results.view"), as
 });
 
 // Cohort & term-over-term comparison + at-risk student flagging.
-app.get("/api/admin/analytics/cohorts", requirePermission("results.view"), (_req, res) => {
+app.get("/api/admin/analytics/cohorts", requirePermission("results.view"), (req, res) => {
+  const tenantId = currentTenantId(req);
   const examOf = (id: string) => db.data!.exams.find((e) => e.id === id);
-  const submitted = db.data!.attempts.filter((a) => a.status === "submitted" && !examOf(a.examId)?.practice);
+  const submitted = db.data!.attempts.filter((a) => a.status === "submitted" && a.tenantId === tenantId && !examOf(a.examId)?.practice);
   const sc = (a: Attempt) => a.score ?? 0;
   const avg = (xs: number[]) => (xs.length ? Math.round(xs.reduce((s, x) => s + x, 0) / xs.length) : null);
   const passRate = (ax: Attempt[]) => (ax.length ? Math.round((ax.filter((a) => a.passed).length / ax.length) * 100) : null);
 
   // Cohorts = classes.
   const cohorts = db.data!.classes
+    .filter((c) => c.tenantId === tenantId)
     .map((c) => {
       const members = new Set(c.memberIds);
       const ax = submitted.filter((a) => members.has(a.candidateId));
@@ -3014,7 +3487,7 @@ app.get("/api/admin/analytics/cohorts", requirePermission("results.view"), (_req
     .filter((c) => c.members > 0);
 
   // Term-over-term = academic years (by submittedAt window), else last 6 calendar months.
-  const years = db.data!.academicYears.filter((y) => y.startDate && y.endDate);
+  const years = db.data!.academicYears.filter((y) => y.tenantId === tenantId && y.startDate && y.endDate);
   let terms: { label: string; attempts: number; avgScore: number | null; passRate: number | null }[];
   if (years.length) {
     terms = years
@@ -3148,7 +3621,7 @@ function buildStudentTrend(candidateId: string): import("../shared/types.ts").St
 // Per-student progress report (aggregated; rendered as a printable PDF on the
 // client, and as the richer AdminStudentReport bento view on screen).
 app.get("/api/admin/students/:id/report", requirePermission("students.report_view"), async (req, res) => {
-  const student = db.data!.users.find((u) => u.id === req.params.id && u.role === "candidate");
+  const student = db.data!.users.find((u) => u.id === req.params.id && u.tenantId === currentTenantId(req) && u.role === "candidate");
   if (!student) return res.status(404).json({ error: "Student not found." });
   const examOf = (id: string) => db.data!.exams.find((e) => e.id === id);
   const attempts = db.data!.attempts
@@ -3210,7 +3683,7 @@ app.get("/api/admin/students/:id/report", requirePermission("students.report_vie
   let subjectTrend: { subject: string; points: { month: string; myScore: number | null; classAvg: number | null }[] } | null = null;
   if (topSubject) {
     const monthKey = (iso: string) => iso.slice(0, 7);
-    const inSubject = db.data!.attempts.filter((a) => a.status === "submitted" && a.submittedAt && typeof a.score === "number" && examOf(a.examId)?.subject === topSubject);
+    const inSubject = db.data!.attempts.filter((a) => a.status === "submitted" && a.tenantId === student.tenantId && a.submittedAt && typeof a.score === "number" && examOf(a.examId)?.subject === topSubject);
     const months: string[] = [];
     const cursor = new Date(); cursor.setDate(1);
     for (let i = 5; i >= 0; i--) { const d = new Date(cursor.getFullYear(), cursor.getMonth() - i, 1); months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); }
@@ -3240,13 +3713,13 @@ app.get("/api/admin/students/:id/report", requirePermission("students.report_vie
     exams, certificates, attendance, registrations, subjectTrend,
     trend: buildStudentTrend(student.id),
     generatedAt: now(),
-    org: getSettings().name || "Oriole",
+    org: (student.tenantId ? getOrgSettings(student.tenantId).name : null) || "Oriole",
   });
 });
 
 // Set a student's accommodation (extra minutes added to every exam deadline).
 app.patch("/api/admin/candidates/:id/accommodations", requirePermission("students.manage"), async (req, res) => {
-  const u = db.data!.users.find((x) => x.id === req.params.id && x.role === "candidate");
+  const u = db.data!.users.find((x) => x.id === req.params.id && x.tenantId === currentTenantId(req) && x.role === "candidate");
   if (!u) return res.status(404).json({ error: "Student not found." });
   const m = Number(req.body?.extraMinutes);
   u.accommodationsExtraMinutes = Number.isFinite(m) && m > 0 ? Math.min(600, Math.floor(m)) : 0;
@@ -3258,7 +3731,7 @@ app.patch("/api/admin/candidates/:id/accommodations", requirePermission("student
 // AI natural-language narrative of a student's cross-subject trend.
 app.post("/api/admin/students/:id/trend-narrative", requirePermission("students.manage"), async (req, res) => {
   if (!aiEnabled()) return res.status(503).json({ error: "AI is not configured. Set ANTHROPIC_API_KEY or AI_BASE_URL+AI_API_KEY on the server." });
-  const student = db.data!.users.find((u) => u.id === req.params.id && u.role === "candidate");
+  const student = db.data!.users.find((u) => u.id === req.params.id && u.tenantId === currentTenantId(req) && u.role === "candidate");
   if (!student) return res.status(404).json({ error: "Student not found." });
   const trend = buildStudentTrend(student.id);
   if (!trend.subjects.length) return res.status(400).json({ error: "No completed exams to summarise yet." });
@@ -3278,7 +3751,7 @@ app.post("/api/admin/students/:id/trend-narrative", requirePermission("students.
 });
 
 app.get("/api/admin/attempts/:id", requirePermission("monitor.view"), async (req, res) => {
-  const attempt = db.data!.attempts.find((a) => a.id === req.params.id);
+  const attempt = db.data!.attempts.find((a) => a.id === req.params.id && a.tenantId === currentTenantId(req));
   if (!attempt) return res.status(404).json({ error: "Attempt not found." });
   const exam = db.data!.exams.find((e) => e.id === attempt.examId)!;
   const candidate = db.data!.users.find((u) => u.id === attempt.candidateId);
@@ -3349,8 +3822,8 @@ app.get("/api/admin/attempts/:id", requirePermission("monitor.view"), async (req
 // Review queue: submitted attempts that still have short answers awaiting a human grade.
 // Batch 6 of the permission migration (see test/permissions.test.ts):
 // grading.view/grading.grade already matched GRADERS exactly.
-app.get("/api/admin/grading/queue", requirePermission("grading.view"), async (_req, res) => {
-  const pendingAttempts = db.data!.attempts.filter((a) => a.gradingStatus === "pending_review");
+app.get("/api/admin/grading/queue", requirePermission("grading.view"), async (req, res) => {
+  const pendingAttempts = db.data!.attempts.filter((a) => a.gradingStatus === "pending_review" && a.tenantId === currentTenantId(req));
   const ansMap = await answerStore.forAttempts(pendingAttempts.map((a) => a.id));
   const queue = pendingAttempts
     .map((a) => {
@@ -3377,6 +3850,8 @@ app.get("/api/admin/grading/queue", requirePermission("grading.view"), async (_r
 app.patch("/api/admin/answers/:id/grade", requirePermission("grading.grade"), async (req, res) => {
   const ans = await answerStore.byId(String(req.params.id));
   if (!ans) return res.status(404).json({ error: "Answer not found." });
+  const ownerAttempt = db.data!.attempts.find((a) => a.id === ans.attemptId && a.tenantId === currentTenantId(req));
+  if (!ownerAttempt) return res.status(404).json({ error: "Answer not found." });
   const question = db.data!.questions.find((q) => q.id === ans.questionId);
   if (!question) return res.status(400).json({ error: "Question not found." });
 
@@ -3399,7 +3874,7 @@ app.patch("/api/admin/answers/:id/grade", requirePermission("grading.grade"), as
   ans.gradedBy = "manual";
   if (typeof req.body?.feedback === "string") ans.feedback = req.body.feedback.slice(0, 1000) || null;
 
-  const attempt = db.data!.attempts.find((a) => a.id === ans.attemptId)!;
+  const attempt = ownerAttempt;
   // Recompute from the attempt's full answer set, with the just-graded answer applied.
   const answers = await answerStore.forAttempt(attempt.id);
   const idx = answers.findIndex((a) => a.id === ans.id);
@@ -3413,7 +3888,7 @@ app.patch("/api/admin/answers/:id/grade", requirePermission("grading.grade"), as
 
 // Publish a graded result: finalize score, issue certificate on pass, mark released.
 app.post("/api/admin/attempts/:id/release", requirePermission("results.release"), async (req, res) => {
-  const attempt = db.data!.attempts.find((a) => a.id === req.params.id);
+  const attempt = db.data!.attempts.find((a) => a.id === req.params.id && a.tenantId === currentTenantId(req));
   if (!attempt) return res.status(404).json({ error: "Attempt not found." });
   const answers = await answerStore.forAttempt(attempt.id);
   const remaining = answers.filter((a) => a.needsReview).length;
@@ -3428,13 +3903,13 @@ app.post("/api/admin/attempts/:id/release", requirePermission("results.release")
   if (certificate) await db.upsert("certificates", certificate);
   await recordAudit(req, "result.released", `${db.data!.users.find((u) => u.id === attempt.candidateId)?.name ?? "Candidate"} · ${attempt.score}%`);
   void notifyResultReleased(attempt);
-  dispatchWebhook("result.released", { attemptId: attempt.id, examId: attempt.examId, candidateId: attempt.candidateId, score: attempt.score, passed: attempt.passed });
+  dispatchWebhook(attempt.tenantId ?? null, "result.released", { attemptId: attempt.id, examId: attempt.examId, candidateId: attempt.candidateId, score: attempt.score, passed: attempt.passed });
   res.json({ attempt, certificate });
 });
 
 // Bulk release: publish every fully-graded pending-review attempt for an exam at once.
 app.post("/api/admin/exams/:id/release-all", requirePermission("results.release"), async (req, res) => {
-  const exam = db.data!.exams.find((e) => e.id === req.params.id);
+  const exam = db.data!.exams.find((e) => e.id === req.params.id && e.tenantId === currentTenantId(req));
   if (!exam) return res.status(404).json({ error: "Exam not found." });
   const pending = db.data!.attempts.filter((a) => a.examId === exam.id && a.gradingStatus === "pending_review");
   let released = 0, skipped = 0;
@@ -3456,7 +3931,7 @@ app.post("/api/admin/exams/:id/release-all", requirePermission("results.release"
 
 // Re-apply the current grade scale to every submitted attempt for an exam.
 app.post("/api/admin/exams/:id/recompute-results", requirePermission("results.manage"), async (req, res) => {
-  const exam = db.data!.exams.find((e) => e.id === req.params.id);
+  const exam = db.data!.exams.find((e) => e.id === req.params.id && e.tenantId === currentTenantId(req));
   if (!exam) return res.status(404).json({ error: "Exam not found." });
   const submitted = db.data!.attempts.filter((a) => a.examId === exam.id && a.status === "submitted");
   for (const attempt of submitted) {
@@ -3470,7 +3945,7 @@ app.post("/api/admin/exams/:id/recompute-results", requirePermission("results.ma
 
 // Record an independent second-marker score for reconciliation (double-blind grading).
 app.post("/api/admin/attempts/:id/second-mark", requirePermission("grading.grade"), async (req, res) => {
-  const attempt = db.data!.attempts.find((a) => a.id === req.params.id);
+  const attempt = db.data!.attempts.find((a) => a.id === req.params.id && a.tenantId === currentTenantId(req));
   if (!attempt) return res.status(404).json({ error: "Attempt not found." });
   const user = currentUser(req)!;
   const raw = Number(req.body?.score);
@@ -3483,8 +3958,10 @@ app.post("/api/admin/attempts/:id/second-mark", requirePermission("grading.grade
 });
 
 // ---- admin: regrade / appeals queue ----
-app.get("/api/admin/regrades", requirePermission("grading.regrade"), (_req, res) => {
+app.get("/api/admin/regrades", requirePermission("grading.regrade"), (req, res) => {
+  const tenantId = currentTenantId(req);
   const rows = db.data!.regradeRequests
+    .filter((r) => r.tenantId === tenantId)
     .map((r) => {
       const exam = db.data!.exams.find((e) => e.id === r.examId);
       const cand = db.data!.users.find((u) => u.id === r.candidateId);
@@ -3496,7 +3973,7 @@ app.get("/api/admin/regrades", requirePermission("grading.regrade"), (_req, res)
 });
 
 app.post("/api/admin/regrades/:id/resolve", requirePermission("grading.regrade"), async (req, res) => {
-  const r = db.data!.regradeRequests.find((x) => x.id === req.params.id);
+  const r = db.data!.regradeRequests.find((x) => x.id === req.params.id && x.tenantId === currentTenantId(req));
   if (!r) return res.status(404).json({ error: "Request not found." });
   const user = currentUser(req)!;
   r.status = req.body?.status === "rejected" ? "rejected" : "resolved";
@@ -3525,9 +4002,9 @@ app.post("/api/admin/regrades/:id/resolve", requirePermission("grading.regrade")
 });
 
 // ---- admin: live monitor ----
-app.get("/api/admin/live", requirePermission("monitor.view"), async (_req, res) => {
+app.get("/api/admin/live", requirePermission("monitor.view"), async (req, res) => {
   const userName = (id: string) => db.data!.users.find((u) => u.id === id)?.name ?? "Candidate";
-  const inProgress = db.data!.attempts.filter((a) => a.status === "in_progress");
+  const inProgress = db.data!.attempts.filter((a) => a.status === "in_progress" && a.tenantId === currentTenantId(req));
   const evMap = await proctorStore.forAttempts(inProgress.map((a) => a.id));
   const ansMap = await answerStore.forAttempts(inProgress.map((a) => a.id));
   const geoMap = await geofenceStore.forAttempts(inProgress.map((a) => a.id));
@@ -3572,7 +4049,7 @@ app.get("/api/admin/live", requirePermission("monitor.view"), async (_req, res) 
 
 // Live detail for the intervene drawer: full event timeline + snapshot strip + state.
 app.get("/api/admin/attempts/:id/live", requirePermission("monitor.view"), async (req, res) => {
-  const a = db.data!.attempts.find((x) => x.id === req.params.id);
+  const a = db.data!.attempts.find((x) => x.id === req.params.id && x.tenantId === currentTenantId(req));
   if (!a) return res.status(404).json({ error: "Attempt not found." });
   const exam = db.data!.exams.find((e) => e.id === a.examId);
   const candidate = db.data!.users.find((u) => u.id === a.candidateId);
@@ -3618,7 +4095,7 @@ app.get("/api/admin/attempts/:id/live", requirePermission("monitor.view"), async
 // the candidate continue without needing to physically return first. Does not touch a
 // manual proctor pause, and cannot undo an auto-submit/terminate (the exam has already ended).
 app.post("/api/admin/attempts/:id/geofence-override", requirePermission("monitor.control"), async (req, res) => {
-  const a = db.data!.attempts.find((x) => x.id === req.params.id);
+  const a = db.data!.attempts.find((x) => x.id === req.params.id && x.tenantId === currentTenantId(req));
   if (!a) return res.status(404).json({ error: "Attempt not found." });
   if (a.status !== "in_progress") return res.status(409).json({ error: "Attempt is not in progress." });
   a.geofenceOutsideSince = null;
@@ -3634,7 +4111,7 @@ app.post("/api/admin/attempts/:id/geofence-override", requirePermission("monitor
 
 // Proctor → candidate message.
 app.post("/api/admin/attempts/:id/message", requirePermission("monitor.control"), async (req, res) => {
-  const a = db.data!.attempts.find((x) => x.id === req.params.id);
+  const a = db.data!.attempts.find((x) => x.id === req.params.id && x.tenantId === currentTenantId(req));
   if (!a) return res.status(404).json({ error: "Attempt not found." });
   const text = String(req.body?.text ?? "").trim().slice(0, 500);
   if (!text) return res.status(400).json({ error: "Message text is required." });
@@ -3646,7 +4123,7 @@ app.post("/api/admin/attempts/:id/message", requirePermission("monitor.control")
 
 // Pause / resume an attempt (freezes the candidate's timer).
 app.post("/api/admin/attempts/:id/pause", requirePermission("monitor.control"), async (req, res) => {
-  const a = db.data!.attempts.find((x) => x.id === req.params.id);
+  const a = db.data!.attempts.find((x) => x.id === req.params.id && x.tenantId === currentTenantId(req));
   if (!a) return res.status(404).json({ error: "Attempt not found." });
   if (a.status !== "in_progress") return res.status(409).json({ error: "Attempt is not in progress." });
   const pause = req.body?.paused !== false;
@@ -3662,7 +4139,7 @@ app.post("/api/admin/attempts/:id/pause", requirePermission("monitor.control"), 
 
 // Terminate (force-submit) an attempt.
 app.post("/api/admin/attempts/:id/terminate", requirePermission("monitor.control"), async (req, res) => {
-  const a = db.data!.attempts.find((x) => x.id === req.params.id);
+  const a = db.data!.attempts.find((x) => x.id === req.params.id && x.tenantId === currentTenantId(req));
   if (!a) return res.status(404).json({ error: "Attempt not found." });
   if (a.status === "submitted") return res.json({ ok: true, alreadySubmitted: true });
   const reason = String(req.body?.reason ?? "").trim().slice(0, 300) || "Terminated by proctor";
@@ -3672,8 +4149,9 @@ app.post("/api/admin/attempts/:id/terminate", requirePermission("monitor.control
 });
 
 // ---- admin: analytics ----
-app.get("/api/admin/analytics", requirePermission("results.view"), async (_req, res) => {
-  const submitted = db.data!.attempts.filter((a) => a.status === "submitted");
+app.get("/api/admin/analytics", requirePermission("results.view"), async (req, res) => {
+  const tenantId = currentTenantId(req);
+  const submitted = db.data!.attempts.filter((a) => a.status === "submitted" && a.tenantId === tenantId);
   const scores = submitted.map((a) => a.score ?? 0);
   const evMap = await proctorStore.forAttempts(submitted.map((a) => a.id));
   const integrityVals = submitted.map((a) => scoreOf(cleanEvents(evMap.get(a.id) ?? [], a.submittedAt)));
@@ -3692,10 +4170,11 @@ app.get("/api/admin/analytics", requirePermission("results.view"), async (_req, 
     { label: "Clean (100)", count: integrityVals.filter((v) => v === 100).length },
   ];
   const flagsByType: Record<string, number> = {};
-  for (const e of await proctorStore.allFlagged()) {
-    flagsByType[e.type] = (flagsByType[e.type] ?? 0) + 1;
+  for (const evs of evMap.values()) {
+    for (const e of evs) if (e.severity !== "info") flagsByType[e.type] = (flagsByType[e.type] ?? 0) + 1;
   }
-  const perExam = db.data!.exams
+  const tenantExamsList = db.data!.exams.filter((e) => e.tenantId === tenantId);
+  const perExam = tenantExamsList
     .map((exam) => {
       const ax = submitted.filter((a) => a.examId === exam.id);
       return { title: exam.title, attempts: ax.length, avgScore: avg(ax.map((a) => a.score ?? 0)), passRate: ax.length ? Math.round((ax.filter((a) => a.passed).length / ax.length) * 100) : 0 };
@@ -3704,11 +4183,11 @@ app.get("/api/admin/analytics", requirePermission("results.view"), async (_req, 
 
   res.json({
     totals: {
-      exams: db.data!.exams.length,
-      published: db.data!.exams.filter((e) => e.status === "published").length,
-      candidates: db.data!.users.filter((u) => u.role === "candidate").length,
+      exams: tenantExamsList.length,
+      published: tenantExamsList.filter((e) => e.status === "published").length,
+      candidates: db.data!.users.filter((u) => u.role === "candidate" && u.tenantId === tenantId).length,
       submitted: submitted.length,
-      certificates: db.data!.certificates.length,
+      certificates: db.data!.certificates.filter((c) => c.tenantId === tenantId).length,
     },
     passRate: submitted.length ? Math.round((submitted.filter((a) => a.passed).length / submitted.length) * 100) : 0,
     avgScore: avg(scores),
@@ -3726,9 +4205,10 @@ app.get("/api/admin/analytics", requirePermission("results.view"), async (_req, 
 // "Bloom taxonomy" concept exists in this app's data model, so those mockup
 // sections were mapped onto the closest real equivalents instead — see
 // CHANGELOG.md for the mapping notes).
-app.get("/api/admin/analytics-overview", requirePermission("results.view"), async (_req, res) => {
+app.get("/api/admin/analytics-overview", requirePermission("results.view"), async (req, res) => {
+  const tenantId = currentTenantId(req);
   const d = db.data!;
-  const submitted = d.attempts.filter((a) => a.status === "submitted" && !examById(a.examId)?.practice);
+  const submitted = d.attempts.filter((a) => a.status === "submitted" && a.tenantId === tenantId && !examById(a.examId)?.practice);
   const avg = (xs: number[]) => (xs.length ? Math.round(xs.reduce((p, c) => p + c, 0) / xs.length) : 0);
   const nameOf = (id: string) => d.users.find((u) => u.id === id)?.name ?? "Candidate";
   const scores = submitted.map((a) => a.score ?? 0);
@@ -3758,10 +4238,10 @@ app.get("/api/admin/analytics-overview", requirePermission("results.view"), asyn
   const passRate = passRateOf(submitted);
   const passRateLast = lastMonth.length ? passRateOf(lastMonth) : null;
 
-  const confirmedRegs = d.registrations.filter((r) => r.approval === "confirmed");
+  const confirmedRegs = d.registrations.filter((r) => r.approval === "confirmed" && r.tenantId === tenantId);
   const completionRate = confirmedRegs.length ? Math.round((confirmedRegs.filter((r) => r.status === "submitted").length / confirmedRegs.length) * 100) : 0;
 
-  const liveAttempts = d.attempts.filter((a) => a.status === "in_progress");
+  const liveAttempts = d.attempts.filter((a) => a.status === "in_progress" && a.tenantId === tenantId);
   const recentForIntegrity = [...submitted].sort((a, b) => (b.submittedAt ?? "").localeCompare(a.submittedAt ?? "")).slice(0, 300);
   const integrityEvMap = await proctorStore.forAttempts([...recentForIntegrity.map((a) => a.id), ...liveAttempts.map((a) => a.id)]);
   const cheatingDetected = [...integrityEvMap.values()].filter((evs) => evs.some((e) => e.severity !== "info")).length;
@@ -3867,8 +4347,10 @@ app.get("/api/admin/analytics-overview", requirePermission("results.view"), asyn
 });
 
 // ---- admin: certificates ----
-app.get("/api/admin/certificates", requirePermission("results.view"), (_req, res) => {
+app.get("/api/admin/certificates", requirePermission("results.view"), (req, res) => {
+  const tenantId = currentTenantId(req);
   const certificates = db.data!.certificates
+    .filter((c) => c.tenantId === tenantId)
     .map((c) => ({
       certNumber: c.certNumber,
       score: c.score,
@@ -3881,10 +4363,11 @@ app.get("/api/admin/certificates", requirePermission("results.view"), (_req, res
 });
 
 // ---- admin: registrations (one row per candidate↔exam enrolment) ----
-app.get("/api/admin/registrations", requirePermission("students.manage"), (_req, res) => {
-  const candidateIds = new Set(db.data!.users.filter((u) => u.role === "candidate").map((u) => u.id));
+app.get("/api/admin/registrations", requirePermission("students.manage"), (req, res) => {
+  const tenantId = currentTenantId(req);
+  const candidateIds = new Set(db.data!.users.filter((u) => u.role === "candidate" && u.tenantId === tenantId).map((u) => u.id));
   const rows = db.data!.registrations
-    .filter((r) => candidateIds.has(r.candidateId))
+    .filter((r) => r.tenantId === tenantId && candidateIds.has(r.candidateId))
     .map((r) => {
     const exam = db.data!.exams.find((e) => e.id === r.examId);
     const cand = db.data!.users.find((u) => u.id === r.candidateId);
@@ -3920,7 +4403,7 @@ app.get("/api/admin/registrations", requirePermission("students.manage"), (_req,
 });
 
 app.patch("/api/admin/registrations/:id/status", requirePermission("students.manage"), async (req, res) => {
-  const reg = db.data!.registrations.find((r) => r.id === req.params.id);
+  const reg = db.data!.registrations.find((r) => r.id === req.params.id && r.tenantId === currentTenantId(req));
   if (!reg) return res.status(404).json({ error: "Registration not found." });
   const approval = req.body?.approval;
   let justConfirmed = false;
@@ -3941,9 +4424,10 @@ app.patch("/api/admin/registrations/:id/status", requirePermission("students.man
 });
 
 // ---- admin: candidate directory ----
-app.get("/api/admin/candidate-stats", requirePermission("students.manage"), (_req, res) => {
+app.get("/api/admin/candidate-stats", requirePermission("students.manage"), (req, res) => {
+  const tenantId = currentTenantId(req);
   const candidates = db.data!.users
-    .filter((u) => u.role === "candidate")
+    .filter((u) => u.role === "candidate" && u.tenantId === tenantId)
     .map((u) => {
       const myAttempts = db.data!.attempts.filter((a) => a.candidateId === u.id && a.status === "submitted");
       const scores = myAttempts.map((a) => a.score ?? 0);
@@ -3964,10 +4448,11 @@ app.get("/api/admin/candidate-stats", requirePermission("students.manage"), (_re
 
 // ---- admin: Students (SIS) — student-centric records ----
 // One row per student, aggregating their whole record (vs. registrations = per-exam rows).
-app.get("/api/admin/students", requirePermission("students.manage"), async (_req, res) => {
-  const evMap = await proctorStore.forAttempts(db.data!.attempts.filter((a) => a.status === "submitted").map((a) => a.id));
+app.get("/api/admin/students", requirePermission("students.manage"), async (req, res) => {
+  const tenantId = currentTenantId(req);
+  const evMap = await proctorStore.forAttempts(db.data!.attempts.filter((a) => a.status === "submitted" && a.tenantId === tenantId).map((a) => a.id));
   const students = db.data!.users
-    .filter((u) => u.role === "candidate")
+    .filter((u) => u.role === "candidate" && u.tenantId === tenantId)
     .map((u) => {
       const regs = db.data!.registrations.filter((r) => r.candidateId === u.id);
       const attempts = db.data!.attempts.filter((a) => a.candidateId === u.id && a.status === "submitted");
@@ -3997,6 +4482,7 @@ app.get("/api/admin/students", requirePermission("students.manage"), async (_req
 
   const totalScores = students.flatMap((s) => (s.avgScore !== null ? [s.avgScore] : []));
   const classes = db.data!.classes
+    .filter((c) => c.tenantId === tenantId)
     .sort((a, b) => a.name.localeCompare(b.name))
     .map((c) => ({ id: c.id, name: c.name, code: c.code ?? "", memberIds: c.memberIds }));
   res.json({
@@ -4012,7 +4498,7 @@ app.get("/api/admin/students", requirePermission("students.manage"), async (_req
 });
 
 app.patch("/api/admin/students/:id", requirePermission("students.manage"), async (req, res) => {
-  const u = db.data!.users.find((x) => x.id === req.params.id && x.role === "candidate");
+  const u = db.data!.users.find((x) => x.id === req.params.id && x.tenantId === currentTenantId(req) && x.role === "candidate");
   if (!u) return res.status(404).json({ error: "Student not found." });
   const b = req.body ?? {};
   if (typeof b.name === "string" && b.name.trim()) u.name = b.name.trim();
@@ -4031,7 +4517,7 @@ app.patch("/api/admin/students/:id", requirePermission("students.manage"), async
 });
 
 app.get("/api/admin/students/:id", requirePermission("students.manage"), async (req, res) => {
-  const u = db.data!.users.find((x) => x.id === req.params.id && x.role === "candidate");
+  const u = db.data!.users.find((x) => x.id === req.params.id && x.tenantId === currentTenantId(req) && x.role === "candidate");
   if (!u) return res.status(404).json({ error: "Student not found." });
   const examOf = (id: string) => db.data!.exams.find((e) => e.id === id);
   const evMap = await proctorStore.forAttempts(db.data!.attempts.filter((a) => a.candidateId === u.id && a.status === "submitted").map((a) => a.id));
@@ -4117,9 +4603,11 @@ function attendanceFor(reg: Registration, exam: Exam | undefined): AttendanceSta
   return "expected";
 }
 
-app.get("/api/admin/attendance", requirePermission("students.manage"), (_req, res) => {
-  const candidateIds = new Set(db.data!.users.filter((u) => u.role === "candidate").map((u) => u.id));
+app.get("/api/admin/attendance", requirePermission("students.manage"), (req, res) => {
+  const tenantId = currentTenantId(req);
+  const candidateIds = new Set(db.data!.users.filter((u) => u.role === "candidate" && u.tenantId === tenantId).map((u) => u.id));
   const sessions = db.data!.exams
+    .filter((exam) => exam.tenantId === tenantId)
     .map((exam) => {
       const regs = db.data!.registrations.filter((r) => r.examId === exam.id && candidateIds.has(r.candidateId));
       const statuses = regs.map((r) => attendanceFor(r, exam));
@@ -4144,7 +4632,7 @@ app.get("/api/admin/attendance", requirePermission("students.manage"), (_req, re
 });
 
 app.get("/api/admin/attendance/:examId", requirePermission("students.manage"), (req, res) => {
-  const exam = db.data!.exams.find((e) => e.id === req.params.examId);
+  const exam = db.data!.exams.find((e) => e.id === req.params.examId && e.tenantId === currentTenantId(req));
   if (!exam) return res.status(404).json({ error: "Exam not found." });
   const roster = db.data!.registrations
     .filter((r) => r.examId === exam.id)
@@ -4196,7 +4684,8 @@ app.post("/api/admin/communication/send", requirePermission("communication.send"
   const { audience, examId, candidateIds, subject, body } = req.body ?? {};
   if (!subject || !body) return res.status(400).json({ error: "Subject and body are required." });
 
-  const candidates = db.data!.users.filter((u) => u.role === "candidate");
+  const tenantId = currentTenantId(req);
+  const candidates = db.data!.users.filter((u) => u.tenantId === tenantId && u.role === "candidate");
   let recipients: typeof candidates = [];
   if (audience === "exam" && examId) {
     const ids = new Set(db.data!.registrations.filter((r) => r.examId === examId).map((r) => r.candidateId));
@@ -4214,7 +4703,7 @@ app.post("/api/admin/communication/send", requirePermission("communication.send"
   for (const u of recipients) {
     const subj = String(subject).replace(/\{\{name\}\}/g, u.name).replace(/\{\{email\}\}/g, u.email);
     const text = String(body).replace(/\{\{name\}\}/g, u.name).replace(/\{\{email\}\}/g, u.email);
-    const r = await sendMail(u.email, subj, text);
+    const r = await sendMail(u.email, subj, text, undefined, tenantId ?? undefined);
     if (r.delivery === "sent") delivered++;
     else if (r.delivery === "failed") failed++;
   }
@@ -4227,7 +4716,7 @@ app.get("/api/admin/communication/status", requirePermission("communication.view
 app.post("/api/admin/communication/test", requirePermission("communication.manage"), async (req, res) => {
   const to = String(req.body?.to ?? "").trim();
   if (!to) return res.status(400).json({ error: "Provide an email address to test." });
-  const r = await sendMail(to, "Oriole email test", "This is a test email from Oriole — your SMTP configuration is working.");
+  const r = await sendMail(to, "Oriole email test", "This is a test email from Oriole — your SMTP configuration is working.", undefined, currentTenantId(req) ?? undefined);
   await recordAudit(req, "email.test", to);
   res.json({ ...r, status: mailerStatus() });
 });
@@ -4245,16 +4734,17 @@ app.post("/api/admin/sms/test", requirePermission("communication.manage"), async
 });
 
 // ---- admin: Announcements ----
-function audienceUsers(audience: string) {
-  const users = db.data!.users;
+function audienceUsers(audience: string, tenantId: string | null) {
+  const users = db.data!.users.filter((u) => u.tenantId === tenantId);
   if (audience === "students") return users.filter((u) => u.role === "candidate");
   if (audience === "admins") return users.filter((u) => u.role === "admin");
   if (audience === "instructors") return []; // no instructor role yet
   return users; // everyone
 }
 
-app.get("/api/admin/announcements", requirePermission("communication.view_log"), (_req, res) => {
-  const announcements = [...db.data!.announcements].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+app.get("/api/admin/announcements", requirePermission("communication.view_log"), (req, res) => {
+  const tenantId = currentTenantId(req);
+  const announcements = db.data!.announcements.filter((a) => a.tenantId === tenantId).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   res.json({
     announcements,
     kpis: {
@@ -4268,6 +4758,7 @@ app.get("/api/admin/announcements", requirePermission("communication.view_log"),
 
 app.post("/api/admin/announcements", requirePermission("communication.send"), async (req, res) => {
   const user = currentUser(req)!;
+  const tenantId = currentTenantId(req);
   const { title, message, audience, priority, channels, scheduledFor, draft, pinned, department } = req.body ?? {};
   if (!title?.trim() || !message?.trim()) return res.status(400).json({ error: "Title and message are required." });
 
@@ -4283,15 +4774,16 @@ app.post("/api/admin/announcements", requirePermission("communication.send"), as
   // The email channel delivers immediately on send via the configured mailer.
   let emailedCount = 0;
   if (status === "sent" && chans.includes("email")) {
-    for (const u of audienceUsers(aud)) {
+    for (const u of audienceUsers(aud, tenantId)) {
       if (!u.email) continue;
-      await sendMail(u.email, `[Announcement] ${title}`, message);
+      await sendMail(u.email, `[Announcement] ${title}`, message, undefined, tenantId ?? undefined);
       emailedCount++;
     }
   }
 
   const ann = {
     id: nanoid(12),
+    tenantId: tenantId ?? undefined,
     title: String(title).trim(),
     message: String(message).trim(),
     audience: aud as "everyone" | "students" | "instructors" | "admins",
@@ -4313,8 +4805,11 @@ app.post("/api/admin/announcements", requirePermission("communication.send"), as
 });
 
 app.delete("/api/admin/announcements/:id", requirePermission("communication.manage"), async (req, res) => {
-  db.data!.announcements = db.data!.announcements.filter((a) => a.id !== req.params.id);
-  await db.remove("announcements", String(req.params.id));
+  const tenantId = currentTenantId(req);
+  const ann = db.data!.announcements.find((a) => a.id === req.params.id && a.tenantId === tenantId);
+  if (!ann) return res.status(404).json({ error: "Not found." });
+  db.data!.announcements = db.data!.announcements.filter((a) => a.id !== ann.id);
+  await db.remove("announcements", ann.id);
   res.json({ ok: true });
 });
 
@@ -4456,7 +4951,7 @@ app.get("/api/my/summary", requireAuth, async (req, res) => {
 app.get("/api/my/score-trend", requireAuth, (req, res) => {
   const user = currentUser(req)!;
   const monthKey = (iso: string) => iso.slice(0, 7); // "YYYY-MM"
-  const submitted = db.data!.attempts.filter((a) => a.status === "submitted" && a.submittedAt && typeof a.score === "number" && !examById(a.examId)?.practice);
+  const submitted = db.data!.attempts.filter((a) => a.status === "submitted" && a.tenantId === user.tenantId && a.submittedAt && typeof a.score === "number" && !examById(a.examId)?.practice);
 
   const months: string[] = [];
   const cursor = new Date();
@@ -4479,12 +4974,12 @@ app.get("/api/my/score-trend", requireAuth, (req, res) => {
 
 app.get("/api/practice", requireAuth, async (req, res) => {
   const user = currentUser(req)!;
-  const practiceExams = db.data!.exams.filter((e) => e.status === "published" && e.practice);
+  const practiceExams = db.data!.exams.filter((e) => e.status === "published" && e.practice && e.tenantId === user.tenantId);
   const items: Array<{ exam: { id: string; title: string; code: string; description: string; durationMinutes: number; questionCount: number }; registrationId: string; lastScore: number | null }> = [];
   for (const exam of practiceExams) {
     let reg = db.data!.registrations.find((r) => r.candidateId === user.id && r.examId === exam.id);
     if (!reg) {
-      reg = { id: nanoid(10), examId: exam.id, candidateId: user.id, status: "registered", approval: "confirmed", scheduledStart: null, systemCheckPassed: true, createdAt: now() };
+      reg = { id: nanoid(10), tenantId: user.tenantId, examId: exam.id, candidateId: user.id, status: "registered", approval: "confirmed", scheduledStart: null, systemCheckPassed: true, createdAt: now() };
       db.data!.registrations.push(reg);
       await db.upsert("registrations", reg);
     }
@@ -4504,7 +4999,7 @@ app.get("/api/announcements", requireAuth, (req, res) => {
   const auds = audiencesFor(u.role);
   const myReads = new Set(db.data!.announcementReads.filter((r) => r.candidateId === u.id).map((r) => r.announcementId));
   const announcements = db.data!.announcements
-    .filter((a) => a.status === "sent" && a.channels.includes("in_app") && auds.includes(a.audience))
+    .filter((a) => a.tenantId === u.tenantId && a.status === "sent" && a.channels.includes("in_app") && auds.includes(a.audience))
     .sort((a, b) => (b.sentAt ?? b.createdAt).localeCompare(a.sentAt ?? a.createdAt))
     .map((a) => ({
       id: a.id, title: a.title, message: a.message, priority: a.priority, sentAt: a.sentAt ?? a.createdAt,
@@ -4519,10 +5014,10 @@ app.post("/api/announcements/:id/read", requireAuth, async (req, res) => {
   const u = currentUser(req)!;
   const id = String(req.params.id);
   const auds = audiencesFor(u.role);
-  const ann = db.data!.announcements.find((a) => a.id === id);
+  const ann = db.data!.announcements.find((a) => a.id === id && a.tenantId === u.tenantId);
   if (!ann || !auds.includes(ann.audience)) return res.status(404).json({ error: "Announcement not found." });
   if (!db.data!.announcementReads.some((r) => r.announcementId === id && r.candidateId === u.id)) {
-    const read: AnnouncementRead = { id: nanoid(10), announcementId: id, candidateId: u.id, readAt: now() };
+    const read: AnnouncementRead = { id: nanoid(10), tenantId: u.tenantId, announcementId: id, candidateId: u.id, readAt: now() };
     db.data!.announcementReads.push(read);
     await db.upsert("announcementReads", read);
   }
@@ -4532,11 +5027,11 @@ app.post("/api/announcements/:id/read", requireAuth, async (req, res) => {
 app.post("/api/announcements/read-all", requireAuth, async (req, res) => {
   const u = currentUser(req)!;
   const auds = audiencesFor(u.role);
-  const visible = db.data!.announcements.filter((a) => a.status === "sent" && a.channels.includes("in_app") && auds.includes(a.audience));
+  const visible = db.data!.announcements.filter((a) => a.tenantId === u.tenantId && a.status === "sent" && a.channels.includes("in_app") && auds.includes(a.audience));
   const already = new Set(db.data!.announcementReads.filter((r) => r.candidateId === u.id).map((r) => r.announcementId));
   for (const a of visible) {
     if (already.has(a.id)) continue;
-    const read: AnnouncementRead = { id: nanoid(10), announcementId: a.id, candidateId: u.id, readAt: now() };
+    const read: AnnouncementRead = { id: nanoid(10), tenantId: u.tenantId, announcementId: a.id, candidateId: u.id, readAt: now() };
     db.data!.announcementReads.push(read);
     await db.upsert("announcementReads", read);
   }
@@ -4572,26 +5067,26 @@ app.get("/api/notifications", requireAuth, (req, res) => {
         items.push({ id: `rem-${r.id}`, type: "reminder", title: `${exam?.title ?? "Exam"} starts soon`, body: `Scheduled for ${new Date(iso).toLocaleString()}.`, at: new Date(now).toISOString(), link: `/exams/${r.id}/checkin` });
       }
     }
-    for (const a of db.data!.announcements.filter((x) => x.status === "sent" && x.channels.includes("in_app") && ["everyone", "students"].includes(x.audience))) {
+    for (const a of db.data!.announcements.filter((x) => x.tenantId === u.tenantId && x.status === "sent" && x.channels.includes("in_app") && ["everyone", "students"].includes(x.audience))) {
       items.push({ id: `ann-${a.id}`, type: "announcement", title: a.title, body: a.message, at: a.sentAt ?? a.createdAt, link: "/announcements" });
     }
     // New/updated library resources the student can see, published in the last 14 days.
     const recentCutoff = now - 14 * 24 * 3600_000;
-    for (const b of db.data!.books.filter((x) => x.status === "published" && studentCanSeeBook(x, u))) {
+    for (const b of db.data!.books.filter((x) => x.tenantId === u.tenantId && x.status === "published" && studentCanSeeBook(x, u))) {
       const at = b.updatedAt ?? b.createdAt;
       if (new Date(at).getTime() > recentCutoff) {
         items.push({ id: `book-${b.id}-${at}`, type: "resource", title: `New library resource: ${b.title}`, body: `${b.resourceType} added to the library.`, at, link: "/library" });
       }
     }
   } else {
-    const pending = db.data!.attempts.filter((a) => a.gradingStatus === "pending_review").length;
+    const pending = db.data!.attempts.filter((a) => a.gradingStatus === "pending_review" && a.tenantId === u.tenantId).length;
     if (pending > 0) items.push({ id: "grading", type: "grading", title: `${pending} answer${pending === 1 ? "" : "s"} awaiting grading`, body: "Review and release results.", at: new Date(now).toISOString(), link: "/admin/grading" });
     const dayAgo = now - 24 * 3600_000;
-    const recent = db.data!.attempts.filter((a) => a.status === "submitted" && a.submittedAt && new Date(a.submittedAt).getTime() > dayAgo).slice(-20);
+    const recent = db.data!.attempts.filter((a) => a.status === "submitted" && a.tenantId === u.tenantId && a.submittedAt && new Date(a.submittedAt).getTime() > dayAgo).slice(-20);
     for (const a of recent) {
       items.push({ id: `sub-${a.id}`, type: "submission", title: `New submission · ${examName(a.examId)}`, body: `${db.data!.users.find((x) => x.id === a.candidateId)?.name ?? "A candidate"} submitted.`, at: a.submittedAt ?? "", link: `/admin/attempts/${a.id}` });
     }
-    for (const a of db.data!.announcements.filter((x) => x.status === "sent" && x.channels.includes("in_app") && ["everyone", "admins"].includes(x.audience))) {
+    for (const a of db.data!.announcements.filter((x) => x.tenantId === u.tenantId && x.status === "sent" && x.channels.includes("in_app") && ["everyone", "admins"].includes(x.audience))) {
       items.push({ id: `ann-${a.id}`, type: "announcement", title: a.title, body: a.message, at: a.sentAt ?? a.createdAt, link: "/admin/communication" });
     }
   }
@@ -4601,12 +5096,13 @@ app.get("/api/notifications", requireAuth, (req, res) => {
 });
 
 // ---- admin: Integrity — cross-exam proctoring overview ----
-app.get("/api/admin/integrity", requirePermission("results.view"), async (_req, res) => {
-  const submitted = db.data!.attempts.filter((a) => a.status === "submitted");
+app.get("/api/admin/integrity", requirePermission("results.view"), async (req, res) => {
+  const tenantId = currentTenantId(req);
+  const submitted = db.data!.attempts.filter((a) => a.status === "submitted" && a.tenantId === tenantId);
   const userName = (id: string) => db.data!.users.find((u) => u.id === id)?.name ?? "Candidate";
   const examOf = (id: string) => db.data!.exams.find((e) => e.id === id);
   const evMap = await proctorStore.forAttempts(submitted.map((a) => a.id));
-  const flaggedAll = await proctorStore.allFlagged();
+  const flaggedAll = [...evMap.values()].flat().filter((e) => e.severity !== "info");
 
   const perAttempt = submitted.map((a) => {
     const events = evMap.get(a.id) ?? [];
@@ -4719,7 +5215,7 @@ function sendCsv(res: Response, filename: string, csv: string) {
 
 /** Build a report's CSV, optionally filtered to a [from, to] date range (YYYY-MM-DD,
  *  inclusive). Shared by the download endpoints and the scheduled-export sweep. */
-async function buildReportCsv(key: string, from?: string, to?: string): Promise<{ filename: string; csv: string } | null> {
+async function buildReportCsv(tenantId: string | null, key: string, from?: string, to?: string): Promise<{ filename: string; csv: string } | null> {
   const inRange = (iso: string | null | undefined) => {
     if (!from && !to) return true;
     if (!iso) return false;            // undated rows are excluded once a range is set
@@ -4731,7 +5227,7 @@ async function buildReportCsv(key: string, from?: string, to?: string): Promise<
   const examOf = (id: string) => db.data!.exams.find((e) => e.id === id);
 
   if (key === "results") {
-    const submitted = db.data!.attempts.filter((a) => a.status === "submitted" && inRange(a.submittedAt));
+    const submitted = db.data!.attempts.filter((a) => a.tenantId === tenantId && a.status === "submitted" && inRange(a.submittedAt));
     const evMap = await proctorStore.forAttempts(submitted.map((a) => a.id));
     const rows = submitted.sort((a, b) => (b.submittedAt ?? "").localeCompare(a.submittedAt ?? "")).map((a) => {
       const u = userOf(a.candidateId); const exam = examOf(a.examId);
@@ -4741,21 +5237,23 @@ async function buildReportCsv(key: string, from?: string, to?: string): Promise<
     return { filename: "results.csv", csv: toCsv(["Student", "Email", "Exam", "Code", "Score", "Result", "Integrity", "Grading", "Submitted"], rows) };
   }
   if (key === "certificates") {
-    const certs = db.data!.certificates.filter((c) => inRange(c.issuedAt)).sort((a, b) => b.issuedAt.localeCompare(a.issuedAt));
+    const certs = db.data!.certificates.filter((c) => c.tenantId === tenantId && inRange(c.issuedAt)).sort((a, b) => b.issuedAt.localeCompare(a.issuedAt));
     const rows = certs.map((c) => [c.certNumber, userOf(c.candidateId)?.name ?? "", examOf(c.examId)?.title ?? "", c.score, c.issuedAt]);
     return { filename: "certificates.csv", csv: toCsv(["Certificate", "Student", "Exam", "Score", "Issued"], rows) };
   }
   if (key === "students") {
-    const evMap = await proctorStore.forAttempts(db.data!.attempts.filter((a) => a.status === "submitted").map((a) => a.id));
-    const rows = db.data!.users.filter((u) => u.role === "candidate").map((u) => {
-      const attempts = db.data!.attempts.filter((a) => a.candidateId === u.id && a.status === "submitted" && inRange(a.submittedAt));
+    const students = db.data!.users.filter((u) => u.tenantId === tenantId && u.role === "candidate");
+    const studentIds = new Set(students.map((u) => u.id));
+    const evMap = await proctorStore.forAttempts(db.data!.attempts.filter((a) => a.tenantId === tenantId && a.status === "submitted" && studentIds.has(a.candidateId)).map((a) => a.id));
+    const rows = students.map((u) => {
+      const attempts = db.data!.attempts.filter((a) => a.tenantId === tenantId && a.candidateId === u.id && a.status === "submitted" && inRange(a.submittedAt));
       const scores = attempts.map((a) => a.score ?? 0);
       const integrities = attempts.map((a) => scoreOf(cleanEvents(evMap.get(a.id) ?? [], a.submittedAt)));
       const last = attempts.map((a) => a.submittedAt).filter(Boolean).sort().pop() ?? "";
-      return [u.name, u.email, db.data!.registrations.filter((r) => r.candidateId === u.id).length, attempts.length,
+      return [u.name, u.email, db.data!.registrations.filter((r) => r.tenantId === tenantId && r.candidateId === u.id).length, attempts.length,
         scores.length ? Math.round(scores.reduce((p, c) => p + c, 0) / scores.length) : "",
         integrities.length ? Math.round(integrities.reduce((p, c) => p + c, 0) / integrities.length) : "",
-        db.data!.certificates.filter((c) => c.candidateId === u.id).length, last];
+        db.data!.certificates.filter((c) => c.tenantId === tenantId && c.candidateId === u.id).length, last];
     });
     return { filename: "students.csv", csv: toCsv(["Student", "Email", "Enrolled", "Completed", "AvgScore", "AvgIntegrity", "Certificates", "LastActivity"], rows) };
   }
@@ -4764,28 +5262,27 @@ async function buildReportCsv(key: string, from?: string, to?: string): Promise<
 
 const REPORT_TITLES: Record<string, string> = { results: "Results report", students: "Student roster", certificates: "Certificate register" };
 
-app.get("/api/admin/reports", requirePermission("results.view"), (_req, res) => {
-  const submitted = db.data!.attempts.filter((a) => a.status === "submitted");
+app.get("/api/admin/reports", requirePermission("results.view"), (req, res) => {
+  const tenantId = currentTenantId(req);
+  const submitted = db.data!.attempts.filter((a) => a.tenantId === tenantId && a.status === "submitted");
+  const students = db.data!.users.filter((u) => u.tenantId === tenantId && u.role === "candidate").length;
+  const exams = db.data!.exams.filter((e) => e.tenantId === tenantId).length;
+  const certificates = db.data!.certificates.filter((c) => c.tenantId === tenantId).length;
   res.json({
-    summary: {
-      students: db.data!.users.filter((u) => u.role === "candidate").length,
-      exams: db.data!.exams.length,
-      attempts: submitted.length,
-      certificates: db.data!.certificates.length,
-    },
+    summary: { students, exams, attempts: submitted.length, certificates },
     reports: [
       { key: "results", title: "Results report", desc: "Every completed attempt with score, result, and integrity.", rows: submitted.length },
-      { key: "students", title: "Student roster", desc: "All students with enrolment and performance aggregates.", rows: db.data!.users.filter((u) => u.role === "candidate").length },
-      { key: "certificates", title: "Certificate register", desc: "All issued certificates for verification and records.", rows: db.data!.certificates.length },
+      { key: "students", title: "Student roster", desc: "All students with enrolment and performance aggregates.", rows: students },
+      { key: "certificates", title: "Certificate register", desc: "All issued certificates for verification and records.", rows: certificates },
     ],
-    scheduled: (getSettings().scheduledReports ?? []).map((s) => ({ ...s, title: REPORT_TITLES[s.reportKey] ?? s.reportKey })),
+    scheduled: ((tenantId ? getOrgSettings(tenantId).scheduledReports : null) ?? []).map((s) => ({ ...s, title: REPORT_TITLES[s.reportKey] ?? s.reportKey })),
   });
 });
 
 const reportCsvHandler = (key: string) => async (req: Request, res: Response) => {
   const from = typeof req.query.from === "string" ? req.query.from : undefined;
   const to = typeof req.query.to === "string" ? req.query.to : undefined;
-  const out = await buildReportCsv(key, from, to);
+  const out = await buildReportCsv(currentTenantId(req), key, from, to);
   if (!out) return res.status(404).json({ error: "Unknown report." });
   sendCsv(res, out.filename, out.csv);
 };
@@ -4801,41 +5298,43 @@ app.post("/api/admin/reports/schedule", requirePermission("system.settings"), as
   const frequency = b.frequency === "daily" ? "daily" : "weekly";
   const recipients = Array.isArray(b.recipients) ? b.recipients.map((r: unknown) => String(r).trim()).filter(Boolean) : [];
   if (recipients.length === 0) return res.status(400).json({ error: "Add at least one recipient email." });
-  const s = getSettings();
+  const s = getOrgSettings(currentTenantId(req)!);
   s.scheduledReports = [...(s.scheduledReports ?? []), { id: nanoid(10), reportKey, frequency, recipients, lastSentAt: null }];
   await db.upsert("settings", s);
   await recordAudit(req, "report.scheduled", `${reportKey} · ${frequency} → ${recipients.join(", ")}`);
   res.json({ scheduled: s.scheduledReports });
 });
 app.delete("/api/admin/reports/schedule/:id", requirePermission("system.settings"), async (req, res) => {
-  const s = getSettings();
+  const s = getOrgSettings(currentTenantId(req)!);
   s.scheduledReports = (s.scheduledReports ?? []).filter((x) => x.id !== req.params.id);
   await db.upsert("settings", s);
   res.json({ scheduled: s.scheduledReports });
 });
 
-/** Periodic sweep: email each due scheduled report (the trailing period's range) to its recipients. */
+/** Periodic sweep: email each due scheduled report (the trailing period's range) to its recipients, per tenant. */
 async function reportSweep() {
-  const s = getSettings();
-  const list = s.scheduledReports ?? [];
-  if (list.length === 0) return;
-  let changed = false;
-  for (const sr of list) {
-    const periodMs = sr.frequency === "daily" ? 24 * 3_600_000 : 7 * 24 * 3_600_000;
-    const last = sr.lastSentAt ? new Date(sr.lastSentAt).getTime() : 0;
-    if (Date.now() - last < periodMs) continue;
-    const fromDate = new Date(Date.now() - periodMs).toISOString().slice(0, 10);
-    const toDate = new Date().toISOString().slice(0, 10);
-    const out = await buildReportCsv(sr.reportKey, fromDate, toDate);
-    if (!out) continue;
-    const title = REPORT_TITLES[sr.reportKey] ?? sr.reportKey;
-    const subject = `Oriole ${sr.frequency} export — ${title} (${fromDate} to ${toDate})`;
-    const body = `Your scheduled ${sr.frequency} "${title}" for ${fromDate} to ${toDate} is below as CSV — copy it into a spreadsheet.\n\n${out.csv}\n\n— Oriole`;
-    for (const to of sr.recipients) { try { await sendMail(to, subject, body); } catch { /* best-effort */ } }
-    sr.lastSentAt = now();
-    changed = true;
+  for (const tenant of db.data!.tenants) {
+    const s = getOrgSettings(tenant.id);
+    const list = s.scheduledReports ?? [];
+    if (list.length === 0) continue;
+    let changed = false;
+    for (const sr of list) {
+      const periodMs = sr.frequency === "daily" ? 24 * 3_600_000 : 7 * 24 * 3_600_000;
+      const last = sr.lastSentAt ? new Date(sr.lastSentAt).getTime() : 0;
+      if (Date.now() - last < periodMs) continue;
+      const fromDate = new Date(Date.now() - periodMs).toISOString().slice(0, 10);
+      const toDate = new Date().toISOString().slice(0, 10);
+      const out = await buildReportCsv(tenant.id, sr.reportKey, fromDate, toDate);
+      if (!out) continue;
+      const title = REPORT_TITLES[sr.reportKey] ?? sr.reportKey;
+      const subject = `Oriole ${sr.frequency} export — ${title} (${fromDate} to ${toDate})`;
+      const body = `Your scheduled ${sr.frequency} "${title}" for ${fromDate} to ${toDate} is below as CSV — copy it into a spreadsheet.\n\n${out.csv}\n\n— Oriole`;
+      for (const to of sr.recipients) { try { await sendMail(to, subject, body, undefined, tenant.id); } catch { /* best-effort */ } }
+      sr.lastSentAt = now();
+      changed = true;
+    }
+    if (changed) await db.upsert("settings", s);
   }
-  if (changed) await db.upsert("settings", s);
 }
 
 // ================================================================ INTEGRATIONS: webhooks + public API
@@ -4843,9 +5342,13 @@ function sign(secret: string, body: string): string {
   return "sha256=" + createHmac("sha256", secret).update(body).digest("hex");
 }
 
-/** Fire-and-forget: POST a signed JSON payload to every active webhook subscribed to `event`. */
-function dispatchWebhook(event: WebhookEvent, data: Record<string, unknown>) {
-  const hooks = (getSettings().webhooks ?? []).filter((w) => w.active && w.events.includes(event));
+/** Fire-and-forget: POST a signed JSON payload to every active webhook subscribed
+ *  to `event`, for one tenant (`tenantId` null skips dispatch — no owning
+ *  tenant to look up webhooks for). */
+function dispatchWebhook(tenantId: string | null, event: WebhookEvent, data: Record<string, unknown>) {
+  if (!tenantId) return;
+  const s = getOrgSettings(tenantId);
+  const hooks = (s.webhooks ?? []).filter((w) => w.active && w.events.includes(event));
   if (hooks.length === 0) return;
   const body = JSON.stringify({ event, at: now(), data });
   void Promise.all(hooks.map(async (w) => {
@@ -4860,15 +5363,15 @@ function dispatchWebhook(event: WebhookEvent, data: Record<string, unknown>) {
       w.lastStatus = res.status;
     } catch { w.lastStatus = 0; }
     w.lastAt = now();
-  })).then(() => db.upsert("settings", getSettings())).catch(() => { /* best-effort */ });
+  })).then(() => db.upsert("settings", s)).catch(() => { /* best-effort */ });
 }
 
 // Batch 9 of the permission migration: all 10 routes below were already
 // requireRole("admin") alone with no GRADERS/STAFF mixed in, and
 // system.settings is already admin-only (see Batch 1's tests) — a
 // zero-ambiguity reuse, no new keys or corrections needed.
-app.get("/api/admin/integrations", requirePermission("system.settings"), (_req, res) => {
-  const s = getSettings();
+app.get("/api/admin/integrations", requirePermission("system.settings"), (req, res) => {
+  const s = getOrgSettings(currentTenantId(req)!);
   res.json({
     events: WEBHOOK_EVENTS,
     webhooks: (s.webhooks ?? []).map((w) => ({ ...w, secret: decryptString(w.secret) ?? w.secret })),
@@ -4880,7 +5383,7 @@ app.post("/api/admin/webhooks", requirePermission("system.settings"), async (req
   if (!(await assertSafeWebhookUrl(url))) return res.status(400).json({ error: "Enter a valid public https:// URL — private, loopback, and link-local addresses are blocked." });
   const events = Array.isArray(req.body?.events) ? (req.body.events as unknown[]).filter((e): e is WebhookEvent => WEBHOOK_EVENTS.includes(e as WebhookEvent)) : [];
   if (events.length === 0) return res.status(400).json({ error: "Pick at least one event." });
-  const s = getSettings();
+  const s = getOrgSettings(currentTenantId(req)!);
   const rawSecret = "whsec_" + randomBytes(18).toString("hex");
   const hook = { id: nanoid(10), url, events, secret: encryptString(rawSecret), active: true, createdAt: now(), lastStatus: null as number | null, lastAt: null as string | null };
   s.webhooks = [...(s.webhooks ?? []), hook];
@@ -4889,7 +5392,7 @@ app.post("/api/admin/webhooks", requirePermission("system.settings"), async (req
   res.json({ webhook: { ...hook, secret: rawSecret } });
 });
 app.patch("/api/admin/webhooks/:id", requirePermission("system.settings"), async (req, res) => {
-  const s = getSettings();
+  const s = getOrgSettings(currentTenantId(req)!);
   const w = (s.webhooks ?? []).find((x) => x.id === req.params.id);
   if (!w) return res.status(404).json({ error: "Webhook not found." });
   if (typeof req.body?.active === "boolean") w.active = req.body.active;
@@ -4903,15 +5406,16 @@ app.patch("/api/admin/webhooks/:id", requirePermission("system.settings"), async
   res.json({ webhook: { ...w, secret: decryptString(w.secret) ?? w.secret } });
 });
 app.delete("/api/admin/webhooks/:id", requirePermission("system.settings"), async (req, res) => {
-  const s = getSettings();
+  const s = getOrgSettings(currentTenantId(req)!);
   s.webhooks = (s.webhooks ?? []).filter((x) => x.id !== req.params.id);
   await db.upsert("settings", s);
   res.json({ ok: true });
 });
 app.post("/api/admin/webhooks/:id/test", requirePermission("system.settings"), (req, res) => {
-  const w = (getSettings().webhooks ?? []).find((x) => x.id === req.params.id);
+  const tenantId = currentTenantId(req);
+  const w = (getOrgSettings(tenantId!).webhooks ?? []).find((x) => x.id === req.params.id);
   if (!w) return res.status(404).json({ error: "Webhook not found." });
-  dispatchWebhook((w.events[0] as WebhookEvent) || "exam.published", { test: true, message: "Test ping from Oriole." });
+  dispatchWebhook(tenantId, (w.events[0] as WebhookEvent) || "exam.published", { test: true, message: "Test ping from Oriole." });
   res.json({ ok: true });
 });
 
@@ -4919,38 +5423,53 @@ app.post("/api/admin/apikeys", requirePermission("system.settings"), async (req,
   const name = String(req.body?.name ?? "").trim() || "API key";
   const raw = "ok_live_" + randomBytes(24).toString("hex");
   const rec = { id: nanoid(10), name, prefix: raw.slice(0, 16), keyHash: createHash("sha256").update(raw).digest("hex"), createdAt: now(), lastUsedAt: null as string | null };
-  const s = getSettings();
+  const s = getOrgSettings(currentTenantId(req)!);
   s.apiKeys = [...(s.apiKeys ?? []), rec];
   await db.upsert("settings", s);
   await recordAudit(req, "apikey.created", name);
   res.json({ key: raw, record: { id: rec.id, name: rec.name, prefix: rec.prefix, createdAt: rec.createdAt } }); // raw key shown ONCE
 });
 app.delete("/api/admin/apikeys/:id", requirePermission("system.settings"), async (req, res) => {
-  const s = getSettings();
+  const s = getOrgSettings(currentTenantId(req)!);
   s.apiKeys = (s.apiKeys ?? []).filter((k) => k.id !== req.params.id);
   await db.upsert("settings", s);
   res.json({ ok: true });
 });
 
 // Public read-only API (v1), authenticated by a Bearer API key.
+// Each key lives inside its owning tenant's OrgSettings.apiKeys, so the tenant
+// isn't known from a session — it's resolved by scanning every tenant's
+// settings row for a matching key hash, then stamped onto the request so each
+// route below can scope its query to that one tenant only.
 function requireApiKey(req: Request, res: Response, next: () => void) {
   const m = String(req.headers.authorization ?? "").match(/^Bearer\s+(.+)$/i);
   if (!m) return res.status(401).json({ error: "Missing API key. Use 'Authorization: Bearer <key>'." });
   const hash = createHash("sha256").update(m[1].trim()).digest("hex");
-  const key = (getSettings().apiKeys ?? []).find((k) => k.keyHash === hash);
-  if (!key) return res.status(401).json({ error: "Invalid API key." });
-  key.lastUsedAt = now();
-  void db.upsert("settings", getSettings());
+  let ownerTenantId: string | null = null;
+  for (const s of db.data!.settings) {
+    const key = (s.apiKeys ?? []).find((k) => k.keyHash === hash);
+    if (key) {
+      key.lastUsedAt = now();
+      ownerTenantId = s.id;
+      void db.upsert("settings", s);
+      break;
+    }
+  }
+  if (!ownerTenantId) return res.status(401).json({ error: "Invalid API key." });
+  (req as Request & { apiKeyTenantId: string }).apiKeyTenantId = ownerTenantId;
   next();
 }
-app.get("/api/v1/exams", requireApiKey, (_req, res) => {
-  res.json({ exams: db.data!.exams.filter((e) => e.status === "published").map((e) => ({ id: e.id, title: e.title, code: e.code, subject: e.subject ?? null, passingScore: e.passingScore, durationMinutes: e.durationMinutes })) });
+app.get("/api/v1/exams", requireApiKey, (req, res) => {
+  const tenantId = (req as Request & { apiKeyTenantId: string }).apiKeyTenantId;
+  res.json({ exams: db.data!.exams.filter((e) => e.status === "published" && e.tenantId === tenantId).map((e) => ({ id: e.id, title: e.title, code: e.code, subject: e.subject ?? null, passingScore: e.passingScore, durationMinutes: e.durationMinutes })) });
 });
-app.get("/api/v1/results", requireApiKey, (_req, res) => {
-  res.json({ results: db.data!.attempts.filter((a) => a.status === "submitted").map((a) => ({ attemptId: a.id, examId: a.examId, candidateId: a.candidateId, score: a.score, passed: a.passed, gradingStatus: a.gradingStatus ?? "auto_graded", submittedAt: a.submittedAt })) });
+app.get("/api/v1/results", requireApiKey, (req, res) => {
+  const tenantId = (req as Request & { apiKeyTenantId: string }).apiKeyTenantId;
+  res.json({ results: db.data!.attempts.filter((a) => a.status === "submitted" && a.tenantId === tenantId).map((a) => ({ attemptId: a.id, examId: a.examId, candidateId: a.candidateId, score: a.score, passed: a.passed, gradingStatus: a.gradingStatus ?? "auto_graded", submittedAt: a.submittedAt })) });
 });
-app.get("/api/v1/certificates", requireApiKey, (_req, res) => {
-  res.json({ certificates: db.data!.certificates.map((c) => ({ certNumber: c.certNumber, candidateId: c.candidateId, examId: c.examId, score: c.score, issuedAt: c.issuedAt })) });
+app.get("/api/v1/certificates", requireApiKey, (req, res) => {
+  const tenantId = (req as Request & { apiKeyTenantId: string }).apiKeyTenantId;
+  res.json({ certificates: db.data!.certificates.filter((c) => c.tenantId === tenantId).map((c) => ({ certNumber: c.certNumber, candidateId: c.candidateId, examId: c.examId, score: c.score, issuedAt: c.issuedAt })) });
 });
 
 // ---- admin: Organization / Settings ----
@@ -4961,10 +5480,66 @@ app.get("/api/v1/certificates", requireApiKey, (_req, res) => {
 // test/permissions.test.ts, which pins that mapping down. A custom role can
 // now also be granted these, but no existing admin/facilitator/proctor
 // account's access to these 5 routes changes.
-app.get("/api/admin/settings", requirePermission("system.settings"), (_req, res) => res.json({ settings: getSettings() }));
+// ---- Platform support tickets — a tenant admin reaching the platform
+// operator (Super Admin), not internal school support. Single-tenant today,
+// so every ticket is visible to every admin holding system.settings — same
+// "one team" visibility the audit log already has, not a per-user inbox.
+app.get("/api/support/tickets", requirePermission("system.settings"), (req, res) => {
+  const tenantId = currentTenantId(req);
+  const tickets = db.data!.supportTickets.filter((t) => t.tenantId === tenantId).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  res.json({ tickets });
+});
+
+app.post("/api/support/tickets", requirePermission("system.settings"), async (req, res) => {
+  const actor = currentUser(req)!;
+  const subject = String(req.body?.subject ?? "").trim();
+  const body = String(req.body?.body ?? "").trim();
+  if (!subject || subject.length > 200) return res.status(400).json({ error: "Subject is required (max 200 characters)." });
+  if (!body || body.length > 5000) return res.status(400).json({ error: "Message is required (max 5000 characters)." });
+  const at = new Date().toISOString();
+  const ticket: SupportTicket = {
+    id: nanoid(10),
+    tenantId: actor.tenantId,
+    subject,
+    status: "open",
+    createdBy: { id: actor.id, name: actor.name, email: actor.email },
+    createdAt: at,
+    updatedAt: at,
+    messages: [{ id: nanoid(10), authorType: "tenant", authorName: actor.name, body, at }],
+  };
+  db.data!.supportTickets.push(ticket);
+  await db.upsert("supportTickets", ticket);
+  await recordAudit(req, "support.ticket_opened", subject);
+  res.status(201).json({ ticket });
+});
+
+app.get("/api/support/tickets/:id", requirePermission("system.settings"), (req, res) => {
+  const tenantId = currentTenantId(req);
+  const ticket = db.data!.supportTickets.find((t) => t.id === req.params.id && t.tenantId === tenantId);
+  if (!ticket) return res.status(404).json({ error: "Not found." });
+  res.json({ ticket });
+});
+
+app.post("/api/support/tickets/:id/messages", requirePermission("system.settings"), async (req, res) => {
+  const actor = currentUser(req)!;
+  const ticket = db.data!.supportTickets.find((t) => t.id === req.params.id && t.tenantId === actor.tenantId);
+  if (!ticket) return res.status(404).json({ error: "Not found." });
+  if (ticket.status === "closed") return res.status(400).json({ error: "This ticket is closed. Reopen it by starting a new one." });
+  const body = String(req.body?.body ?? "").trim();
+  if (!body || body.length > 5000) return res.status(400).json({ error: "Message is required (max 5000 characters)." });
+  const at = new Date().toISOString();
+  ticket.messages.push({ id: nanoid(10), authorType: "tenant", authorName: actor.name, body, at });
+  ticket.updatedAt = at;
+  if (ticket.status === "resolved") ticket.status = "open"; // a reply to a resolved ticket reopens it
+  await db.upsert("supportTickets", ticket);
+  await recordAudit(req, "support.ticket_replied", ticket.subject);
+  res.json({ ticket });
+});
+
+app.get("/api/admin/settings", requirePermission("system.settings"), (req, res) => res.json({ settings: getOrgSettings(currentTenantId(req)!) }));
 
 app.patch("/api/admin/settings", requirePermission("system.settings"), async (req, res) => {
-  const s = getSettings();
+  const s = getOrgSettings(currentTenantId(req)!);
   const b = req.body ?? {};
   if (typeof b.name === "string") s.name = b.name.trim() || s.name;
   if (typeof b.supportEmail === "string") s.supportEmail = b.supportEmail.trim();
@@ -5009,15 +5584,17 @@ app.patch("/api/admin/settings", requirePermission("system.settings"), async (re
 // any authenticated role, since every module eventually needs to know which
 // structural concepts are active for this institution. Write access stays
 // admin-only via PATCH /api/admin/settings above.
-app.get("/api/learning-structure", requireAuth, (_req, res) => {
-  res.json({ learningStructure: getSettings().learningStructure ?? DEFAULT_LEARNING_STRUCTURE });
+app.get("/api/learning-structure", requireAuth, (req, res) => {
+  const tenantId = currentTenantId(req);
+  res.json({ learningStructure: (tenantId ? getOrgSettings(tenantId).learningStructure : null) ?? DEFAULT_LEARNING_STRUCTURE });
 });
 
 // Send the admin summary digest immediately (covers the last 7 days).
 // Final sweep of the permission migration: an operational trigger in the
 // same admin-only bucket as backup/run-now and report scheduling.
 app.post("/api/admin/digest/send-now", requirePermission("system.settings"), async (req, res) => {
-  const sent = await sendAdminDigest(Date.now() - 7 * 24 * 3_600_000, "weekly");
+  const tenantId = currentTenantId(req)!;
+  const sent = await sendAdminDigest(tenantId, Date.now() - 7 * 24 * 3_600_000, "weekly");
   await recordAudit(req, "digest.sent", `${sent} admin(s)`);
   res.json({ sent });
 });
@@ -5043,12 +5620,12 @@ app.post("/api/admin/backup/run-now", requirePermission("system.settings"), asyn
 // ---- admin: reusable rubric library (stored on org settings) ----
 // Batch 11 of the permission migration: grading.view matches the existing
 // GRADERS read gate; grading.manage (new) covers the two admin-only writes.
-app.get("/api/admin/rubric-library", requirePermission("grading.view"), (_req, res) => {
-  res.json({ rubrics: getSettings().rubricLibrary ?? [] });
+app.get("/api/admin/rubric-library", requirePermission("grading.view"), (req, res) => {
+  res.json({ rubrics: getOrgSettings(currentTenantId(req)!).rubricLibrary ?? [] });
 });
 
 app.post("/api/admin/rubric-library", requirePermission("grading.manage"), async (req, res) => {
-  const s = getSettings();
+  const s = getOrgSettings(currentTenantId(req)!);
   const name = String(req.body?.name ?? "").trim();
   const criteria: RubricCriterion[] = (Array.isArray(req.body?.criteria) ? req.body.criteria : [])
     .filter((c: { label?: unknown }) => c && typeof c.label === "string" && c.label.trim())
@@ -5062,7 +5639,7 @@ app.post("/api/admin/rubric-library", requirePermission("grading.manage"), async
 });
 
 app.delete("/api/admin/rubric-library/:id", requirePermission("grading.manage"), async (req, res) => {
-  const s = getSettings();
+  const s = getOrgSettings(currentTenantId(req)!);
   s.rubricLibrary = (s.rubricLibrary ?? []).filter((r) => r.id !== req.params.id);
   await db.upsert("settings", s);
   res.json({ ok: true });
@@ -5074,16 +5651,19 @@ const INSTITUTION_KINDS: Record<string, "faculties" | "departments" | "programs"
 };
 const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name);
 
-app.get("/api/admin/institution", requirePermission("org.view"), (_req, res) => {
-  const d = db.data!;
+app.get("/api/admin/institution", requirePermission("org.view"), (req, res) => {
+  const tenantId = currentTenantId(req);
+  const own = <T extends { tenantId?: string }>(arr: T[]) => arr.filter((x) => x.tenantId === tenantId);
+  const faculties = own(db.data!.faculties), departments = own(db.data!.departments), programs = own(db.data!.programs);
+  const campuses = own(db.data!.campuses), academicYears = own(db.data!.academicYears);
   res.json({
-    settings: getSettings(),
-    counts: { faculties: d.faculties.length, departments: d.departments.length, programs: d.programs.length, campuses: d.campuses.length, academicYears: d.academicYears.length },
-    faculties: [...d.faculties].sort(byName),
-    departments: [...d.departments].sort(byName),
-    programs: [...d.programs].sort(byName),
-    campuses: [...d.campuses].sort(byName),
-    academicYears: [...d.academicYears].sort((a, b) => (b.startDate ?? b.createdAt).localeCompare(a.startDate ?? a.createdAt)),
+    settings: tenantId ? getOrgSettings(tenantId) : null,
+    counts: { faculties: faculties.length, departments: departments.length, programs: programs.length, campuses: campuses.length, academicYears: academicYears.length },
+    faculties: [...faculties].sort(byName),
+    departments: [...departments].sort(byName),
+    programs: [...programs].sort(byName),
+    campuses: [...campuses].sort(byName),
+    academicYears: [...academicYears].sort((a, b) => (b.startDate ?? b.createdAt).localeCompare(a.startDate ?? a.createdAt)),
   });
 });
 
@@ -5092,7 +5672,8 @@ app.post("/api/admin/institution/:kind", requirePermission("org.manage"), async 
   if (!key) return res.status(404).json({ error: "Unknown type." });
   const name = String(req.body?.name ?? "").trim();
   if (!name) return res.status(400).json({ error: "Name is required." });
-  const item: Record<string, unknown> = { id: nanoid(10), name, createdAt: now() };
+  const tenantId = currentTenantId(req);
+  const item: Record<string, unknown> = { id: nanoid(10), tenantId, name, createdAt: now() };
   const b = req.body ?? {};
   if (key === "departments") item.facultyId = b.facultyId || null;
   if (key === "programs") { item.departmentId = b.departmentId || null; if (b.level) item.level = String(b.level); }
@@ -5100,7 +5681,7 @@ app.post("/api/admin/institution/:kind", requirePermission("org.manage"), async 
   const arr = (db.data as unknown as Record<string, Record<string, unknown>[]>)[key];
   if (key === "academicYears") {
     item.startDate = b.startDate || null; item.endDate = b.endDate || null; item.current = !!b.current;
-    if (item.current) arr.forEach((y) => { y.current = false; });
+    if (item.current) arr.forEach((y) => { if (y.tenantId === tenantId) y.current = false; });
   }
   arr.push(item);
   await db.write();
@@ -5111,23 +5692,31 @@ app.post("/api/admin/institution/:kind", requirePermission("org.manage"), async 
 app.delete("/api/admin/institution/:kind/:id", requirePermission("org.manage"), async (req, res) => {
   const key = INSTITUTION_KINDS[String(req.params.kind)];
   if (!key) return res.status(404).json({ error: "Unknown type." });
-  const store = db.data as unknown as Record<string, { id: string }[]>;
-  store[key] = store[key].filter((x) => x.id !== req.params.id);
+  const tenantId = currentTenantId(req);
+  const store = db.data as unknown as Record<string, { id: string; tenantId?: string }[]>;
+  store[key] = store[key].filter((x) => !(x.id === req.params.id && x.tenantId === tenantId));
   await db.write();
   res.json({ ok: true });
 });
 
 // ---- admin: Audit logs ----
-app.get("/api/admin/audit-logs", requirePermission("system.audit_log"), async (_req, res) => {
-  res.json({ logs: await auditStore.recent(200), integrity: await auditStore.verifyChain() });
+app.get("/api/admin/audit-logs", requirePermission("system.audit_log"), async (req, res) => {
+  // The tamper-evidence check (verifyChain) still walks the whole platform-wide
+  // hash chain — that's an internal integrity check (true/false + which entry
+  // id broke, if any), not tenant content, so it stays global. The entries
+  // actually shown must not be.
+  res.json({ logs: await auditStore.recentForTenant(currentTenantId(req)!, 200), integrity: await auditStore.verifyChain() });
 });
 
 // ---- admin: AI Violations (live integrity-event feed) ----
-app.get("/api/admin/violations", requirePermission("monitor.view"), async (_req, res) => {
+app.get("/api/admin/violations", requirePermission("monitor.view"), async (req, res) => {
+  const tenantId = currentTenantId(req);
   const userName = (id: string) => db.data!.users.find((u) => u.id === id)?.name ?? "Candidate";
   const examTitle = (id: string) => db.data!.exams.find((e) => e.id === id)?.title ?? "Examination";
   const attemptMap = new Map(db.data!.attempts.map((a) => [a.id, a]));
-  const flagged = await proctorStore.allFlagged();
+  // Proctor events aren't tenant-tagged themselves (not yet migrated), so scope
+  // via the attempt each event belongs to instead.
+  const flagged = (await proctorStore.allFlagged()).filter((e) => attemptMap.get(e.attemptId)?.tenantId === tenantId);
   const events = [...flagged]
     .sort((a, b) => b.at.localeCompare(a.at))
     .slice(0, 100)
@@ -5145,24 +5734,37 @@ app.get("/api/admin/violations", requirePermission("monitor.view"), async (_req,
       total: flagged.length,
       high: flagged.filter((e) => e.severity === "high").length,
       warning: flagged.filter((e) => e.severity === "warning").length,
-      liveSessions: db.data!.attempts.filter((a) => a.status === "in_progress").length,
+      liveSessions: db.data!.attempts.filter((a) => a.status === "in_progress" && a.tenantId === tenantId).length,
     },
   });
 });
 
 // ---- admin: System health / diagnostics ----
-app.get("/api/admin/system-health", requirePermission("system.settings"), async (_req, res) => {
+app.get("/api/admin/system-health", requirePermission("system.settings"), async (req, res) => {
   const d = db.data!;
+  const tenantId = currentTenantId(req);
+  // The database itself (engine/durability/mailer/SMS/backup/env/uptime) is
+  // genuinely one shared, platform-level fact — there's a single embedded
+  // instance behind every tenant. The row-count breakdown is not: showing
+  // the platform's total users/exams/etc. to one school's admin discloses
+  // every other customer's combined scale and activity, so this counts only
+  // this tenant's own rows (the handful of off-mirror stores not yet
+  // tenant-tagged — proctorEvents/snapshots/answers/emails/auditLogs — are
+  // omitted here rather than shown platform-wide; see the tenant-retrofit
+  // follow-up on wiring tenant_id into every off-mirror store).
   res.json({
     api: "ok",
     db: {
       engine: "PostgreSQL (PGlite, embedded)",
       durable: true,
       collections: {
-        users: d.users.length, exams: d.exams.length, questions: d.questions.length,
-        registrations: d.registrations.length, attempts: d.attempts.length, answers: await answerStore.totalCount(),
-        proctorEvents: await proctorStore.totalCount(), snapshots: await snapshotStore.totalCount(), certificates: d.certificates.length,
-        emails: await emailStore.count(), announcements: d.announcements.length, auditLogs: await auditStore.count(),
+        users: d.users.filter((u) => u.tenantId === tenantId).length,
+        exams: d.exams.filter((e) => e.tenantId === tenantId).length,
+        questions: d.questions.filter((q) => q.tenantId === tenantId).length,
+        registrations: d.registrations.filter((r) => r.tenantId === tenantId).length,
+        attempts: d.attempts.filter((a) => a.tenantId === tenantId).length,
+        certificates: d.certificates.filter((c) => c.tenantId === tenantId).length,
+        announcements: d.announcements.filter((a) => a.tenantId === tenantId).length,
       },
     },
     mailer: mailerStatus(),
@@ -5517,11 +6119,12 @@ app.get("/api/status/uptime", async (req, res) => {
 });
 
 // ---- admin: Dashboard (aggregated overview) ----
-app.get("/api/admin/dashboard", requirePermission("monitor.view"), async (_req, res) => {
+app.get("/api/admin/dashboard", requirePermission("monitor.view"), async (req, res) => {
   const d = db.data!;
-  const candidateIds = new Set(d.users.filter((u) => u.role === "candidate").map((u) => u.id));
+  const tenantId = currentTenantId(req);
+  const candidateIds = new Set(d.users.filter((u) => u.role === "candidate" && u.tenantId === tenantId).map((u) => u.id));
   const regs = d.registrations.filter((r) => candidateIds.has(r.candidateId));
-  const submitted = d.attempts.filter((a) => a.status === "submitted" && !examById(a.examId)?.practice);
+  const submitted = d.attempts.filter((a) => a.status === "submitted" && a.tenantId === tenantId && !examById(a.examId)?.practice);
   const grade = (s: number) => (s >= 80 ? "A" : s >= 70 ? "B" : s >= 60 ? "C" : s >= 50 ? "D" : "F");
   const monthKey = (iso: string) => { const x = new Date(iso); return `${x.getFullYear()}-${x.getMonth()}`; };
 
@@ -5534,8 +6137,8 @@ app.get("/api/admin/dashboard", requirePermission("monitor.view"), async (_req, 
   }
   const examActivity = months.map((m) => ({
     label: m.label,
-    taken: d.attempts.filter((a) => monthKey(a.startedAt) === m.key).length,
-    created: d.exams.filter((e) => monthKey(e.createdAt) === m.key).length,
+    taken: d.attempts.filter((a) => a.tenantId === tenantId && monthKey(a.startedAt) === m.key).length,
+    created: d.exams.filter((e) => e.tenantId === tenantId && monthKey(e.createdAt) === m.key).length,
     passed: submitted.filter((a) => a.passed && a.submittedAt && monthKey(a.submittedAt) === m.key).length,
   }));
 
@@ -5548,15 +6151,15 @@ app.get("/api/admin/dashboard", requirePermission("monitor.view"), async (_req, 
   const growth = subLast === 0 ? (subThis > 0 ? 100 : 0) : Math.round(((subThis - subLast) / subLast) * 1000) / 10;
 
   const startOfToday = new Date(nowD.getFullYear(), nowD.getMonth(), nowD.getDate()).getTime();
-  const examsToday = d.attempts.filter((a) => new Date(a.startedAt).getTime() >= startOfToday).length;
+  const examsToday = d.attempts.filter((a) => a.tenantId === tenantId && new Date(a.startedAt).getTime() >= startOfToday).length;
 
   const scores = submitted.map((a) => a.score ?? 0);
   const avgScore = scores.length ? Math.round(scores.reduce((p, c) => p + c, 0) / scores.length) : 0;
   const confirmed = regs.filter((r) => r.approval === "confirmed").length;
   const completionRate = confirmed ? Math.round((regs.filter((r) => r.status === "submitted").length / confirmed) * 100) : 0;
 
-  const subjectPerformance = d.exams
-    .filter((e) => !e.practice)
+  const tenantExamsNonPractice = d.exams.filter((e) => !e.practice && e.tenantId === tenantId);
+  const subjectPerformance = tenantExamsNonPractice
     .map((e) => {
       const ax = submitted.filter((a) => a.examId === e.id);
       const s = ax.map((a) => a.score ?? 0);
@@ -5581,7 +6184,7 @@ app.get("/api/admin/dashboard", requirePermission("monitor.view"), async (_req, 
   const recentSlice = [...submitted]
     .sort((a, b) => (b.submittedAt ?? "").localeCompare(a.submittedAt ?? ""))
     .slice(0, 8);
-  const liveAttempts = d.attempts.filter((a) => a.status === "in_progress");
+  const liveAttempts = d.attempts.filter((a) => a.status === "in_progress" && a.tenantId === tenantId);
   const dashEvMap = await proctorStore.forAttempts([...recentSlice.map((a) => a.id), ...liveAttempts.map((a) => a.id)]);
   const dashAnsMap = await answerStore.forAttempts(recentSlice.map((a) => a.id));
   const recentResults = recentSlice
@@ -5692,12 +6295,13 @@ app.get("/api/admin/dashboard", requirePermission("monitor.view"), async (_req, 
   // scheduling paths — this card used to only look at the first, so an exam
   // scheduled via the Scheduler (the more prominent of the two) never showed
   // up here at all.
+  const tenantClasses = d.classes.filter((c) => c.tenantId === tenantId);
   const classScheduledExamIds = new Set(
-    d.classes.flatMap((c) =>
+    tenantClasses.flatMap((c) =>
       c.assignments.filter((a) => a.scheduledStart && new Date(a.scheduledStart).getTime() > nowMs).map((a) => a.examId),
     ),
   );
-  const upcomingFromClasses = d.classes.flatMap((c) =>
+  const upcomingFromClasses = tenantClasses.flatMap((c) =>
     c.assignments
       .filter((a) => a.scheduledStart && new Date(a.scheduledStart).getTime() > nowMs)
       .map((a) => {
@@ -5714,7 +6318,7 @@ app.get("/api/admin/dashboard", requirePermission("monitor.view"), async (_req, 
       }),
   );
   const upcomingFromScheduler = d.exams
-    .filter((e) => e.status === "published" && e.availableFrom && new Date(e.availableFrom).getTime() > nowMs && !classScheduledExamIds.has(e.id))
+    .filter((e) => e.tenantId === tenantId && e.status === "published" && e.availableFrom && new Date(e.availableFrom).getTime() > nowMs && !classScheduledExamIds.has(e.id))
     .map((e) => ({
       examId: e.id,
       subject: e.title,
@@ -5729,12 +6333,11 @@ app.get("/api/admin/dashboard", requirePermission("monitor.view"), async (_req, 
     .slice(0, 6);
 
   // ---- Insights (hoisted so the health score can reuse them) ----
-  const pendingReviews = d.attempts.filter((a) => a.gradingStatus === "pending_review").length;
+  const pendingReviews = d.attempts.filter((a) => a.gradingStatus === "pending_review" && a.tenantId === tenantId).length;
   const passRate = submitted.length ? Math.round((submitted.filter((a) => a.passed).length / submitted.length) * 100) : 0;
 
   // ---- Academic insights: weakest / strongest subjects (real per-exam history) ----
-  const subjectStats = d.exams
-    .filter((e) => !e.practice)
+  const subjectStats = tenantExamsNonPractice
     .map((e) => {
       const ax = submitted.filter((a) => a.examId === e.id);
       const s = ax.map((a) => a.score ?? 0);
@@ -5798,14 +6401,14 @@ app.get("/api/admin/dashboard", requirePermission("monitor.view"), async (_req, 
     cards: {
       completionRate, completionGrowth: growth,
       activeStudents: candidateIds.size,
-      questions: d.questions.length,
+      questions: d.questions.filter((q) => q.tenantId === tenantId).length,
       examsToday,
     },
     examActivity,
     subjectPerformance,
     recentResults,
     insights: {
-      totalExams: d.exams.filter((e) => !e.practice).length,
+      totalExams: tenantExamsNonPractice.length,
       completed: submitted.length,
       pendingReviews,
       failed: submitted.filter((a) => a.passed === false).length,
@@ -5821,16 +6424,17 @@ app.get("/api/admin/dashboard", requirePermission("monitor.view"), async (_req, 
     health,
     academicInsights: { weakest: weakestSubjects, strongest: strongestSubjects },
     predicted,
-    activity: await auditStore.recent(8),
+    activity: tenantId ? await auditStore.recentForTenant(tenantId, 8) : [],
   });
 });
 
 // ---- admin: Classes (cohorts) ----
 app.get("/api/admin/classes", requirePermission("students.view"), (req, res) => {
+  const tenantId = currentTenantId(req);
   const yearFilter = typeof req.query.academicYearId === "string" ? req.query.academicYearId : null;
   const yearName = (id?: string | null) => (id ? db.data!.academicYears.find((y) => y.id === id)?.name ?? null : null);
-  const classes = [...db.data!.classes]
-    .filter((c) => !yearFilter || c.academicYearId === yearFilter)
+  const classes = db.data!.classes
+    .filter((c) => c.tenantId === tenantId && (!yearFilter || c.academicYearId === yearFilter))
     .sort((a, b) => a.name.localeCompare(b.name))
     .map((c) => ({
       id: c.id, name: c.name, code: c.code ?? "", description: c.description ?? "",
@@ -5841,12 +6445,13 @@ app.get("/api/admin/classes", requirePermission("students.view"), (req, res) => 
 });
 
 app.post("/api/admin/classes", requirePermission("students.manage"), async (req, res) => {
+  const tenantId = currentTenantId(req);
   const name = String(req.body?.name ?? "").trim();
   if (!name) return res.status(400).json({ error: "Class name is required." });
   const academicYearId = typeof req.body?.academicYearId === "string" && req.body.academicYearId
-    ? (db.data!.academicYears.some((y) => y.id === req.body.academicYearId) ? req.body.academicYearId : null)
+    ? (db.data!.academicYears.some((y) => y.id === req.body.academicYearId && y.tenantId === tenantId) ? req.body.academicYearId : null)
     : null;
-  const cls = { id: nanoid(10), name, code: String(req.body?.code ?? "").trim(), description: String(req.body?.description ?? "").trim(), memberIds: [], assignments: [], createdAt: now(), academicYearId };
+  const cls = { id: nanoid(10), tenantId: tenantId ?? undefined, name, code: String(req.body?.code ?? "").trim(), description: String(req.body?.description ?? "").trim(), memberIds: [], assignments: [], createdAt: now(), academicYearId };
   db.data!.classes.push(cls);
   await db.upsert("classes", cls);
   await recordAudit(req, "class.created", name);
@@ -5856,8 +6461,9 @@ app.post("/api/admin/classes", requirePermission("students.manage"), async (req,
 // Classes that have this exam assigned (for the Exam Builder audience panel).
 app.get("/api/admin/exams/:id/classes", requirePermission("exams.edit"), (req, res) => {
   const examId = req.params.id;
+  const tenantId = currentTenantId(req);
   const classes = db.data!.classes
-    .filter((c) => c.assignments.some((a) => a.examId === examId))
+    .filter((c) => c.tenantId === tenantId && c.assignments.some((a) => a.examId === examId))
     .map((c) => {
       const last = [...c.assignments].filter((a) => a.examId === examId).sort((a, b) => b.assignedAt.localeCompare(a.assignedAt))[0];
       return { id: c.id, name: c.name, members: c.memberIds.length, scheduledStart: last?.scheduledStart ?? null };
@@ -5866,7 +6472,7 @@ app.get("/api/admin/exams/:id/classes", requirePermission("exams.edit"), (req, r
 });
 
 app.get("/api/admin/classes/:id", requirePermission("students.manage"), (req, res) => {
-  const cls = db.data!.classes.find((c) => c.id === req.params.id);
+  const cls = db.data!.classes.find((c) => c.id === req.params.id && c.tenantId === currentTenantId(req));
   if (!cls) return res.status(404).json({ error: "Class not found." });
   const members = cls.memberIds
     .map((id) => db.data!.users.find((u) => u.id === id && u.role === "candidate"))
@@ -5891,22 +6497,26 @@ app.get("/api/admin/classes/:id", requirePermission("students.manage"), (req, re
 });
 
 app.patch("/api/admin/classes/:id", requirePermission("students.manage"), async (req, res) => {
-  const cls = db.data!.classes.find((c) => c.id === req.params.id);
+  const tenantId = currentTenantId(req);
+  const cls = db.data!.classes.find((c) => c.id === req.params.id && c.tenantId === tenantId);
   if (!cls) return res.status(404).json({ error: "Class not found." });
   const b = req.body ?? {};
   if (typeof b.name === "string" && b.name.trim()) cls.name = b.name.trim();
   if (typeof b.code === "string") cls.code = b.code.trim();
   if (typeof b.description === "string") cls.description = b.description.trim();
   if ("academicYearId" in b) {
-    cls.academicYearId = b.academicYearId && db.data!.academicYears.some((y) => y.id === b.academicYearId) ? b.academicYearId : null;
+    cls.academicYearId = b.academicYearId && db.data!.academicYears.some((y) => y.id === b.academicYearId && y.tenantId === tenantId) ? b.academicYearId : null;
   }
   await db.upsert("classes", cls);
   res.json({ ok: true });
 });
 
 app.delete("/api/admin/classes/:id", requirePermission("students.manage"), async (req, res) => {
-  db.data!.classes = db.data!.classes.filter((c) => c.id !== req.params.id);
-  await db.remove("classes", String(req.params.id));
+  const tenantId = currentTenantId(req);
+  const cls = db.data!.classes.find((c) => c.id === req.params.id && c.tenantId === tenantId);
+  if (!cls) return res.status(404).json({ error: "Class not found." });
+  db.data!.classes = db.data!.classes.filter((c) => c.id !== cls.id);
+  await db.remove("classes", cls.id);
   res.json({ ok: true });
 });
 
@@ -5952,7 +6562,7 @@ async function notifyResourcePublished(book: Book) {
 // Sync field validation only — fileData's page count (if it's a PDF) is
 // detected asynchronously by detectPdfPageCount, since that requires
 // actually parsing the document.
-function validateBookBody(b: Record<string, unknown>): { errors: string[]; book: Partial<Book>; manualTotalPages: number | null; duplicateOf: { id: string; title: string } | null } {
+function validateBookBody(b: Record<string, unknown>, tenantId: string | null): { errors: string[]; book: Partial<Book>; manualTotalPages: number | null; duplicateOf: { id: string; title: string } | null } {
   const errors: string[] = [];
   const title = String(b.title ?? "").trim();
   const author = String(b.author ?? "").trim();
@@ -5992,7 +6602,7 @@ function validateBookBody(b: Record<string, unknown>): { errors: string[]; book:
       fileMime = mime;
       fileSize = decodedByteLength(b.fileData);
       checksum = sha256OfDataUrl(b.fileData);
-      const existing = db.data!.books.find((bk) => bk.checksum === checksum);
+      const existing = db.data!.books.find((bk) => bk.tenantId === tenantId && bk.checksum === checksum);
       if (existing) duplicateOf = { id: existing.id, title: existing.title };
     }
   } else if (b.fileData) {
@@ -6014,14 +6624,14 @@ function validateBookBody(b: Record<string, unknown>): { errors: string[]; book:
   const readingTimeRaw = Number(b.estimatedReadingTime);
   const estimatedReadingTime = Number.isFinite(readingTimeRaw) && readingTimeRaw > 0 ? Math.round(readingTimeRaw) : null;
 
-  const faculty = db.data!.faculties.find((f) => f.id === b.facultyId);
-  const department = db.data!.departments.find((d) => d.id === b.departmentId);
-  const program = db.data!.programs.find((p) => p.id === b.programId);
-  const academicYear = db.data!.academicYears.find((y) => y.id === b.academicYearId);
+  const faculty = db.data!.faculties.find((f) => f.id === b.facultyId && f.tenantId === tenantId);
+  const department = db.data!.departments.find((d) => d.id === b.departmentId && d.tenantId === tenantId);
+  const program = db.data!.programs.find((p) => p.id === b.programId && p.tenantId === tenantId);
+  const academicYear = db.data!.academicYears.find((y) => y.id === b.academicYearId && y.tenantId === tenantId);
 
   const visibilityScope: "institution" | "scoped" = b.visibilityScope === "scoped" ? "scoped" : "institution";
-  const classIds = Array.isArray(b.classIds) ? (b.classIds as unknown[]).map(String).filter((id) => db.data!.classes.some((c) => c.id === id)) : [];
-  const studentIds = Array.isArray(b.studentIds) ? (b.studentIds as unknown[]).map(String).filter((id) => db.data!.users.some((u) => u.id === id && u.role === "candidate")) : [];
+  const classIds = Array.isArray(b.classIds) ? (b.classIds as unknown[]).map(String).filter((id) => db.data!.classes.some((c) => c.id === id && c.tenantId === tenantId)) : [];
+  const studentIds = Array.isArray(b.studentIds) ? (b.studentIds as unknown[]).map(String).filter((id) => db.data!.users.some((u) => u.id === id && u.tenantId === tenantId && u.role === "candidate")) : [];
 
   const status: "draft" | "published" = b.status === "published" ? "published" : "draft";
 
@@ -6095,13 +6705,15 @@ async function detectPdfPageCount(dataUrl: string): Promise<number | null> {
 // "library" category — all 7 book/library routes are GRADERS-gated
 // uniformly (view and manage aren't split in the real code), so facilitator
 // gets both library.view and library.manage.
-app.get("/api/admin/books", requirePermission("library.view"), (_req, res) => {
-  const books = [...db.data!.books].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+app.get("/api/admin/books", requirePermission("library.view"), (req, res) => {
+  const tenantId = currentTenantId(req);
+  const books = db.data!.books.filter((b) => b.tenantId === tenantId).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   res.json({ books });
 });
 
 app.post("/api/admin/books", requirePermission("library.manage"), async (req, res) => {
-  const { errors, book: partial, manualTotalPages, duplicateOf } = validateBookBody(req.body ?? {});
+  const tenantId = currentTenantId(req);
+  const { errors, book: partial, manualTotalPages, duplicateOf } = validateBookBody(req.body ?? {}, tenantId);
   if (errors.length) return res.status(400).json({ errors });
   if (partial.fileData) {
     const scan = await scanForMalware(Buffer.from(partial.fileData.slice(partial.fileData.indexOf(",") + 1), "base64"));
@@ -6113,7 +6725,7 @@ app.post("/api/admin/books", requirePermission("library.manage"), async (req, re
 
   const user = currentUser(req)!;
   const book: Book = {
-    id: nanoid(10),
+    id: nanoid(10), tenantId: tenantId ?? undefined,
     title: partial.title!, author: partial.author!, genre: partial.genre!, resourceType: partial.resourceType!, totalPages,
     pagesAutoDetected: detected !== null,
     coverImage: partial.coverImage ?? null, fileData: partial.fileData ?? null, fileName: partial.fileName ?? null,
@@ -6140,10 +6752,11 @@ app.post("/api/admin/books", requirePermission("library.manage"), async (req, re
 });
 
 app.patch("/api/admin/books/:id", requirePermission("library.manage"), async (req, res) => {
-  const book = db.data!.books.find((b) => b.id === req.params.id);
+  const tenantId = currentTenantId(req);
+  const book = db.data!.books.find((b) => b.id === req.params.id && b.tenantId === tenantId);
   if (!book) return res.status(404).json({ error: "Book not found." });
   const wasPublished = book.status === "published";
-  const { errors, book: partial, manualTotalPages, duplicateOf } = validateBookBody({ ...book, ...req.body });
+  const { errors, book: partial, manualTotalPages, duplicateOf } = validateBookBody({ ...book, ...req.body }, tenantId);
   if (errors.length) return res.status(400).json({ errors });
 
   // Only re-detect / version when a new file was actually uploaded (fileData
@@ -6153,7 +6766,7 @@ app.patch("/api/admin/books/:id", requirePermission("library.manage"), async (re
     const scan = await scanForMalware(Buffer.from(partial.fileData!.slice(partial.fileData!.indexOf(",") + 1), "base64"));
     if (!scan.clean) return res.status(400).json({ errors: [scan.reason!] });
     const prevVersion: ResourceVersion = {
-      id: nanoid(10), bookId: book.id, version: book.version,
+      id: nanoid(10), tenantId: tenantId ?? undefined, bookId: book.id, version: book.version,
       fileData: book.fileData, fileName: book.fileName, fileMime: book.fileMime, fileSize: book.fileSize, checksum: book.checksum,
       changeLog: typeof req.body?.changeLog === "string" ? req.body.changeLog.trim().slice(0, 300) : undefined,
       uploadedBy: currentUser(req)!.id, createdAt: now(),
@@ -6176,19 +6789,23 @@ app.patch("/api/admin/books/:id", requirePermission("library.manage"), async (re
 });
 
 app.get("/api/admin/books/:id/versions", requirePermission("library.view"), (req, res) => {
-  const versions = db.data!.resourceVersions.filter((v) => v.bookId === req.params.id).sort((a, b) => b.version - a.version);
+  const tenantId = currentTenantId(req);
+  const book = db.data!.books.find((b) => b.id === req.params.id && b.tenantId === tenantId);
+  if (!book) return res.status(404).json({ error: "Book not found." });
+  const versions = db.data!.resourceVersions.filter((v) => v.bookId === book.id).sort((a, b) => b.version - a.version);
   res.json({ versions });
 });
 
 app.post("/api/admin/books/:id/versions/:versionId/restore", requirePermission("library.manage"), async (req, res) => {
-  const book = db.data!.books.find((b) => b.id === req.params.id);
+  const tenantId = currentTenantId(req);
+  const book = db.data!.books.find((b) => b.id === req.params.id && b.tenantId === tenantId);
   if (!book) return res.status(404).json({ error: "Book not found." });
   const version = db.data!.resourceVersions.find((v) => v.id === req.params.versionId && v.bookId === book.id);
   if (!version) return res.status(404).json({ error: "Version not found." });
 
   // Snapshot the CURRENT file as a version before restoring, so restoring is itself reversible.
   const snapshot: ResourceVersion = {
-    id: nanoid(10), bookId: book.id, version: book.version,
+    id: nanoid(10), tenantId: tenantId ?? undefined, bookId: book.id, version: book.version,
     fileData: book.fileData, fileName: book.fileName, fileMime: book.fileMime, fileSize: book.fileSize, checksum: book.checksum,
     changeLog: `Replaced by restoring v${version.version}`, uploadedBy: currentUser(req)!.id, createdAt: now(),
   };
@@ -6206,7 +6823,8 @@ app.post("/api/admin/books/:id/versions/:versionId/restore", requirePermission("
 
 app.delete("/api/admin/books/:id", requirePermission("library.manage"), async (req, res) => {
   const id = String(req.params.id);
-  const book = db.data!.books.find((b) => b.id === id);
+  const book = db.data!.books.find((b) => b.id === id && b.tenantId === currentTenantId(req));
+  if (!book) return res.status(404).json({ error: "Book not found." });
   db.data!.books = db.data!.books.filter((b) => b.id !== id);
   db.data!.readingProgress = db.data!.readingProgress.filter((p) => p.bookId !== id);
   db.data!.resourceVersions = db.data!.resourceVersions.filter((v) => v.bookId !== id);
@@ -6219,14 +6837,16 @@ app.delete("/api/admin/books/:id", requirePermission("library.manage"), async (r
   res.json({ ok: true });
 });
 
-app.get("/api/admin/library/dashboard", requirePermission("library.view"), (_req, res) => {
-  const books = db.data!.books;
+app.get("/api/admin/library/dashboard", requirePermission("library.view"), (req, res) => {
+  const tenantId = currentTenantId(req);
+  const books = db.data!.books.filter((b) => b.tenantId === tenantId);
+  const bookIds = new Set(books.map((b) => b.id));
   const byType: Record<string, number> = {};
   for (const b of books) byType[b.resourceType] = (byType[b.resourceType] ?? 0) + 1;
   const byStatus = { draft: books.filter((b) => b.status === "draft").length, published: books.filter((b) => b.status === "published").length };
   const totalViews = books.reduce((s, b) => s + (b.viewCount ?? 0), 0);
   const totalDownloads = books.reduce((s, b) => s + (b.downloadCount ?? 0), 0);
-  const totalBookmarks = db.data!.resourceBookmarks.length;
+  const totalBookmarks = db.data!.resourceBookmarks.filter((bm) => bookIds.has(bm.bookId)).length;
   const storageUsed = books.reduce((s, b) => s + (b.fileSize ?? 0), 0);
   const pendingReviews = books.filter((b) => b.status === "draft").length;
 
@@ -6238,7 +6858,7 @@ app.get("/api/admin/library/dashboard", requirePermission("library.view"), (_req
   const weekOverWeekPct = totalAWeekAgo > 0 ? Math.round((newThisWeek / totalAWeekAgo) * 1000) / 10 : null;
 
   const bookmarkCounts = new Map<string, number>();
-  for (const bm of db.data!.resourceBookmarks) bookmarkCounts.set(bm.bookId, (bookmarkCounts.get(bm.bookId) ?? 0) + 1);
+  for (const bm of db.data!.resourceBookmarks) if (bookIds.has(bm.bookId)) bookmarkCounts.set(bm.bookId, (bookmarkCounts.get(bm.bookId) ?? 0) + 1);
   const resources = books.map((b) => ({
     id: b.id, title: b.title, resourceType: b.resourceType, status: b.status,
     viewCount: b.viewCount ?? 0, downloadCount: b.downloadCount ?? 0, bookmarkCount: bookmarkCounts.get(b.id) ?? 0,
@@ -6264,7 +6884,7 @@ app.get("/api/books", requireAuth, (req, res) => {
   const myProgress = new Map(db.data!.readingProgress.filter((p) => p.candidateId === user.id).map((p) => [p.bookId, p]));
   const myBookmarks = new Set(db.data!.resourceBookmarks.filter((b) => b.candidateId === user.id).map((b) => b.bookId));
 
-  let list = db.data!.books.filter((b) => isStaff || studentCanSeeBook(b, user));
+  let list = db.data!.books.filter((b) => b.tenantId === user.tenantId && (isStaff || studentCanSeeBook(b, user)));
 
   const q = String(req.query.q ?? "").trim().toLowerCase();
   if (q) list = list.filter((b) => [b.title, b.author, b.course, b.courseCode, ...(b.tags ?? [])].some((v) => v?.toLowerCase().includes(q)));
@@ -6302,7 +6922,7 @@ app.get("/api/books", requireAuth, (req, res) => {
 
 app.get("/api/books/:id", requireAuth, (req, res) => {
   const user = currentUser(req)!;
-  const book = db.data!.books.find((b) => b.id === req.params.id);
+  const book = db.data!.books.find((b) => b.id === req.params.id && b.tenantId === user.tenantId);
   if (!book || (user.role === "candidate" && !studentCanSeeBook(book, user))) return res.status(404).json({ error: "Resource not found." });
 
   const progress = db.data!.readingProgress.find((p) => p.bookId === book.id && p.candidateId === user.id) ?? null;
@@ -6323,7 +6943,7 @@ app.get("/api/books/:id", requireAuth, (req, res) => {
 
 app.post("/api/books/:id/view", requireAuth, async (req, res) => {
   const user = currentUser(req)!;
-  const book = db.data!.books.find((b) => b.id === req.params.id);
+  const book = db.data!.books.find((b) => b.id === req.params.id && b.tenantId === user.tenantId);
   if (!book || (user.role === "candidate" && !studentCanSeeBook(book, user))) return res.status(404).json({ error: "Resource not found." });
   book.viewCount = (book.viewCount ?? 0) + 1;
   await db.upsert("books", book);
@@ -6332,7 +6952,7 @@ app.post("/api/books/:id/view", requireAuth, async (req, res) => {
 
 app.get("/api/books/:id/download", requireAuth, async (req, res) => {
   const user = currentUser(req)!;
-  const book = db.data!.books.find((b) => b.id === req.params.id);
+  const book = db.data!.books.find((b) => b.id === req.params.id && b.tenantId === user.tenantId);
   if (!book || (user.role === "candidate" && !studentCanSeeBook(book, user))) return res.status(404).json({ error: "Resource not found." });
   if (!book.fileData) return res.status(404).json({ error: "This resource has no downloadable file." });
   if (user.role === "candidate") {
@@ -6357,7 +6977,7 @@ app.get("/api/books/:id/download", requireAuth, async (req, res) => {
   }
 
   if (user.role === "candidate") {
-    const log: ResourceDownloadLog = { id: nanoid(10), bookId: book.id, candidateId: user.id, at: now() };
+    const log: ResourceDownloadLog = { id: nanoid(10), tenantId: user.tenantId, bookId: book.id, candidateId: user.id, at: now() };
     db.data!.resourceDownloadLogs.push(log);
     await db.upsert("resourceDownloadLogs", log);
   }
@@ -6375,7 +6995,7 @@ app.get("/api/books/:id/download", requireAuth, async (req, res) => {
  *  not relevant to viewing inside the app. */
 app.get("/api/books/:id/read", requireAuth, (req, res) => {
   const user = currentUser(req)!;
-  const book = db.data!.books.find((b) => b.id === req.params.id);
+  const book = db.data!.books.find((b) => b.id === req.params.id && b.tenantId === user.tenantId);
   if (!book || (user.role === "candidate" && !studentCanSeeBook(book, user))) return res.status(404).json({ error: "Resource not found." });
   if (!book.fileData) return res.status(404).json({ error: "This resource has no readable file." });
   if (user.role === "candidate" && !book.canPreview) return res.status(403).json({ error: "Previewing this resource isn't allowed." });
@@ -6390,10 +7010,10 @@ app.get("/api/books/:id/read", requireAuth, (req, res) => {
 
 app.post("/api/books/:id/bookmark", requireAuth, async (req, res) => {
   const user = currentUser(req)!;
-  const book = db.data!.books.find((b) => b.id === req.params.id);
+  const book = db.data!.books.find((b) => b.id === req.params.id && b.tenantId === user.tenantId);
   if (!book || (user.role === "candidate" && !studentCanSeeBook(book, user))) return res.status(404).json({ error: "Resource not found." });
   if (!db.data!.resourceBookmarks.some((bm) => bm.bookId === book.id && bm.candidateId === user.id)) {
-    const bookmark: ResourceBookmark = { id: nanoid(10), bookId: book.id, candidateId: user.id, createdAt: now() };
+    const bookmark: ResourceBookmark = { id: nanoid(10), tenantId: user.tenantId, bookId: book.id, candidateId: user.id, createdAt: now() };
     db.data!.resourceBookmarks.push(bookmark);
     await db.upsert("resourceBookmarks", bookmark);
   }
@@ -6402,7 +7022,7 @@ app.post("/api/books/:id/bookmark", requireAuth, async (req, res) => {
 
 app.delete("/api/books/:id/bookmark", requireAuth, async (req, res) => {
   const user = currentUser(req)!;
-  const book = db.data!.books.find((b) => b.id === req.params.id);
+  const book = db.data!.books.find((b) => b.id === req.params.id && b.tenantId === user.tenantId);
   if (!book || (user.role === "candidate" && !studentCanSeeBook(book, user))) return res.status(404).json({ error: "Resource not found." });
   const bookmark = db.data!.resourceBookmarks.find((b) => b.bookId === req.params.id && b.candidateId === user.id);
   if (bookmark) {
@@ -6414,7 +7034,7 @@ app.delete("/api/books/:id/bookmark", requireAuth, async (req, res) => {
 
 app.post("/api/books/:id/rating", requireAuth, async (req, res) => {
   const user = currentUser(req)!;
-  const book = db.data!.books.find((b) => b.id === req.params.id);
+  const book = db.data!.books.find((b) => b.id === req.params.id && b.tenantId === user.tenantId);
   if (!book || (user.role === "candidate" && !studentCanSeeBook(book, user))) return res.status(404).json({ error: "Resource not found." });
   const score = Math.round(Number(req.body?.score));
   if (!Number.isFinite(score) || score < 1 || score > 5) return res.status(400).json({ error: "score must be between 1 and 5." });
@@ -6424,7 +7044,7 @@ app.post("/api/books/:id/rating", requireAuth, async (req, res) => {
   if (rating) {
     rating.score = score; rating.comment = comment;
   } else {
-    rating = { id: nanoid(10), bookId: book.id, candidateId: user.id, score, comment, createdAt: now() };
+    rating = { id: nanoid(10), tenantId: user.tenantId, bookId: book.id, candidateId: user.id, score, comment, createdAt: now() };
     db.data!.resourceRatings.push(rating);
   }
   await db.upsert("resourceRatings", rating);
@@ -6433,7 +7053,7 @@ app.post("/api/books/:id/rating", requireAuth, async (req, res) => {
 
 app.post("/api/books/:id/progress", requireAuth, async (req, res) => {
   const user = currentUser(req)!;
-  const book = db.data!.books.find((b) => b.id === req.params.id);
+  const book = db.data!.books.find((b) => b.id === req.params.id && b.tenantId === user.tenantId);
   if (!book || (user.role === "candidate" && !studentCanSeeBook(book, user))) return res.status(404).json({ error: "Book not found." });
   const currentPage = Math.max(0, Math.min(book.totalPages, Math.round(Number(req.body?.currentPage))));
   if (!Number.isFinite(currentPage)) return res.status(400).json({ error: "currentPage must be a number." });
@@ -6442,7 +7062,7 @@ app.post("/api/books/:id/progress", requireAuth, async (req, res) => {
     progress.currentPage = currentPage;
     progress.updatedAt = now();
   } else {
-    progress = { id: nanoid(10), bookId: book.id, candidateId: user.id, currentPage, updatedAt: now() };
+    progress = { id: nanoid(10), tenantId: user.tenantId, bookId: book.id, candidateId: user.id, currentPage, updatedAt: now() };
     db.data!.readingProgress.push(progress);
   }
   await db.upsert("readingProgress", progress);
@@ -6450,19 +7070,20 @@ app.post("/api/books/:id/progress", requireAuth, async (req, res) => {
 });
 
 app.post("/api/admin/classes/:id/members", requirePermission("students.manage"), async (req, res) => {
-  const cls = db.data!.classes.find((c) => c.id === req.params.id);
+  const tenantId = currentTenantId(req);
+  const cls = db.data!.classes.find((c) => c.id === req.params.id && c.tenantId === tenantId);
   if (!cls) return res.status(404).json({ error: "Class not found." });
   const ids: string[] = Array.isArray(req.body?.candidateIds) ? req.body.candidateIds : [];
   let enrolled = 0;
   for (const id of ids) {
-    if (db.data!.users.some((u) => u.id === id && u.role === "candidate") && !cls.memberIds.includes(id)) {
+    if (db.data!.users.some((u) => u.id === id && u.tenantId === tenantId && u.role === "candidate") && !cls.memberIds.includes(id)) {
       cls.memberIds.push(id);
       // Auto-register for every exam this class already has assigned
       for (const assignment of cls.assignments) {
         const alreadyReg = db.data!.registrations.some((r) => r.examId === assignment.examId && r.candidateId === id);
         if (!alreadyReg) {
           db.data!.registrations.push({
-            id: nanoid(10), examId: assignment.examId, candidateId: id,
+            id: nanoid(10), tenantId: tenantId ?? undefined, examId: assignment.examId, candidateId: id,
             status: "registered", approval: "confirmed",
             scheduledStart: assignment.scheduledStart, systemCheckPassed: false, createdAt: now(),
           });
@@ -6476,7 +7097,7 @@ app.post("/api/admin/classes/:id/members", requirePermission("students.manage"),
 });
 
 app.delete("/api/admin/classes/:id/members/:candidateId", requirePermission("students.manage"), async (req, res) => {
-  const cls = db.data!.classes.find((c) => c.id === req.params.id);
+  const cls = db.data!.classes.find((c) => c.id === req.params.id && c.tenantId === currentTenantId(req));
   if (!cls) return res.status(404).json({ error: "Class not found." });
   cls.memberIds = cls.memberIds.filter((m) => m !== req.params.candidateId);
   await db.upsert("classes", cls);
@@ -6490,7 +7111,8 @@ app.delete("/api/admin/classes/:id/members/:candidateId", requirePermission("stu
 // Removing only ever edits this class's memberIds; it never deletes the
 // underlying account or touches any other class/registration.
 app.post("/api/admin/classes/:id/import", requirePermission("students.manage"), async (req, res) => {
-  const cls = db.data!.classes.find((c) => c.id === req.params.id);
+  const tenantId = currentTenantId(req);
+  const cls = db.data!.classes.find((c) => c.id === req.params.id && c.tenantId === tenantId);
   if (!cls) return res.status(404).json({ error: "Class not found." });
   type Row = { name?: string; email?: string; studentClass?: string; gender?: string; age?: unknown; phone?: string };
   const rows: Row[] = Array.isArray(req.body?.rows) ? req.body.rows : [];
@@ -6509,8 +7131,13 @@ app.post("/api/admin/classes/:id/import", requirePermission("students.manage"), 
     if (seenEmails.has(emailLower)) { skipped.push({ email, reason: "Duplicate in file" }); continue; }
     seenEmails.add(emailLower);
 
+    // Emails are unique platform-wide (see the tenant-retrofit login design),
+    // so a match belonging to a DIFFERENT tenant is a real account that
+    // exists — it must never be silently pulled into this tenant's class or
+    // exams, and a new account can't be created with that same email either.
     const existingUser = db.data!.users.find((u) => u.email.toLowerCase() === emailLower);
     if (existingUser) {
+      if (existingUser.tenantId !== tenantId) { skipped.push({ email, reason: "Email already registered to another account" }); continue; }
       if (existingUser.role !== "candidate") { skipped.push({ email, reason: "Not a student account" }); continue; }
       matchedIds.push(existingUser.id);
       continue;
@@ -6519,7 +7146,7 @@ app.post("/api/admin/classes/:id/import", requirePermission("students.manage"), 
     const tempPassword = "dti-" + nanoid(6);
     const ageNum = Number(row?.age);
     const user: User = {
-      id: nanoid(10), email, passwordHash: await bcrypt.hash(tempPassword, BCRYPT_COST), name, role: "candidate",
+      id: nanoid(10), tenantId: tenantId ?? undefined, email, passwordHash: await bcrypt.hash(tempPassword, BCRYPT_COST), name, role: "candidate",
       gender: typeof row?.gender === "string" && row.gender.trim() ? row.gender.trim() : undefined,
       age: row?.age !== undefined && row?.age !== "" && Number.isFinite(ageNum) ? ageNum : undefined,
       studentClass: typeof row?.studentClass === "string" && row.studentClass.trim() ? row.studentClass.trim() : (cls.name || undefined),
@@ -6548,7 +7175,7 @@ app.post("/api/admin/classes/:id/import", requirePermission("students.manage"), 
       const alreadyReg = db.data!.registrations.some((r) => r.examId === assignment.examId && r.candidateId === id);
       if (!alreadyReg) {
         db.data!.registrations.push({
-          id: nanoid(10), examId: assignment.examId, candidateId: id,
+          id: nanoid(10), tenantId: tenantId ?? undefined, examId: assignment.examId, candidateId: id,
           status: "registered", approval: "confirmed",
           scheduledStart: assignment.scheduledStart, systemCheckPassed: false, createdAt: now(),
         });
@@ -6584,9 +7211,10 @@ app.post("/api/admin/classes/:id/import", requirePermission("students.manage"), 
 
 // Assign an exam to the whole class at a scheduled time → confirmed registrations for every member.
 app.post("/api/admin/classes/:id/assign-exam", requirePermission("students.manage"), async (req, res) => {
-  const cls = db.data!.classes.find((c) => c.id === req.params.id);
+  const tenantId = currentTenantId(req);
+  const cls = db.data!.classes.find((c) => c.id === req.params.id && c.tenantId === tenantId);
   if (!cls) return res.status(404).json({ error: "Class not found." });
-  const exam = db.data!.exams.find((e) => e.id === req.body?.examId);
+  const exam = db.data!.exams.find((e) => e.id === req.body?.examId && e.tenantId === tenantId);
   if (!exam) return res.status(400).json({ error: "Exam not found." });
   if (cls.memberIds.length === 0) return res.status(400).json({ error: "Add students to the class first." });
   const scheduledStart = req.body?.scheduledStart ? new Date(req.body.scheduledStart).toISOString() : null;
@@ -6594,7 +7222,7 @@ app.post("/api/admin/classes/:id/assign-exam", requirePermission("students.manag
   for (const cid of cls.memberIds) {
     let reg = db.data!.registrations.find((r) => r.examId === exam.id && r.candidateId === cid);
     if (!reg) {
-      reg = { id: nanoid(10), examId: exam.id, candidateId: cid, status: "registered", approval: "confirmed", scheduledStart, systemCheckPassed: false, createdAt: now() };
+      reg = { id: nanoid(10), tenantId: tenantId ?? undefined, examId: exam.id, candidateId: cid, status: "registered", approval: "confirmed", scheduledStart, systemCheckPassed: false, createdAt: now() };
       db.data!.registrations.push(reg);
     } else {
       reg.approval = "confirmed";
@@ -6618,9 +7246,10 @@ const STAFF_ROLES = ["admin", "facilitator", "proctor"];
 // (zero ambiguity), and the internal safety rails — can't grant yourself
 // admin, can't demote/remove the last admin — live inside each handler and
 // are untouched by this change.
-app.get("/api/admin/team", requirePermission("roles.team_manage"), (_req, res) => {
+app.get("/api/admin/team", requirePermission("roles.team_manage"), (req, res) => {
+  const tenantId = currentTenantId(req);
   const team = db.data!.users
-    .filter((u) => u.role !== "candidate")
+    .filter((u) => u.role !== "candidate" && u.tenantId === tenantId)
     .map((u) => ({ id: u.id, name: u.name, email: u.email, role: u.role, customRoleId: u.customRoleId ?? null, roleExpiresAt: u.roleExpiresAt ?? null }))
     .sort((a, b) => a.name.localeCompare(b.name));
   res.json({ team });
@@ -6628,6 +7257,7 @@ app.get("/api/admin/team", requirePermission("roles.team_manage"), (_req, res) =
 
 app.post("/api/admin/team", requirePermission("roles.team_manage"), validate(teamCreateSchema), async (req, res) => {
   const { name, email, password, role } = req.body as { name: string; email: string; password: string; role: "admin" | "facilitator" | "proctor" };
+  const tenantId = currentTenantId(req);
   // Granting the admin role stays an actual-admin-only action: roles.team_manage
   // can now be held by a non-admin via a custom role (unlike before this
   // endpoint was requireRole("admin") alone), and that must not become a path
@@ -6638,7 +7268,7 @@ app.post("/api/admin/team", requirePermission("roles.team_manage"), validate(tea
   if (db.data!.users.some((u) => u.email.toLowerCase() === String(email).trim().toLowerCase())) {
     return res.status(409).json({ error: "An account with that email already exists." });
   }
-  const user = { id: nanoid(10), email: String(email).trim(), passwordHash: await bcrypt.hash(String(password), BCRYPT_COST), name: String(name).trim(), role };
+  const user = { id: nanoid(10), tenantId: tenantId ?? undefined, email: String(email).trim(), passwordHash: await bcrypt.hash(String(password), BCRYPT_COST), name: String(name).trim(), role };
   db.data!.users.push(user);
   await db.upsert("users", user);
   await recordAudit(req, "team.invited", `${user.name} <${user.email}> · ${role}`);
@@ -6647,7 +7277,8 @@ app.post("/api/admin/team", requirePermission("roles.team_manage"), validate(tea
 
 app.patch("/api/admin/team/:id", requirePermission("roles.team_manage"), async (req, res) => {
   const actor = currentUser(req)!;
-  const u = db.data!.users.find((x) => x.id === req.params.id && x.role !== "candidate");
+  const tenantId = currentTenantId(req);
+  const u = db.data!.users.find((x) => x.id === req.params.id && x.tenantId === tenantId && x.role !== "candidate");
   if (!u) return res.status(404).json({ error: "Staff member not found." });
   const role = req.body?.role;
   if (!STAFF_ROLES.includes(role)) return res.status(400).json({ error: "Invalid role." });
@@ -6657,7 +7288,7 @@ app.patch("/api/admin/team/:id", requirePermission("roles.team_manage"), async (
   if (role === "admin" && actor.role !== "admin") {
     return res.status(403).json({ error: "Only administrators can grant the admin role." });
   }
-  if (u.role === "admin" && role !== "admin" && db.data!.users.filter((x) => x.role === "admin").length <= 1) {
+  if (u.role === "admin" && role !== "admin" && db.data!.users.filter((x) => x.role === "admin" && x.tenantId === tenantId).length <= 1) {
     return res.status(400).json({ error: "There must be at least one admin." });
   }
   u.role = role;
@@ -6668,10 +7299,11 @@ app.patch("/api/admin/team/:id", requirePermission("roles.team_manage"), async (
 
 app.delete("/api/admin/team/:id", requirePermission("roles.team_manage"), async (req, res) => {
   const actor = currentUser(req)!;
-  const u = db.data!.users.find((x) => x.id === req.params.id && x.role !== "candidate");
+  const tenantId = currentTenantId(req);
+  const u = db.data!.users.find((x) => x.id === req.params.id && x.tenantId === tenantId && x.role !== "candidate");
   if (!u) return res.status(404).json({ error: "Staff member not found." });
   if (u.id === actor.id) return res.status(400).json({ error: "You can't remove your own account." });
-  if (u.role === "admin" && db.data!.users.filter((x) => x.role === "admin").length <= 1) {
+  if (u.role === "admin" && db.data!.users.filter((x) => x.role === "admin" && x.tenantId === tenantId).length <= 1) {
     return res.status(400).json({ error: "There must be at least one admin." });
   }
   db.data!.users = db.data!.users.filter((x) => x.id !== u.id);
@@ -6692,7 +7324,7 @@ function badPermissionKeys(keys: string[]): string[] {
 }
 
 /** True if assigning `parentId` as roleId's parent would create (or extend) a cycle. */
-function roleParentCycles(roleId: string, parentId: string | null | undefined): boolean {
+function roleParentCycles(roleId: string, parentId: string | null | undefined, tenantId: string | undefined): boolean {
   if (!parentId) return false;
   let cur: string | null | undefined = parentId;
   const seen = new Set<string>();
@@ -6701,7 +7333,7 @@ function roleParentCycles(roleId: string, parentId: string | null | undefined): 
     if (seen.has(cur)) return true;
     seen.add(cur);
     if (parseSystemParentId(cur)) return false; // system roles terminate the chain
-    cur = db.data!.customRoles.find((r) => r.id === cur)?.parentRoleId ?? null;
+    cur = db.data!.customRoles.find((r) => r.id === cur && r.tenantId === tenantId)?.parentRoleId ?? null;
   }
   return false;
 }
@@ -6710,12 +7342,14 @@ app.get("/api/admin/permissions", requirePermission("roles.view"), (_req, res) =
   res.json({ permissions: PERMISSIONS, systemRoles: SYSTEM_ROLE_PERMISSIONS });
 });
 
-app.get("/api/admin/roles", requirePermission("roles.view"), (_req, res) => {
+app.get("/api/admin/roles", requirePermission("roles.view"), (req, res) => {
+  const tenantId = currentTenantId(req);
   const memberCounts = new Map<string, number>();
   for (const u of db.data!.users) {
-    if (u.customRoleId) memberCounts.set(u.customRoleId, (memberCounts.get(u.customRoleId) ?? 0) + 1);
+    if (u.tenantId === tenantId && u.customRoleId) memberCounts.set(u.customRoleId, (memberCounts.get(u.customRoleId) ?? 0) + 1);
   }
   const roles = db.data!.customRoles
+    .filter((r) => r.tenantId === tenantId)
     .map((r) => ({ ...r, memberCount: memberCounts.get(r.id) ?? 0 }))
     .sort((a, b) => a.name.localeCompare(b.name));
   res.json({ roles });
@@ -6725,21 +7359,22 @@ app.post("/api/admin/roles", requirePermission("roles.manage"), validate(customR
   const { name, description, permissions, parentRoleId, scope } = req.body as {
     name: string; description?: string; permissions: string[]; parentRoleId?: string | null; scope?: CustomRole["scope"];
   };
+  const tenantId = currentTenantId(req);
   const bad = badPermissionKeys(permissions);
   if (bad.length) return res.status(400).json({ error: `Unknown permission key(s): ${bad.join(", ")}` });
-  if (parentRoleId && !parseSystemParentId(parentRoleId) && !db.data!.customRoles.some((r) => r.id === parentRoleId)) {
+  if (parentRoleId && !parseSystemParentId(parentRoleId) && !db.data!.customRoles.some((r) => r.id === parentRoleId && r.tenantId === tenantId)) {
     return res.status(400).json({ error: "Parent role not found." });
   }
-  if (db.data!.customRoles.some((r) => r.name.toLowerCase() === name.trim().toLowerCase())) {
+  if (db.data!.customRoles.some((r) => r.tenantId === tenantId && r.name.toLowerCase() === name.trim().toLowerCase())) {
     return res.status(409).json({ error: "A role with that name already exists." });
   }
   const actor = currentUser(req)!;
   // Ceiling check — see permissionOverreach() in auth.ts.
-  const grantedPerms = [...permissions, ...(parentRoleId ? resolveCustomRolePermissions(parentRoleId) : [])] as PermissionKey[];
+  const grantedPerms = [...permissions, ...(parentRoleId ? resolveCustomRolePermissions(parentRoleId, tenantId ?? undefined) : [])] as PermissionKey[];
   const overreach = permissionOverreach(actor, grantedPerms);
   if (overreach.length) return res.status(403).json({ error: `You can't grant permission(s) you don't have: ${overreach.join(", ")}` });
   const role: CustomRole = {
-    id: nanoid(10), name: name.trim(), description: description?.trim() || undefined,
+    id: nanoid(10), tenantId: tenantId ?? undefined, name: name.trim(), description: description?.trim() || undefined,
     permissions: Array.from(new Set(permissions)), parentRoleId: parentRoleId || null, scope: scope ?? null,
     createdAt: now(), updatedAt: now(), createdBy: actor.name,
   };
@@ -6750,7 +7385,8 @@ app.post("/api/admin/roles", requirePermission("roles.manage"), validate(customR
 });
 
 app.patch("/api/admin/roles/:id", requirePermission("roles.manage"), validate(customRoleUpdateSchema), async (req, res) => {
-  const role = db.data!.customRoles.find((r) => r.id === req.params.id);
+  const tenantId = currentTenantId(req);
+  const role = db.data!.customRoles.find((r) => r.id === req.params.id && r.tenantId === tenantId);
   if (!role) return res.status(404).json({ error: "Role not found." });
   const { name, description, permissions, parentRoleId, scope } = req.body as Partial<{
     name: string; description?: string; permissions: string[]; parentRoleId?: string | null; scope?: CustomRole["scope"];
@@ -6760,12 +7396,12 @@ app.patch("/api/admin/roles/:id", requirePermission("roles.manage"), validate(cu
     if (bad.length) return res.status(400).json({ error: `Unknown permission key(s): ${bad.join(", ")}` });
   }
   if (parentRoleId) {
-    if (!parseSystemParentId(parentRoleId) && !db.data!.customRoles.some((r) => r.id === parentRoleId)) {
+    if (!parseSystemParentId(parentRoleId) && !db.data!.customRoles.some((r) => r.id === parentRoleId && r.tenantId === tenantId)) {
       return res.status(400).json({ error: "Parent role not found." });
     }
-    if (roleParentCycles(role.id, parentRoleId)) return res.status(400).json({ error: "That would create a circular inheritance chain." });
+    if (roleParentCycles(role.id, parentRoleId, tenantId ?? undefined)) return res.status(400).json({ error: "That would create a circular inheritance chain." });
   }
-  if (name && db.data!.customRoles.some((r) => r.id !== role.id && r.name.toLowerCase() === name.trim().toLowerCase())) {
+  if (name && db.data!.customRoles.some((r) => r.id !== role.id && r.tenantId === tenantId && r.name.toLowerCase() === name.trim().toLowerCase())) {
     return res.status(409).json({ error: "A role with that name already exists." });
   }
   // Ceiling check against the resulting (post-update) permission set — see
@@ -6774,7 +7410,7 @@ app.patch("/api/admin/roles/:id", requirePermission("roles.manage"), validate(cu
     const actor = currentUser(req)!;
     const effectivePerms = (permissions !== undefined ? permissions : role.permissions) as PermissionKey[];
     const effectiveParent = parentRoleId !== undefined ? parentRoleId : role.parentRoleId;
-    const grantedPerms = [...effectivePerms, ...(effectiveParent ? resolveCustomRolePermissions(effectiveParent) : [])];
+    const grantedPerms = [...effectivePerms, ...(effectiveParent ? resolveCustomRolePermissions(effectiveParent, tenantId ?? undefined) : [])];
     const overreach = permissionOverreach(actor, grantedPerms);
     if (overreach.length) return res.status(403).json({ error: `You can't grant permission(s) you don't have: ${overreach.join(", ")}` });
   }
@@ -6793,14 +7429,15 @@ app.patch("/api/admin/roles/:id", requirePermission("roles.manage"), validate(cu
 });
 
 app.post("/api/admin/roles/:id/clone", requirePermission("roles.manage"), async (req, res) => {
-  const src = db.data!.customRoles.find((r) => r.id === req.params.id);
+  const tenantId = currentTenantId(req);
+  const src = db.data!.customRoles.find((r) => r.id === req.params.id && r.tenantId === tenantId);
   if (!src) return res.status(404).json({ error: "Role not found." });
   const actor = currentUser(req)!;
   let name = `${src.name} (copy)`;
   let n = 2;
-  while (db.data!.customRoles.some((r) => r.name.toLowerCase() === name.toLowerCase())) { name = `${src.name} (copy ${n})`; n++; }
+  while (db.data!.customRoles.some((r) => r.tenantId === tenantId && r.name.toLowerCase() === name.toLowerCase())) { name = `${src.name} (copy ${n})`; n++; }
   const role: CustomRole = {
-    id: nanoid(10), name, description: src.description, permissions: [...src.permissions],
+    id: nanoid(10), tenantId: tenantId ?? undefined, name, description: src.description, permissions: [...src.permissions],
     parentRoleId: src.parentRoleId ?? null, scope: src.scope ?? null, createdAt: now(), updatedAt: now(), createdBy: actor.name,
   };
   db.data!.customRoles.push(role);
@@ -6810,11 +7447,12 @@ app.post("/api/admin/roles/:id/clone", requirePermission("roles.manage"), async 
 });
 
 app.delete("/api/admin/roles/:id", requirePermission("roles.manage"), async (req, res) => {
-  const role = db.data!.customRoles.find((r) => r.id === req.params.id);
+  const tenantId = currentTenantId(req);
+  const role = db.data!.customRoles.find((r) => r.id === req.params.id && r.tenantId === tenantId);
   if (!role) return res.status(404).json({ error: "Role not found." });
-  const members = db.data!.users.filter((u) => u.customRoleId === role.id);
+  const members = db.data!.users.filter((u) => u.tenantId === tenantId && u.customRoleId === role.id);
   if (members.length) return res.status(400).json({ error: `${members.length} team member(s) still have this role assigned. Reassign them first.` });
-  if (db.data!.customRoles.some((r) => r.parentRoleId === role.id)) {
+  if (db.data!.customRoles.some((r) => r.tenantId === tenantId && r.parentRoleId === role.id)) {
     return res.status(400).json({ error: "Another role inherits from this one. Update that role's parent first." });
   }
   db.data!.customRoles = db.data!.customRoles.filter((r) => r.id !== role.id);
@@ -6824,10 +7462,11 @@ app.delete("/api/admin/roles/:id", requirePermission("roles.manage"), async (req
 });
 
 app.patch("/api/admin/team/:id/custom-role", requirePermission("roles.team_manage"), validate(roleAssignSchema), async (req, res) => {
-  const u = db.data!.users.find((x) => x.id === req.params.id && x.role !== "candidate");
+  const tenantId = currentTenantId(req);
+  const u = db.data!.users.find((x) => x.id === req.params.id && x.tenantId === tenantId && x.role !== "candidate");
   if (!u) return res.status(404).json({ error: "Staff member not found." });
   const { customRoleId, expiresAt } = req.body as { customRoleId: string | null; expiresAt?: string | null };
-  if (customRoleId && !db.data!.customRoles.some((r) => r.id === customRoleId)) {
+  if (customRoleId && !db.data!.customRoles.some((r) => r.id === customRoleId && r.tenantId === tenantId)) {
     return res.status(400).json({ error: "Role not found." });
   }
   // Ceiling check: assigning a role that grants more than the actor themselves
@@ -6836,13 +7475,13 @@ app.patch("/api/admin/team/:id/custom-role", requirePermission("roles.team_manag
   // otherwise allows with no self-assignment guard at all. See auth.ts.
   if (customRoleId) {
     const actor = currentUser(req)!;
-    const overreach = permissionOverreach(actor, resolveCustomRolePermissions(customRoleId));
+    const overreach = permissionOverreach(actor, resolveCustomRolePermissions(customRoleId, tenantId ?? undefined));
     if (overreach.length) return res.status(403).json({ error: "You can't assign a role that grants permissions you don't have." });
   }
   u.customRoleId = customRoleId || null;
   u.roleExpiresAt = customRoleId ? (expiresAt || null) : null;
   await db.upsert("users", u);
-  const roleName = customRoleId ? db.data!.customRoles.find((r) => r.id === customRoleId)?.name : null;
+  const roleName = customRoleId ? db.data!.customRoles.find((r) => r.id === customRoleId && r.tenantId === tenantId)?.name : null;
   await recordAudit(
     req, "team.custom_role_assigned",
     customRoleId

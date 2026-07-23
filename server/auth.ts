@@ -56,7 +56,7 @@ export function verifyPasswordSetupToken(token: string): string | null {
 }
 
 export function issueSession(res: Response, user: User) {
-  const token = jwt.sign({ sub: user.id, role: user.role, tv: user.tokenVersion ?? 0 }, JWT_SECRET, { expiresIn: "7d" });
+  const token = jwt.sign({ sub: user.id, role: user.role, tv: user.tokenVersion ?? 0, tenantId: user.tenantId }, JWT_SECRET, { expiresIn: "7d" });
   res.cookie(COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
@@ -73,12 +73,21 @@ export function currentUser(req: Request): User | null {
   const token = req.cookies?.[COOKIE];
   if (!token) return null;
   try {
-    const payload = jwt.verify(token, JWT_SECRET) as { sub: string; tv?: number };
+    const payload = jwt.verify(token, JWT_SECRET) as { sub: string; tv?: number; tenantId?: string };
     const user = db.data!.users.find((u) => u.id === payload.sub);
     if (!user) return null;
     // Session revocation: the token is void once the user's tokenVersion has moved
     // past the value baked into it (logout / password change / admin reset).
     if ((payload.tv ?? 0) !== (user.tokenVersion ?? 0)) return null;
+    // Defense-in-depth: a token whose tenantId claim no longer matches the
+    // fresh DB row's tenantId is treated as void, the same way a stale tv is —
+    // covers the case of a user somehow moved between tenants mid-session.
+    if (payload.tenantId !== user.tenantId) return null;
+    // A tenant suspended after this session was issued loses access immediately
+    // on its very next request — checked live against the tenant's current
+    // status rather than only at login, so suspension doesn't wait for every
+    // affected user's token to expire or need its own tokenVersion bump.
+    if (user.tenantId && db.data!.tenants.find((t) => t.id === user.tenantId)?.status === "suspended") return null;
     return user;
   } catch {
     return null;
@@ -132,14 +141,14 @@ function isExpired(iso: string | null | undefined): boolean {
  *  but this keeps resolution safe even if bad data ever slips in). Exported so
  *  role-management endpoints can ceiling-check a role's grants against the
  *  acting user's own permissions before creating/assigning it (see index.ts). */
-export function resolveCustomRolePermissions(roleId: string, seen: Set<string> = new Set()): PermissionKey[] {
+export function resolveCustomRolePermissions(roleId: string, tenantId: string | undefined, seen: Set<string> = new Set()): PermissionKey[] {
   if (seen.has(roleId)) return [];
   seen.add(roleId);
   const sysParent = parseSystemParentId(roleId);
   if (sysParent) return SYSTEM_ROLE_PERMISSIONS[sysParent];
-  const role = db.data!.customRoles.find((r) => r.id === roleId);
+  const role = db.data!.customRoles.find((r) => r.id === roleId && r.tenantId === tenantId);
   if (!role) return [];
-  const inherited = role.parentRoleId ? resolveCustomRolePermissions(role.parentRoleId, seen) : [];
+  const inherited = role.parentRoleId ? resolveCustomRolePermissions(role.parentRoleId, tenantId, seen) : [];
   return Array.from(new Set([...inherited, ...role.permissions])) as PermissionKey[];
 }
 
@@ -148,7 +157,7 @@ export function resolveCustomRolePermissions(roleId: string, seen: Set<string> =
 export function resolvePermissions(user: User): PermissionKey[] {
   const base = isStaffRole(user.role) ? SYSTEM_ROLE_PERMISSIONS[user.role] : [];
   if (user.customRoleId && !isExpired(user.roleExpiresAt)) {
-    return Array.from(new Set([...base, ...resolveCustomRolePermissions(user.customRoleId)]));
+    return Array.from(new Set([...base, ...resolveCustomRolePermissions(user.customRoleId, user.tenantId)]));
   }
   return base;
 }

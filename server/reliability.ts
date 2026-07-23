@@ -23,9 +23,10 @@ import { RELIABILITY_SUBSYSTEMS } from "../shared/types.ts";
 
 // Mirrors backup.ts's own precedent of duplicating a tiny settings/dir helper
 // rather than importing it from server/index.ts, which would be circular
-// (index.ts is what imports this module).
+// (index.ts is what imports this module). Not yet tenant-aware — safe today
+// because exactly one tenant exists; see server/tenant.ts's getOrgSettings.
 function localGetSettings(): OrgSettings {
-  return db.data!.settings.find((s) => s.id === "org")!;
+  return db.data!.settings.find((s) => s.id === db.data!.tenants[0].id)!;
 }
 
 const SUBSYSTEM_LABELS: Record<ReliabilitySubsystemKey, string> = {
@@ -199,7 +200,7 @@ function mkSample(subsystem: ReliabilitySubsystemKey, at: string, status: Reliab
 }
 
 export interface ReliabilityDeps {
-  dispatchWebhook: (event: WebhookEvent, data: Record<string, unknown>) => void;
+  dispatchWebhook: (tenantId: string | null, event: WebhookEvent, data: Record<string, unknown>) => void;
   sendMail: (to: string, subject: string, text: string, html?: string) => Promise<unknown>;
   sendSms: (to: string, body: string) => Promise<unknown>;
   /** The platform's own real overdue-deadline calculation (schedule + duration
@@ -315,7 +316,7 @@ export async function computeExamImpact(subsystem: ReliabilitySubsystemKey, wind
 }
 
 async function notifyIncident(incident: ReliabilityIncident, kind: "opened" | "resolved", deps: ReliabilityDeps, settings: OrgSettings) {
-  deps.dispatchWebhook(kind === "opened" ? "incident.opened" : "incident.resolved", {
+  deps.dispatchWebhook(settings.id, kind === "opened" ? "incident.opened" : "incident.resolved", {
     incidentId: incident.id, subsystem: incident.subsystem, severity: incident.severity,
     status: incident.status, title: incident.title, openedAt: incident.openedAt, resolvedAt: incident.resolvedAt,
     impact: incident.impact,

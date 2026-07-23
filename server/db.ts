@@ -14,16 +14,27 @@ import type {
   Faculty, Department, Program, Campus, AcademicYear, ClassGroup, RegradeRequest, Book, ReadingProgress,
   ResourceVersion, ResourceBookmark, ResourceRating, ResourceDownloadLog, GeofenceLog, CustomRole,
   ReliabilityIncident, ReliabilitySample, ReliabilityDailyRollup, ReliabilitySubsystemKey, MediaAsset, SuperAdmin,
+  PlatformMaintenance, EmailTemplate, SupportTicket, Tenant,
 } from "../shared/types.ts";
 import { DEFAULT_LOCKDOWN, DEFAULT_LEARNING_STRUCTURE } from "../shared/types.ts";
 
 export interface Schema {
+  // The schools/organizations on this platform. Managed exclusively by Super
+  // Admins — see shared/types.ts's Tenant doc comment for the naming
+  // rationale and the tenant-retrofit plan for the isolation model this
+  // collection is the root of.
+  tenants: Tenant[];
   users: User[];
   // Platform-operator accounts for the Super Admin console — a fully separate
   // identity from `users` (see shared/types.ts's SuperAdmin doc comment and
   // server/superAdminAuth.ts). Its own audit trail lives off-mirror as
   // superAdminAuditStore, mirroring auditStore below but never sharing a table.
   superAdmins: SuperAdmin[];
+  // Single row (id: "platform"), read on every /api/* request by the
+  // maintenance gate middleware — see PlatformMaintenance's doc comment.
+  maintenance: PlatformMaintenance[];
+  emailTemplates: EmailTemplate[];
+  supportTickets: SupportTicket[];
   exams: Exam[];
   questions: Question[];
   registrations: Registration[];
@@ -66,7 +77,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const gunzipAsync = promisify(gunzip);
 
 const defaultData: Schema = {
-  users: [], superAdmins: [], exams: [], questions: [], registrations: [],
+  tenants: [],
+  users: [], superAdmins: [], maintenance: [], emailTemplates: [], supportTickets: [], exams: [], questions: [], registrations: [],
   attempts: [], certificates: [], announcements: [],
   settings: [],
   faculties: [], departments: [], programs: [], campuses: [], academicYears: [], classes: [], regradeRequests: [],
@@ -81,8 +93,12 @@ const defaultData: Schema = {
 // real, durable, transactional database underneath while the app's data interface
 // stays stable.
 const TABLES: { key: keyof Schema; table: string; idField: string }[] = [
+  { key: "tenants", table: "tenants", idField: "id" },
   { key: "users", table: "users", idField: "id" },
   { key: "superAdmins", table: "super_admins", idField: "id" },
+  { key: "maintenance", table: "platform_maintenance", idField: "id" },
+  { key: "emailTemplates", table: "email_templates", idField: "id" },
+  { key: "supportTickets", table: "support_tickets", idField: "id" },
   { key: "exams", table: "exams", idField: "id" },
   { key: "questions", table: "questions", idField: "id" },
   { key: "registrations", table: "registrations", idField: "id" },
@@ -128,7 +144,7 @@ interface Backend {
 
 let backend: Backend | null = null;
 
-async function createBackend(): Promise<Backend> {
+async function createBackend(overrideDataDir?: string): Promise<Backend> {
   const url = process.env.DATABASE_URL;
   if (url) {
     // Managed Postgres. Dynamically imported so the embedded path has no hard
@@ -168,7 +184,7 @@ async function createBackend(): Promise<Backend> {
   }
 
   // Embedded PGlite (dev / single-host prod). `memory://` keeps tests hermetic.
-  const dataDir = process.env.PGLITE_DIR || path.join(__dirname, ".pgdata");
+  const dataDir = overrideDataDir ?? (process.env.PGLITE_DIR || path.join(__dirname, ".pgdata"));
   const pg = await openPglite(dataDir);
   return {
     kind: "pglite",
@@ -584,9 +600,9 @@ export const auditStore = {
     log.prevHash = prevHash;
     log.hash = auditEntryHash(prevHash, log);
     await be().query(
-      `insert into audit_logs(id, at, doc) values ($1, $2, $3::jsonb)
-       on conflict (id) do update set doc = excluded.doc, at = excluded.at`,
-      [log.id, log.at, JSON.stringify(log)]);
+      `insert into audit_logs(id, at, tenant_id, doc) values ($1, $2, $3, $4::jsonb)
+       on conflict (id) do update set doc = excluded.doc, at = excluded.at, tenant_id = excluded.tenant_id`,
+      [log.id, log.at, log.tenantId ?? null, JSON.stringify(log)]);
   },
   /** Recompute the chain to detect any edited or removed entry. Legacy rows
    *  (written before chaining) are allowed only before the chain starts. */
@@ -605,6 +621,15 @@ export const auditStore = {
   async recent(limit: number): Promise<AuditLog[]> {
     const { rows } = await be().query<{ doc: AuditLog }>(
       `select doc from audit_logs order by at desc limit $1`, [limit]);
+    return rows.map((r) => r.doc);
+  },
+  /** The tenant-scoped equivalent of recent() — every tenant-facing audit-log
+   *  view (the Audit Logs page, the dashboard's "recent activity" widget)
+   *  must use this, never recent(), which is platform-wide and would show
+   *  one school's activity to another's admin. */
+  async recentForTenant(tenantId: string, limit: number): Promise<AuditLog[]> {
+    const { rows } = await be().query<{ doc: AuditLog }>(
+      `select doc from audit_logs where tenant_id = $1 order by at desc limit $2`, [tenantId, limit]);
     return rows.map((r) => r.doc);
   },
   async count(): Promise<number> {
@@ -663,13 +688,21 @@ export const superAdminAuditStore = {
 export const emailStore = {
   async add(msg: EmailMessage): Promise<void> {
     await be().query(
-      `insert into emails(id, sent_at, doc) values ($1, $2, $3::jsonb)
-       on conflict (id) do update set doc = excluded.doc, sent_at = excluded.sent_at`,
-      [msg.id, msg.sentAt, JSON.stringify(msg)]);
+      `insert into emails(id, sent_at, tenant_id, doc) values ($1, $2, $3, $4::jsonb)
+       on conflict (id) do update set doc = excluded.doc, sent_at = excluded.sent_at, tenant_id = excluded.tenant_id`,
+      [msg.id, msg.sentAt, msg.tenantId ?? null, JSON.stringify(msg)]);
   },
   async recent(limit: number): Promise<EmailMessage[]> {
     const { rows } = await be().query<{ doc: EmailMessage }>(
       `select doc from emails order by sent_at desc limit $1`, [limit]);
+    return rows.map((r) => r.doc);
+  },
+  /** Same as recent(), scoped to one tenant via the indexed tenant_id column
+   *  (backfilled by the tenant-retrofit migration; new sends populate it via
+   *  sendMail's optional tenantId param). */
+  async recentForTenant(tenantId: string, limit: number): Promise<EmailMessage[]> {
+    const { rows } = await be().query<{ doc: EmailMessage }>(
+      `select doc from emails where tenant_id = $1 order by sent_at desc limit $2`, [tenantId, limit]);
     return rows.map((r) => r.doc);
   },
   async count(): Promise<number> {
@@ -793,6 +826,55 @@ async function ensureSchema() {
     // from their correctness × the question's points, and are marked auto-graded.
     "UPDATE answers a SET doc = jsonb_set(jsonb_set(jsonb_set(a.doc, '{awardedPoints}', to_jsonb(CASE WHEN a.doc->>'correct' = 'true' THEN COALESCE(NULLIF(q.doc->>'points','')::int, 0) ELSE 0 END)), '{gradedBy}', '\"auto\"'), '{needsReview}', 'false') FROM questions q WHERE a.doc->>'questionId' = q.id AND NOT (a.doc ? 'awardedPoints');",
   ].join("\n"));
+
+  // The 7 off-mirror tables' tenant_id column (see TENANT_ID_TABLES below) must
+  // exist unconditionally here, not only via backfillOffMirrorTenantId() — that
+  // function only runs once, from the normal boot path, right after the first
+  // Tenant is created. The disaster-recovery path (recoverFromLatestBackup)
+  // calls ensureSchema() directly against a brand-new database and then
+  // restores a dump straight into it; if these columns aren't guaranteed here
+  // too, restoring rows written by tenant-aware store code (e.g. emailStore,
+  // which writes a tenant_id column) fails outright on the very first row.
+  // Runs last, after every one of these tables has just been created above.
+  await be().exec(TENANT_ID_TABLES.map((t) => `ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS tenant_id text;`).join("\n"));
+}
+
+// Off-mirror tables that need a tenant_id column — unlike the ensureSchema()
+// backfills above (which extract a value already present in the JSON doc via
+// doc->>'field'), tenantId doesn't exist in any doc yet: the backfill value
+// is a brand-new literal (the tenant just created in initDb()), so this has
+// to be a parameterized UPDATE, not a static string, and can only run once
+// that tenant's id is known — called from initDb() right after Tenant #1 is
+// created, not from ensureSchema() (which runs before db.data is populated).
+const TENANT_ID_TABLES = ["snapshots", "answers", "proctor_events", "geofence_logs", "media_assets", "audit_logs", "emails"];
+async function backfillOffMirrorTenantId(tenantId: string) {
+  await be().exec(TENANT_ID_TABLES.map((t) =>
+    `ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS tenant_id text;\nCREATE INDEX IF NOT EXISTS ${t}_tenant_idx ON ${t}(tenant_id);`,
+  ).join("\n"));
+  for (const t of TENANT_ID_TABLES) {
+    await be().query(`UPDATE ${t} SET tenant_id = $1 WHERE tenant_id IS NULL`, [tenantId]);
+  }
+}
+
+/** fs.renameSync, retried on EPERM/EBUSY — on Windows, PGlite's own just-closed
+ *  WASM-backed file handles on its data directory don't necessarily release
+ *  the instant its close() promise resolves (observed lag well past a second,
+ *  not just a brief antivirus/indexer-scan blip), long enough to fail a
+ *  whole-directory rename even though nothing application-level still holds
+ *  it. Budgeted generously (up to ~10s) since this only runs once, during
+ *  boot-time recovery, and the alternative is a hard crash right in the one
+ *  code path whose entire purpose is self-healing instead of crash-looping. */
+async function renameWithRetry(from: string, to: string, attempts = 20, delayMs = 500): Promise<void> {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      fs.renameSync(from, to);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (i === attempts - 1 || (code !== "EPERM" && code !== "EBUSY")) throw err;
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
 }
 
 /** Only reachable for the embedded PGlite backend (see looksLikeCorruption
@@ -815,12 +897,28 @@ async function recoverFromLatestBackup(): Promise<string> {
 
   // backend may be null here — a hard WASM abort during PGlite's own startup
   // (e.g. corrupt WAL replay) can throw before createBackend() ever returns.
-  if (backend) { await backend.close(); backend = null; }
+  if (backend) { await backend.close().catch(() => { /* already aborted — nothing more to close */ }); backend = null; }
   const quarantine = `${dataDir}.corrupted-${Date.now()}`;
-  if (fs.existsSync(dataDir)) fs.renameSync(dataDir, quarantine);
-  console.error(`   Corrupted data quarantined at: ${quarantine}`);
+  // Recovery data dir: normally the same path, reopened after the corrupted
+  // one is quarantined aside. But a WASM-level abort (vs. a clean close) can
+  // leave this same process holding a native file handle on dataDir for the
+  // rest of its life — no amount of retrying frees it, only a full process
+  // restart does. Rather than crash-loop forever on that, fall back to
+  // recovering into a fresh sibling directory and leave the un-renamable one
+  // in place for manual cleanup once nothing is using it anymore.
+  let recoverDir = dataDir;
+  if (fs.existsSync(dataDir)) {
+    try {
+      await renameWithRetry(dataDir, quarantine);
+      console.error(`   Corrupted data quarantined at: ${quarantine}`);
+    } catch (renameErr) {
+      recoverDir = `${dataDir}.recovered-${Date.now()}`;
+      console.error(`   Could not quarantine ${dataDir} (still locked by this process, likely from a WASM-level abort) — recovering into ${recoverDir} instead.`);
+      console.error(`   Once this process is stopped, ${dataDir} is safe to delete manually.`);
+    }
+  }
 
-  backend = await createBackend();
+  backend = await createBackend(recoverDir === dataDir ? undefined : recoverDir);
   await ensureSchema();
 
   const raw = await gunzipAsync(fs.readFileSync(backupPath));
@@ -844,7 +942,7 @@ async function importLegacyJson(): Promise<boolean> {
     for (const { key } of TABLES) {
       if (Array.isArray(parsed[key])) (db.data[key] as unknown[]) = parsed[key] as unknown[];
     }
-    fs.renameSync(legacy, legacy + ".migrated"); // keep a backup, don't re-import
+    await renameWithRetry(legacy, legacy + ".migrated"); // keep a backup, don't re-import
     return true;
   } catch {
     return false;
@@ -942,11 +1040,19 @@ export async function initDb() {
     if (book.downloadCount === undefined) { book.downloadCount = 0; changed = true; }
   }
 
-  // Ensure the single org-settings record exists; backfill new profile fields.
-  let org = db.data.settings.find((s) => s.id === "org");
+  // Ensure the tenant's org-settings record exists; backfill new profile fields.
+  // Before the tenant retrofit's migration runs (no tenants yet), this row is
+  // keyed by the bootstrap constant "org" — the migration below renames it to
+  // the newly-created tenant's id. On every later boot db.data.tenants[0]
+  // already exists, so the lookup goes straight to the real key; falling back
+  // to "org" only ever matters for that one first-ever boot.
+  const existingTenant = db.data.tenants[0];
+  let org = existingTenant
+    ? db.data.settings.find((s) => s.id === existingTenant.id)
+    : db.data.settings.find((s) => s.id === "org");
   if (!org) {
     org = {
-      id: "org", name: "Oriole", supportEmail: "support@orcalis.dev", website: "",
+      id: existingTenant?.id ?? "org", name: "Oriole", supportEmail: "support@orcalis.dev", website: "",
       timezone: "UTC", defaultPassingScore: 60, defaultProctored: true, autoConfirmEnrollment: false,
     };
     db.data.settings.push(org);
@@ -958,6 +1064,46 @@ export async function initDb() {
   if (org.phone === undefined) { org.phone = ""; changed = true; }
   if (org.address === undefined) { org.address = ""; changed = true; }
   if (!org.learningStructure) { org.learningStructure = { ...DEFAULT_LEARNING_STRUCTURE }; changed = true; }
+
+  // Tenant retrofit — create the platform's first Tenant from the existing
+  // org settings, then backfill tenantId onto every existing row of every
+  // tenant-scoped collection. Only ever runs once (guarded by db.data.tenants
+  // being empty); a fresh boot after this has already run skips straight
+  // through. See the tenant-retrofit plan for the full design — this is
+  // Phase A: additive only, every route still returns identical results
+  // since exactly one Tenant exists.
+  if (db.data.tenants.length === 0) {
+    const tenant: Tenant = { id: nanoid(10), name: org.name, status: "active", createdAt: new Date().toISOString() };
+    db.data.tenants.push(tenant);
+    const tid = tenant.id;
+    org.id = tid; // OrgSettings.id was the hardcoded constant "org" — now it's the owning tenant's id
+    for (const u of db.data.users) if (!u.tenantId) u.tenantId = tid;
+    for (const x of db.data.exams) if (!x.tenantId) x.tenantId = tid;
+    for (const x of db.data.questions) if (!x.tenantId) x.tenantId = tid;
+    for (const x of db.data.registrations) if (!x.tenantId) x.tenantId = tid;
+    for (const x of db.data.attempts) if (!x.tenantId) x.tenantId = tid;
+    for (const x of db.data.certificates) if (!x.tenantId) x.tenantId = tid;
+    for (const x of db.data.announcements) if (!x.tenantId) x.tenantId = tid;
+    for (const x of db.data.announcementReads) if (!x.tenantId) x.tenantId = tid;
+    for (const x of db.data.faculties) if (!x.tenantId) x.tenantId = tid;
+    for (const x of db.data.departments) if (!x.tenantId) x.tenantId = tid;
+    for (const x of db.data.programs) if (!x.tenantId) x.tenantId = tid;
+    for (const x of db.data.campuses) if (!x.tenantId) x.tenantId = tid;
+    for (const x of db.data.academicYears) if (!x.tenantId) x.tenantId = tid;
+    for (const x of db.data.classes) if (!x.tenantId) x.tenantId = tid;
+    for (const x of db.data.regradeRequests) if (!x.tenantId) x.tenantId = tid;
+    for (const x of db.data.books) if (!x.tenantId) x.tenantId = tid;
+    for (const x of db.data.readingProgress) if (!x.tenantId) x.tenantId = tid;
+    for (const x of db.data.resourceVersions) if (!x.tenantId) x.tenantId = tid;
+    for (const x of db.data.resourceBookmarks) if (!x.tenantId) x.tenantId = tid;
+    for (const x of db.data.resourceRatings) if (!x.tenantId) x.tenantId = tid;
+    for (const x of db.data.resourceDownloadLogs) if (!x.tenantId) x.tenantId = tid;
+    for (const x of db.data.customRoles) if (!x.tenantId) x.tenantId = tid;
+    for (const x of db.data.supportTickets) if (!x.tenantId) x.tenantId = tid;
+    changed = true;
+    await backfillOffMirrorTenantId(tid);
+    console.log(`🏫 Tenant retrofit: created "${tenant.name}" as the platform's first tenant (${tid}) and backfilled every existing row.`);
+  }
 
   // Bootstrap a permanent admin account if one with this email doesn't exist.
   // Override via env in production (ADMIN_EMAIL / ADMIN_PASSWORD / ADMIN_NAME).
@@ -974,6 +1120,7 @@ export async function initDb() {
     const adminPassword = providedPw || randomBytes(18).toString("base64url");
     db.data.users.push({
       id: nanoid(10),
+      tenantId: db.data.tenants[0].id,
       email: adminEmail,
       name: adminName,
       role: "admin",

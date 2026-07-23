@@ -6,6 +6,13 @@ import { SuperAdminForcePasswordChange } from "@/pages/SuperAdminForcePasswordCh
 import { SuperAdminDashboard } from "@/pages/SuperAdminDashboard";
 import { SuperAdminSecurityCenter } from "@/pages/SuperAdminSecurityCenter";
 import { SuperAdminPlatformSettings } from "@/pages/SuperAdminPlatformSettings";
+import { SuperAdminTeam } from "@/pages/SuperAdminTeam";
+import { SuperAdminProfile } from "@/pages/SuperAdminProfile";
+import { SuperAdminSystemInfo } from "@/pages/SuperAdminSystemInfo";
+import { SuperAdminMaintenance } from "@/pages/SuperAdminMaintenance";
+import { SuperAdminEmailTemplates } from "@/pages/SuperAdminEmailTemplates";
+import { SuperAdminTickets } from "@/pages/SuperAdminTickets";
+import { SuperAdminInstitutions } from "@/pages/SuperAdminInstitutions";
 
 /** Entire Super Admin subtree in one file, lazy-loaded as a single unit from
  *  main.tsx (one route: <Route path="/super-admin/*" element={<SuperAdminApp/>}/>).
@@ -29,6 +36,13 @@ function SuperAdminRoutes() {
       <Route path="dashboard" element={<SuperAdminProtected><SuperAdminDashboard /></SuperAdminProtected>} />
       <Route path="security" element={<SuperAdminProtected><SuperAdminSecurityCenter /></SuperAdminProtected>} />
       <Route path="settings" element={<SuperAdminProtected><SuperAdminPlatformSettings /></SuperAdminProtected>} />
+      <Route path="team" element={<SuperAdminProtected><SuperAdminTeam /></SuperAdminProtected>} />
+      <Route path="profile" element={<SuperAdminProtected><SuperAdminProfile /></SuperAdminProtected>} />
+      <Route path="system-info" element={<SuperAdminProtected><SuperAdminSystemInfo /></SuperAdminProtected>} />
+      <Route path="maintenance" element={<SuperAdminProtected><SuperAdminMaintenance /></SuperAdminProtected>} />
+      <Route path="email-templates" element={<SuperAdminProtected><SuperAdminEmailTemplates /></SuperAdminProtected>} />
+      <Route path="tickets" element={<SuperAdminProtected><SuperAdminTickets /></SuperAdminProtected>} />
+      <Route path="institutions" element={<SuperAdminProtected><SuperAdminInstitutions /></SuperAdminProtected>} />
       <Route path="*" element={<Navigate to="dashboard" replace />} />
     </Routes>
   );

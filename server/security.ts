@@ -128,6 +128,21 @@ export const twoFaLimiter = rateLimit({
   },
 });
 
+// ── Maintenance-mode gate ────────────────────────────────────────────────
+// Pure path check, kept separate from the middleware itself (server/index.ts,
+// which calls app.listen() at import time and so can't be imported in tests)
+// so the one part most likely to have an off-by-one/prefix bug — "which paths
+// stay reachable while everything else 503s" — is directly unit-testable.
+// Super Admin routes must ALWAYS pass (otherwise turning maintenance mode
+// back off would be impossible), and the public status page must keep
+// working so visitors can see the platform is intentionally down.
+function isUnderPrefix(path: string, prefix: string): boolean {
+  return path === prefix || path.startsWith(prefix + "/");
+}
+export function isMaintenanceExempt(path: string): boolean {
+  return isUnderPrefix(path, "/api/super-admin") || isUnderPrefix(path, "/api/status");
+}
+
 // ── SSRF guard for outbound webhook URLs ────────────────────────────────────
 // Webhooks let an admin make the server issue an HTTP request, which is an SSRF
 // vector (internal services, cloud metadata at 169.254.169.254, etc.). We require

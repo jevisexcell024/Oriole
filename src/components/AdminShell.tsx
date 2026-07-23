@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { LogOut, BookOpen, BarChart3, Radio, CalendarClock, CalendarDays, LineChart, Award, Users, ClipboardCheck, GraduationCap, CalendarCheck, Bell, ShieldAlert, AlertTriangle, FileText, HeartPulse, Building2, ScrollText, Settings, LayoutDashboard, Users2, Menu, X, ChevronsLeft, ChevronDown, MessageSquareWarning, Webhook, Library, ShieldCheck, Gauge, UserCog, Megaphone, Layers } from "lucide-react";
+import { LogOut, BookOpen, BarChart3, Radio, CalendarClock, CalendarDays, LineChart, Award, Users, ClipboardCheck, GraduationCap, CalendarCheck, Bell, ShieldAlert, AlertTriangle, FileText, HeartPulse, Building2, ScrollText, Settings, LayoutDashboard, Users2, Menu, X, ChevronsLeft, ChevronDown, MessageSquareWarning, Webhook, Library, ShieldCheck, Gauge, UserCog, Megaphone, Layers, LifeBuoy } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { useT } from "@/lib/i18n";
 import { can, type Cap } from "@/lib/roles";
@@ -86,6 +86,7 @@ const GROUPS: NavGroup[] = [
       { to: "/admin/roles", labelKey: "anav.roles", icon: ShieldCheck, cap: "org" },
       { to: "/admin/integrations", labelKey: "anav.integrations", icon: Webhook, cap: "org" },
       { to: "/admin/audit-logs", labelKey: "anav.auditLogs", icon: ScrollText, cap: "org" },
+      { to: "/admin/support", labelKey: "anav.support", icon: LifeBuoy, cap: "org" },
       { to: "/admin/settings", labelKey: "anav.settings", icon: Settings, cap: "org" },
     ],
   },

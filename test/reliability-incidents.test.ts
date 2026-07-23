@@ -153,7 +153,7 @@ describe("incident lifecycle — open (debounced), notify, auto-resolve", () => 
     expect(incident!.status).toBe("identified");
     expect(incident!.severity).toBe("major"); // auth is not database/api, so "major" not "critical"
     expect(incident!.impact?.attemptsOverlapping).toBeGreaterThanOrEqual(1);
-    expect(deps.dispatchWebhook).toHaveBeenCalledWith("incident.opened", expect.objectContaining({ subsystem: "auth" }));
+    expect(deps.dispatchWebhook).toHaveBeenCalledWith(expect.anything(), "incident.opened", expect.objectContaining({ subsystem: "auth" }));
   });
 
   it("does not open a second incident for the same subsystem while one is already open", async () => {
@@ -173,7 +173,7 @@ describe("incident lifecycle — open (debounced), notify, auto-resolve", () => 
     expect(incident).toBeTruthy();
     expect(incident!.status).toBe("resolved");
     expect(incident!.autoResolved).toBe(true);
-    expect(deps.dispatchWebhook).toHaveBeenCalledWith("incident.resolved", expect.objectContaining({ subsystem: "auth" }));
+    expect(deps.dispatchWebhook).toHaveBeenCalledWith(expect.anything(), "incident.resolved", expect.objectContaining({ subsystem: "auth" }));
     expect(listIncidents().filter((i) => i.subsystem === "auth" && i.status !== "resolved").length).toBe(0);
   });
 
