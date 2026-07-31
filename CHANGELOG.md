@@ -4,6 +4,64 @@ A running record of what shipped in each version. Newest first.
 
 ---
 
+## v2.14.0 — Architecture/UX audit: duplication and navigation fixes
+
+**Ran the app end-to-end as a real user, comparing it against the actual codebase, looking specifically for duplication and confusing navigation** — not a feature request, a correction pass. Seven concrete findings, all fixed:
+
+- **Two overlapping student-list pages** (`/admin/candidates` "Students" vs `/admin/students`, previously "Student Records") showed largely the same data in two different layouts with no indication of which to use for what. Renamed the latter to **Class Performance** (its real distinguishing purpose — class-grouped performance, not roster CRUD) and added cross-links both ways ("View by class" / "Manage students").
+- **A dead analytics endpoint**: `GET /api/admin/analytics` (its own hardcoded score buckets, per-exam breakdown, flag counts) had zero frontend callers — confirmed via grep before deleting. The live `/admin/analytics` page has always called the separate `/api/admin/analytics-overview` instead.
+- **53 orphaned i18n keys** left behind by an earlier, since-replaced "Trend Analysis Dashboard" redesign (`aan.atRisk`, `aan.cohortComparison`, `aan.termOverTerm`, `aan.crisis*`, etc.) — found with an exact string-boundary scan (a naive substring check under-counts: `aan.atRisk` is a substring of the still-used `aan.atRiskSub`) and removed.
+- **Export-button sprawl**: one exam's Responses hub had 5 different export affordances (two generic per-tab CSV buttons, a pivoted answer-sheet CSV, print/PDF, PowerPoint) with no cross-reference between them. Added a one-line hint in the Exports tab pointing back to the others rather than removing functionality.
+- **A naming collision**: the sidebar's institution-wide "Analytics" and the per-exam Responses hub's own "Analytics" tab shared the exact same label for two different scopes of data. Renamed the per-exam tab to **Item Analysis** (matching the page's own existing title).
+- **"Open Analysis" undersold what it opens** — that exam-card menu item now leads to a 5-tab hub (responses, infographics, reports, exports), not just analysis. Renamed to **Responses & Analysis**.
+- **Two disconnected drill-down paths** into one exam's results (expanding the card in place vs. the "..." menu) with no link between them. Added a "View full analysis →" button directly in the expanded card, with a line explaining what the full view adds.
+
+**A pre-existing bug caught in passing, fixed on request**: `AdminResults.tsx`'s `ExamFolder`/`CohortFolder` and `StudentsSIS.tsx`'s `ClassFolderRow` each used a `<button>` as the row's expand/collapse toggle — but that button contained its own nested `<button>` (the "..." menu trigger), which is invalid HTML. Browsers silently repair it by closing the outer tag early, which React logs as a hydration error and which subtly broke the intended click target. Changed the toggle to a `<div role="button" tabIndex={0}>` with manual Enter/Space handling; verified live with a fresh-reload console-error capture (zero errors afterward) and confirmed the inner menu's `stopPropagation` still works.
+
+---
+
+## v2.13.0 — Assessment Intelligence & Infographics Module
+
+**A large spec ("Oriole v2.1.0 – Assessment Intelligence & Infographics Module") was handed over asking for an executive analytics/BI layer over exam results.** Before building anything, audited the existing codebase against the spec and found heavy overlap — turned it into a 10-phase plan instead of a from-scratch module, specifically to avoid duplicating data and logic that already existed.
+
+**Phase 0 — foundation.** Added `departmentId`/`programId` to `User` (both optional), wired end-to-end through candidate create/edit, the Students list (filter, column, CSV), reusing the existing `Department`/`Program` org-structure entities. Two other spec items were deliberately scoped out after discussion: Learning Outcomes/Bloom's Taxonomy tagging (parked, not dropped — no such concept exists anywhere in the data model today) and Attendance-vs-Performance (dropped — this app only has exam check-in timestamps, not daily attendance).
+
+**Phase 1 — Responses hub.** Restructured the per-exam Item Analysis page (`/admin/exams/:id/analysis`, same URL) into a 5-tab hub — Analytics, Student Responses, Infographics, Reports, Exports — matching the spec's requested nav shape, with every tab reusing existing data rather than new endpoints (Student Responses, for instance, just filters the same data the institution-wide Results page already fetches).
+
+**Phase 2 — Score Distribution.** `GET /api/admin/analytics-overview` now computes a real score-band histogram using **tenant-configurable band edges** (`OrgSettings.scoreBandEdges`, editable in Settings → Exam Defaults), rendered as a new chart panel on the Analytics page.
+
+**Phase 3 — Topic Performance.** `GET /api/admin/exams/:id/item-analysis` now also returns a topic rollup grouped by `Question.tags` — the same tags that already drive exam-blueprint assembly, so this added zero new question metadata, just a new aggregation.
+
+**Phase 4 — Executive Insights.** A pure, exported, unit-tested function (`buildInsights`) turns already-computed numbers into up to 4 plain-English sentences (pass rate, weakest question, weakest topic, reliability band) — any insight lacking real data simply doesn't fire; nothing is ever interpolated from a fabricated trend.
+
+**Phase 5 — Difficulty Heatmap.** Colour-intensity-only (no gradient, no glow, per the spec's own instruction) — each question cell's opacity is driven purely by `100 − correctRate`; click opens the same per-question response drill-down the Analytics tab's "View responses" already uses.
+
+**Phase 6 — Students At Risk + Cohort Comparison.** `GET /api/admin/analytics/cohorts` had real server-side risk-flagging and cohort-comparison logic with **zero frontend consumer** until now — same orphaned-endpoint pattern as Phase 2's finding. Surfaced as two new panels on the Analytics page.
+
+**Phase 7 — Demographic Analysis.** Real average-score/pass-rate breakdowns by gender and department (the only two dimensions with real backing data); a student missing either field is correctly excluded from that grouping rather than counted as "unknown."
+
+**Phase 9 — Export Centre.** Discovered before building that this app already has an established convention for "downloadable reports" — `window.print()` + a print-only view (certificates, student records) — never server-generated PDF bytes. Followed that convention instead of inventing a parallel PDF pipeline: a new always-rendered, print-only report section (letterhead, KPIs, insights, full question table) plus a "Print report" button. Added genuine PNG/SVG chart export (`src/lib/exportChart.ts`, serializes the actual rendered recharts SVG, no new dependency) and PowerPoint export (`pptxgenjs`, the one new dependency this whole effort needed, dynamically imported so its ~1MB bundle only loads on click).
+
+**Phase 10 — performance + accessibility audit.** Performance: every endpoint added is a single O(n) pass over already-loaded data — deliberately did not add caching, since nothing is actually slow yet. Accessibility: the Item Analysis tab bar was rebuilt as a real ARIA tablist (only the active tab is in the native Tab order, Left/Right cycles focus+selection) instead of plain styled buttons; the heatmap cells and the new icon-only export buttons got real `aria-label`s; the new Students At Risk table got a `<caption>` and `scope="col"` headers.
+
+Verified throughout with real submitted exam data (not just empty states) — every number in Executive Insights, Topic Performance, the heatmap, and the institution-wide demographic/risk breakdowns was hand-checked against the raw attempt data at least once.
+
+---
+
+## v2.12.0 — Super Admin: "log in as" impersonation, tenant data export/deletion
+
+**Closes out the last two items from the original v1.6.0 Super Admin plan.**
+
+**Impersonation** (`POST /api/super-admin/tenants/:id/impersonate`) issues a real tenant session for a school's own first admin account — never a password, never chosen by the Super Admin — tagged with an `imp` JWT claim. Every audit-log entry written during the session is attributed via that claim (`recordAudit`'s new `viaImpersonation` field), and the tenant's own audit trail gets a dedicated `impersonation.started` entry the instant it begins, visible to that school's own admins — this is oversight, not a hidden backdoor. Blocked for suspended tenants and tenants with no admin yet. `POST /api/admin/impersonation/end` clears the borrowed session without bumping the impersonated admin's own `tokenVersion` — a real logout would revoke every other session that admin has open elsewhere, which would be unwanted collateral damage against an innocent account.
+
+**Data export** (`GET /api/super-admin/tenants/:id/export`) bundles every row a tenant owns — ~24 mirrored collections plus the 7 tenant-aware off-mirror tables — into one downloadable JSON file, with secrets stripped (password hashes, 2FA secrets, hashed API keys).
+
+**Data deletion** (`DELETE /api/super-admin/tenants/:id`) cascades a real, irreversible delete across the same full set of tables. Gated behind two safeguards: the tenant must already be suspended, and the caller must retype the tenant's exact name to confirm.
+
+Both new `server/db.ts` functions (`exportTenantData`, `deleteTenantData`) and the impersonation session-tagging in `server/auth.ts` are pinned by new tests (`test/impersonation.test.ts`, `test/tenant-deletion.test.ts`).
+
+---
+
 ## v2.11.0 — Multi-Tenant Retrofit, Phase E: cross-tenant security pass
 
 **Deliberately adversarial, not just a re-read of Phase C's own work.** A static sweep re-checked every tenant-scoped `.find()`/`.filter()` in `server/index.ts` for a missed check (none found beyond what this entry fixes), then a real attack: a second tenant ("Attacker School") was created through the new Institutions flow, logged into independently, and used to probe every high-value route with real IDs harvested from the actual seeded tenant — exam/question/candidate/admin reads, writes, and deletes; list endpoints; the public API v1 with a freshly-issued key. Every one of those held (clean 404s, empty lists) — Phase C's route-by-route work was solid. The pass still turned up three real, independent bugs along the way:

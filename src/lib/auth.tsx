@@ -12,6 +12,10 @@ interface AuthState {
   logout: () => Promise<void>;
   /** Re-fetch the current user (e.g. after editing the profile). */
   refresh: () => Promise<void>;
+  /** Ends a Super Admin "log in as" session (see user.impersonatedBy) without
+   *  revoking the impersonated admin's own other sessions — a real logout(),
+   *  above, isn't the right call here since it bumps their tokenVersion. */
+  endImpersonation: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -50,8 +54,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(d.user);
   };
 
+  const endImpersonation = async () => {
+    await api.post("/admin/impersonation/end");
+    setUser(null);
+  };
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, verify2fa, logout, refresh }}>
+    <AuthContext.Provider value={{ user, loading, login, verify2fa, logout, refresh, endImpersonation }}>
       {children}
     </AuthContext.Provider>
   );

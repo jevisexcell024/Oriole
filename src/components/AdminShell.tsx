@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { LogOut, BookOpen, BarChart3, Radio, CalendarClock, CalendarDays, LineChart, Award, Users, ClipboardCheck, GraduationCap, CalendarCheck, Bell, ShieldAlert, AlertTriangle, FileText, HeartPulse, Building2, ScrollText, Settings, LayoutDashboard, Users2, Menu, X, ChevronsLeft, ChevronDown, MessageSquareWarning, Webhook, Library, ShieldCheck, Gauge, UserCog, Megaphone, Layers, LifeBuoy } from "lucide-react";
+import { LogOut, BookOpen, BarChart3, Radio, CalendarClock, CalendarDays, LineChart, Award, Users, ClipboardCheck, GraduationCap, CalendarCheck, Bell, ShieldAlert, AlertTriangle, FileText, HeartPulse, Building2, ScrollText, Settings, LayoutDashboard, Users2, Menu, X, ChevronsLeft, ChevronDown, MessageSquareWarning, Webhook, Library, ShieldCheck, Gauge, UserCog, Megaphone, Layers, LifeBuoy, VenetianMask } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { useT } from "@/lib/i18n";
 import { can, type Cap } from "@/lib/roles";
@@ -94,8 +94,9 @@ const GROUPS: NavGroup[] = [
 
 export function AdminShell({ children }: { children: ReactNode; wide?: boolean }) {
   const t = useT();
-  const { user, logout } = useAuth();
+  const { user, logout, endImpersonation } = useAuth();
   const navigate = useNavigate();
+  const [endingImp, setEndingImp] = useState(false);
   const loc = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   // Desktop collapse — icon-only rail, persisted across sessions.
@@ -242,6 +243,21 @@ export function AdminShell({ children }: { children: ReactNode; wide?: boolean }
 
       {/* Content */}
       <div className="min-w-0 flex-1 bg-[var(--bg)] pt-14 print:pt-0 lg:pt-0">
+        {user?.impersonatedBy && (
+          <div className="sticky top-14 z-20 flex flex-wrap items-center justify-between gap-2 border-b border-amber-500/30 bg-amber-500/15 px-4 py-2 text-sm text-amber-300 print:hidden lg:top-0">
+            <span className="inline-flex items-center gap-1.5">
+              <VenetianMask className="h-4 w-4 shrink-0" />
+              {t("anav.impersonating", { admin: user.name, superAdmin: user.impersonatedBy.superAdminName })}
+            </span>
+            <button
+              onClick={async () => { setEndingImp(true); try { await endImpersonation(); navigate("/super-admin/institutions"); } finally { setEndingImp(false); } }}
+              disabled={endingImp}
+              className="shrink-0 rounded-lg border border-amber-400/40 px-2.5 py-1 text-xs font-semibold text-amber-200 hover:bg-amber-500/20 disabled:opacity-50"
+            >
+              {t("anav.endImpersonation")}
+            </button>
+          </div>
+        )}
         <main className="max-w-[1560px] px-4 py-5 [--app-header-h:56px] print:max-w-none print:p-0 sm:px-6 sm:py-6 lg:[--app-header-h:0px]">{children}</main>
       </div>
     </div>

@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { Download, TrendingUp, TrendingDown, Minus, Loader2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { Download, TrendingUp, TrendingDown, Minus, Loader2, AlertTriangle, Image as ImageIcon, FileCode } from "lucide-react";
+import { downloadPng, downloadSvg } from "@/lib/exportChart";
 import {
   ResponsiveContainer, LineChart, Line, AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip,
@@ -40,7 +41,19 @@ interface Analytics {
   paceBuckets: { fast: number; normal: number; slow: number };
   weeklyActivity: { week: string; attempts: number }[];
   monthlyPerformance: { month: string; score: number | null }[];
+  scoreDistribution: { label: string; count: number; pct: number }[];
+  demographics: { byGender: DemoGroup[]; byDepartment: DemoGroup[] };
 }
+interface DemoGroup { label: string; count: number; avgScore: number; passRate: number; }
+
+// GET /api/admin/analytics/cohorts — real cohort/term comparisons and at-risk
+// flagging, already computed server-side but with no frontend consumer at
+// all until now. Fetched separately from analytics-overview so a slow
+// cohorts computation never blocks the rest of the dashboard from rendering.
+interface CohortStat { id: string; name: string; members: number; attempts: number; avgScore: number | null; passRate: number | null; }
+interface TermStat { label: string; attempts: number; avgScore: number | null; passRate: number | null; }
+interface AtRiskRow { candidateId: string; name: string; attempts: number; avgScore: number; lastScore: number; fails: number; level: "high" | "medium"; reasons: string[]; }
+interface CohortsResp { cohorts: CohortStat[]; terms: TermStat[]; atRisk: AtRiskRow[]; }
 
 function difficultyLabel(score: number) { return score >= 80 ? "Strong" : score >= 70 ? "Good" : "Needs work"; }
 
@@ -49,8 +62,11 @@ export function AdminAnalytics() {
   const navigate = useNavigate();
   const [d, setD] = useState<Analytics | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [cohorts, setCohorts] = useState<CohortsResp | null>(null);
+  const scoreChartRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { api.get<Analytics>("/admin/analytics-overview").then(setD).catch((e) => setError((e as Error).message)); }, []);
+  useEffect(() => { api.get<CohortsResp>("/admin/analytics/cohorts").then(setCohorts).catch(() => {}); }, []);
 
   if (error) return <AdminShell wide><p className="p-6 text-sm text-rose-400">{error}</p></AdminShell>;
   if (!d) return <AdminShell wide><div className="flex items-center gap-2 p-8 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div></AdminShell>;
@@ -214,7 +230,7 @@ export function AdminAnalytics() {
         </div>
 
         {/* Row 4 */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 2, marginTop: 2 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 2, marginTop: 2 }}>
           <Panel>
             <SectionHead title={t("aan.monthlyPerf")} sub={t("aan.monthlyPerfSub")} />
             <div style={{ height: 170 }}>
@@ -229,6 +245,125 @@ export function AdminAnalytics() {
                 </AreaChart>
               </ResponsiveContainer>
             </div>
+          </Panel>
+
+          <Panel>
+            <div className="flex items-start justify-between">
+              <SectionHead title={t("aan.scoreDistribution")} sub={t("aan.scoreDistributionSub")} />
+              {!d.scoreDistribution.every((b) => b.count === 0) && (
+                <div className="flex shrink-0 gap-1">
+                  <button
+                    onClick={() => { const svg = scoreChartRef.current?.querySelector("svg"); if (svg) downloadPng(svg, "score-distribution.png", CARD); }}
+                    title={t("aan.exportPng")}
+                    aria-label={t("aan.exportPng")}
+                    className="rounded-md p-1.5 hover:bg-white/[0.06]"
+                    style={{ color: DIM }}
+                  >
+                    <ImageIcon className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    onClick={() => { const svg = scoreChartRef.current?.querySelector("svg"); if (svg) downloadSvg(svg, "score-distribution.svg"); }}
+                    title={t("aan.exportSvg")}
+                    aria-label={t("aan.exportSvg")}
+                    className="rounded-md p-1.5 hover:bg-white/[0.06]"
+                    style={{ color: DIM }}
+                  >
+                    <FileCode className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              )}
+            </div>
+            {d.scoreDistribution.every((b) => b.count === 0) ? <Empty t={t} /> : (
+              <div ref={scoreChartRef} style={{ height: 170 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={d.scoreDistribution} barGap={2}>
+                    <CartesianGrid stroke="rgba(255,255,255,0.03)" strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="label" tick={{ fill: DIM, fontSize: 9 }} axisLine={false} tickLine={false} />
+                    <YAxis tick={{ fill: DIM, fontSize: 10 }} axisLine={false} tickLine={false} />
+                    <Tooltip content={<DarkTooltip />} cursor={{ fill: "rgba(255,255,255,0.02)" }} />
+                    <Bar dataKey="count" name={t("aan.students")} fill={CYAN} radius={[3, 3, 0, 0]} maxBarSize={36} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+            <p style={{ fontSize: 10, color: DIM, marginTop: 8 }}>{t("aan.scoreDistributionHint")}</p>
+          </Panel>
+        </div>
+
+        {/* Row 5 — real cohort/term comparisons and at-risk flagging computed
+            server-side (GET /api/admin/analytics/cohorts) with no frontend
+            consumer until now. */}
+        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 2, marginTop: 2 }}>
+          <Panel>
+            <SectionHead title={t("aan.riskTitle")} sub={t("aan.atRiskSub")} />
+            {!cohorts ? <Empty t={t} /> : cohorts.atRisk.length === 0 ? (
+              <p style={{ fontSize: 12, color: DIM }}>{t("aan.atRiskNone")}</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full" style={{ fontSize: 11 }}>
+                  <caption className="sr-only">{t("aan.riskTitle")}</caption>
+                  <thead>
+                    <tr style={{ color: DIM, textAlign: "left" }}>
+                      <th scope="col" style={{ fontWeight: 600, paddingBottom: 8 }}>{t("aan.riskColStudent")}</th>
+                      <th scope="col" style={{ fontWeight: 600, paddingBottom: 8 }}>{t("aan.riskColReason")}</th>
+                      <th scope="col" style={{ fontWeight: 600, paddingBottom: 8 }}>{t("aan.riskColAction")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cohorts.atRisk.slice(0, 8).map((r) => (
+                      <tr key={r.candidateId} style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
+                        <td style={{ padding: "8px 0" }}>
+                          <Link to={`/admin/students/${r.candidateId}`} style={{ color: "#f0f0f0", textDecoration: "none" }} className="hover:underline">
+                            <span className="flex items-center gap-1.5">
+                              <AlertTriangle className="h-3 w-3 shrink-0" style={{ color: r.level === "high" ? "#ef4444" : ORANGE }} />
+                              {r.name}
+                            </span>
+                          </Link>
+                        </td>
+                        <td style={{ padding: "8px 8px 8px 0", color: "#c0c0c0" }}>{r.reasons.join(" · ")}</td>
+                        <td style={{ padding: "8px 0", color: DIM }}>{t(r.level === "high" ? "aan.actionHigh" : "aan.actionMedium")}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Panel>
+
+          <Panel>
+            <SectionHead title={t("aan.cohortCompareTitle")} sub={t("aan.cohortComparisonSub")} />
+            {!cohorts || cohorts.cohorts.length === 0 ? <Empty t={t} /> : (
+              <div className="flex flex-col" style={{ gap: 14 }}>
+                {cohorts.cohorts.slice(0, 6).map((c, i) => (
+                  <HBar key={c.id} label={`${c.name} (${c.members})`} score={c.avgScore ?? 0} color={SUBJECT_COLORS[i % SUBJECT_COLORS.length]} />
+                ))}
+              </div>
+            )}
+          </Panel>
+        </div>
+
+        {/* Row 6 — Demographic Analysis: only the dimensions this app has
+            real data for (gender always did; department since Phase 0's
+            student↔department linkage). Programme/campus/age-group/category
+            stay out rather than being faked. */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 2, marginTop: 2 }}>
+          <Panel>
+            <SectionHead title={t("aan.demoByGender")} sub={t("aan.demoSub")} />
+            {d.demographics.byGender.length === 0 ? <Empty t={t} /> : (
+              <div className="flex flex-col" style={{ gap: 14 }}>
+                {d.demographics.byGender.map((g, i) => <HBar key={g.label} label={`${g.label} (${g.count})`} score={g.avgScore} color={SUBJECT_COLORS[i % SUBJECT_COLORS.length]} />)}
+              </div>
+            )}
+          </Panel>
+          <Panel>
+            <SectionHead title={t("aan.demoByDepartment")} sub={t("aan.demoSub")} />
+            {d.demographics.byDepartment.length === 0 ? (
+              <p style={{ fontSize: 12, color: DIM }}>{t("aan.demoNoDept")}</p>
+            ) : (
+              <div className="flex flex-col" style={{ gap: 14 }}>
+                {d.demographics.byDepartment.map((g, i) => <HBar key={g.label} label={`${g.label} (${g.count})`} score={g.avgScore} color={SUBJECT_COLORS[i % SUBJECT_COLORS.length]} />)}
+              </div>
+            )}
           </Panel>
         </div>
       </div>

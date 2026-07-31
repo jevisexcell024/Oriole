@@ -35,6 +35,12 @@ export interface User {
   age?: number | null;
   studentClass?: string;
   phone?: string;
+  /** Org-structure links (Faculty/Department/Program/Campus — see shared/types.ts's
+   *  Institution structure section below). Optional and independent of each other;
+   *  added so demographic/org-level analytics can group students by where they
+   *  actually study, not just by the free-text `studentClass` label above. */
+  departmentId?: string | null;
+  programId?: string | null;
   /** Accommodation: extra minutes added to every exam deadline for this student. */
   accommodationsExtraMinutes?: number;
   // Consecutive-day activity streak (days the student opened their portal).
@@ -779,6 +785,11 @@ export interface OrgSettings {
   digestFrequency?: "off" | "daily" | "weekly";
   /** Auto-purge audit logs older than this many days (0/undefined = keep forever). */
   auditRetentionDays?: number;
+  /** Ascending score-band break points for the Analytics "Score Distribution"
+   *  chart — e.g. [20,40,60,80] renders 0–20/21–40/41–60/61–80/81–100 (the
+   *  final 100% ceiling is always implicit, never stored). Defaults to that
+   *  same 5-band scheme when unset. */
+  scoreBandEdges?: number[];
   /** When the last digest was emailed (ISO) — drives the scheduler. */
   digestLastSentAt?: string | null;
   /** Also send exam reminders by SMS/WhatsApp (requires an SMS provider configured server-side). */
@@ -1189,6 +1200,10 @@ export interface AuditLog {
   actorName: string;
   action: string; // dot-namespaced, e.g. "exam.published"
   target: string; // human-readable description
+  /** Set when this action happened during a Super Admin "log in as" session —
+   *  the impersonating Super Admin's display name. Never part of the hash
+   *  (same as tenantId above), so it's pure metadata, not tamper-evidence. */
+  viaImpersonation?: string;
   /** Tamper-evidence: sha256(prevHash + canonical(entry)), hash-chained to the prior entry. */
   hash?: string;
   prevHash?: string;
@@ -1211,6 +1226,9 @@ export interface SafeUser {
   /** Resolved permission keys (own role + inherited), for staff users only. */
   permissions?: string[];
   mustChangePassword?: boolean;
+  /** Set only when this session is a Super Admin "log in as" session — drives
+   *  the impersonation banner and the "End impersonation" action. */
+  impersonatedBy?: { superAdminId: string; superAdminName: string } | null;
 }
 
 /** A question delivered to the candidate — never includes the correct answer. */

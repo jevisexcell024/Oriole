@@ -12,6 +12,7 @@ interface Settings {
   defaultPassingScore: number; defaultProctored: boolean; autoConfirmEnrollment: boolean;
   digestFrequency?: "off" | "daily" | "weekly";
   auditRetentionDays?: number;
+  scoreBandEdges?: number[];
   smsReminders?: boolean;
   reliabilityAlertEmails?: string[];
   reliabilityAlertSmsNumbers?: string[];
@@ -34,6 +35,8 @@ export function AdminSettings() {
   const [smsMsg, setSmsMsg] = useState<string | null>(null);
   const [alertEmailsText, setAlertEmailsText] = useState("");
   const [alertSmsText, setAlertSmsText] = useState("");
+  const [scoreBandsText, setScoreBandsText] = useState("");
+  const [scoreBandsErr, setScoreBandsErr] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const sendSmsTest = async () => {
@@ -55,6 +58,7 @@ export function AdminSettings() {
       setS(d.settings);
       setAlertEmailsText((d.settings.reliabilityAlertEmails ?? []).join(", "));
       setAlertSmsText((d.settings.reliabilityAlertSmsNumbers ?? []).join(", "));
+      setScoreBandsText((d.settings.scoreBandEdges ?? [20, 40, 60, 80]).join(", "));
     }).catch((e) => setError(e.message));
   }, []);
   useEffect(() => { api.get<SmsStatus>("/admin/sms/status").then(setSms).catch(() => {}); }, []);
@@ -103,6 +107,23 @@ export function AdminSettings() {
                 </span>
               </label>
               <Toggle label={t("aset.proctorDefault")} hint={t("aset.proctorDefaultHint")} on={s.defaultProctored} onChange={(v) => update({ defaultProctored: v })} />
+              <label className="block rounded-xl border border-[var(--border)] p-3">
+                <span className="block text-sm font-medium">{t("aset.scoreBands")}</span>
+                <span className="mb-2 block text-xs text-[var(--muted)]">{t("aset.scoreBandsHint")}</span>
+                <input
+                  className={clsx("input h-9 w-full", scoreBandsErr && "border-rose-500")}
+                  value={scoreBandsText}
+                  placeholder="20, 40, 60, 80"
+                  onChange={(e) => { setScoreBandsText(e.target.value); setScoreBandsErr(false); }}
+                  onBlur={() => {
+                    const edges = scoreBandsText.split(",").map((v) => Number(v.trim())).filter((v) => !Number.isNaN(v));
+                    const ascending = edges.every((v, i) => (i === 0 || v > edges[i - 1]) && v > 0 && v < 100);
+                    if (edges.length === 0 || !ascending) { setScoreBandsErr(true); return; }
+                    update({ scoreBandEdges: edges });
+                  }}
+                />
+                {scoreBandsErr && <span className="mt-1 block text-xs text-rose-400">{t("aset.scoreBandsErr")}</span>}
+              </label>
             </div>
 
             <h2 className="mt-6 text-sm font-semibold">{t("aset.enrollment")}</h2>

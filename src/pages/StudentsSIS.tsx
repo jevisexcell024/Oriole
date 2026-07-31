@@ -145,7 +145,8 @@ export function StudentsSIS() {
   return (
     <AdminShell wide>
       <div className="fade-in">
-        <PageHeader title={t("asis.title")} subtitle={t("asis.subtitle")} />
+        <PageHeader title={t("asis.title")} subtitle={t("asis.subtitle")}
+          actions={<button onClick={() => navigate("/admin/candidates")} className="btn btn-ghost-teal"><Users2 className="h-4 w-4" /> {t("asis.manageStudents")}</button>} />
 
         {error && (
           <ErrorBanner className="mt-6">{error}</ErrorBanner>
@@ -309,8 +310,18 @@ function ClassFolderRow({ folder, isOpen, onToggle, isPinned, onPin, onNavigate 
       className="overflow-hidden rounded-2xl border transition-all duration-200"
       style={{ borderColor: isOpen ? p.border : "var(--border)", background: isOpen ? p.bg : "var(--card)" }}
     >
-      {/* Header */}
-      <button className="flex w-full items-center gap-4 px-5 py-4 text-left" onClick={onToggle}>
+      {/* Header — div, not <button>: it contains its own action buttons (the
+          "..." menu), and nesting <button> inside <button> is invalid HTML
+          that browsers silently repair, breaking the click target and
+          throwing React hydration warnings. role="button" + tabIndex +
+          explicit key handling restores the same keyboard/AT behavior. */}
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onToggle}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(); } }}
+        className="flex w-full cursor-pointer items-center gap-4 px-5 py-4 text-left"
+      >
         {/* Icon */}
         <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl"
           style={{ background: p.bg, border: `1px solid ${p.border}` }}>
@@ -383,7 +394,7 @@ function ClassFolderRow({ folder, isOpen, onToggle, isPinned, onPin, onNavigate 
           <ChevronDown
             className={clsx("h-5 w-5 text-[var(--muted)] transition-transform duration-200", isOpen && "rotate-180")} />
         </div>
-      </button>
+      </div>
 
       {/* Expanded body */}
       {isOpen && (

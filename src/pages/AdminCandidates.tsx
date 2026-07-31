@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import {
   Users, Loader2, Search, Plus, Download, Upload, Phone, Mail, MoreHorizontal, X, Pencil, Trash2, BookPlus,
-  ChevronLeft, ChevronRight, AlertTriangle, CheckCircle2, Send,
+  ChevronLeft, ChevronRight, AlertTriangle, CheckCircle2, Send, GraduationCap,
 } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
 import { PageHeader } from "@/components/PageHeader";
@@ -17,8 +17,10 @@ import { clsx } from "clsx";
 interface Student {
   id: string; name: string; email: string; gender: string | null; age: number | null; studentClass: string | null;
   phone: string | null; avgScore: number | null; missingDays: number; enrollments: number; completed: number;
+  departmentId: string | null; departmentName: string | null; programId: string | null; programName: string | null;
 }
 interface ExamOpt { id: string; title: string }
+interface OrgOpt { id: string; name: string }
 
 const PAGE = 10;
 const gradeTone = (n: number | null) => (n === null ? "text-[var(--muted)]" : n >= 80 ? "text-[#22C55E]" : n >= 60 ? "text-[#eab308]" : "text-[#EF4444]");
@@ -31,6 +33,9 @@ export function AdminCandidates() {
   const [q, setQ] = useState("");
   const [classFilter, setClassFilter] = useState("");
   const [genderFilter, setGenderFilter] = useState("");
+  const [departmentFilter, setDepartmentFilter] = useState("");
+  const [departments, setDepartments] = useState<OrgOpt[]>([]);
+  const [programs, setPrograms] = useState<OrgOpt[]>([]);
   const [page, setPage] = useState(1);
   const [sel, setSel] = useState<Set<string>>(new Set());
   // Row action menu: rendered in a portal with fixed coords so the table's
@@ -44,7 +49,10 @@ export function AdminCandidates() {
   const [resending, setResending] = useState<Student | null>(null);
 
   const load = () => api.get<{ students: Student[] }>("/admin/students").then((d) => setRows(d.students)).catch((e) => setError(e.message));
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    api.get<{ departments: OrgOpt[]; programs: OrgOpt[] }>("/admin/institution").then((d) => { setDepartments(d.departments); setPrograms(d.programs); }).catch(() => {});
+  }, []);
 
   const classes = useMemo(() => [...new Set((rows ?? []).map((r) => r.studentClass).filter(Boolean))] as string[], [rows]);
   const filtered = useMemo(() => {
@@ -53,17 +61,18 @@ export function AdminCandidates() {
     if (term) list = list.filter((r) => r.name.toLowerCase().includes(term) || r.email.toLowerCase().includes(term));
     if (classFilter) list = list.filter((r) => r.studentClass === classFilter);
     if (genderFilter) list = list.filter((r) => r.gender === genderFilter);
+    if (departmentFilter) list = list.filter((r) => r.departmentId === departmentFilter);
     return list;
-  }, [rows, q, classFilter, genderFilter]);
+  }, [rows, q, classFilter, genderFilter, departmentFilter]);
 
   const pages = Math.max(1, Math.ceil(filtered.length / PAGE));
   const pageRows = filtered.slice((page - 1) * PAGE, page * PAGE);
-  useEffect(() => { setPage(1); }, [q, classFilter, genderFilter]);
+  useEffect(() => { setPage(1); }, [q, classFilter, genderFilter, departmentFilter]);
 
   function downloadCsv(list: Student[], name: string) {
-    const header = ["ID", "Name", "Email", "Gender", "Age", "Class", "AvgGrade", "MissingDays"];
+    const header = ["ID", "Name", "Email", "Gender", "Age", "Class", "Department", "Programme", "AvgGrade", "MissingDays"];
     const esc = (v: unknown) => { const s = String(v ?? ""); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-    const lines = list.map((r) => [r.id, r.name, r.email, r.gender ?? "", r.age ?? "", r.studentClass ?? "", r.avgScore ?? "", r.missingDays].map(esc).join(","));
+    const lines = list.map((r) => [r.id, r.name, r.email, r.gender ?? "", r.age ?? "", r.studentClass ?? "", r.departmentName ?? "", r.programName ?? "", r.avgScore ?? "", r.missingDays].map(esc).join(","));
     const blob = new Blob([[header.join(","), ...lines].join("\n")], { type: "text/csv" });
     const url = URL.createObjectURL(blob); const a = document.createElement("a");
     a.href = url; a.download = `${name}.csv`; a.click(); URL.revokeObjectURL(url);
@@ -76,6 +85,7 @@ export function AdminCandidates() {
       <div className="fade-in" onClick={() => setMenu(null)}>
         <PageHeader title={t("acan.title")} subtitle={t("acan.total", { n: rows?.length ?? "…" })}
           actions={<>
+            <button onClick={() => navigate("/admin/students")} className="btn btn-ghost-teal"><GraduationCap className="h-4 w-4" /> {t("acan.viewByClass")}</button>
             <button onClick={() => setImportOpen(true)} className="btn btn-ghost-teal"><Upload className="h-4 w-4" /> {t("acan.import")}</button>
             <button onClick={exportCsv} className="btn btn-ghost-teal"><Download className="h-4 w-4" /> {t("acan.exportData")}</button>
             <button onClick={() => setAddOpen(true)} className="btn btn-on-teal"><Plus className="h-4 w-4" /> {t("acan.addStudent")}</button>
@@ -95,7 +105,13 @@ export function AdminCandidates() {
             <option value="">{t("acan.anyGender")}</option>
             <option value="Male">{t("acan.male")}</option><option value="Female">{t("acan.female")}</option><option value="Other">{t("acan.other")}</option>
           </select>
-          {(q || classFilter || genderFilter) && <button onClick={() => { setQ(""); setClassFilter(""); setGenderFilter(""); }} className="text-xs text-[var(--muted)] hover:text-[var(--fg)]">{t("acan.clear")}</button>}
+          {departments.length > 0 && (
+            <select value={departmentFilter} onChange={(e) => setDepartmentFilter(e.target.value)} className="input h-10 w-auto">
+              <option value="">{t("acan.allDepartments")}</option>
+              {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+          )}
+          {(q || classFilter || genderFilter || departmentFilter) && <button onClick={() => { setQ(""); setClassFilter(""); setGenderFilter(""); setDepartmentFilter(""); }} className="text-xs text-[var(--muted)] hover:text-[var(--fg)]">{t("acan.clear")}</button>}
         </div>
 
         {sel.size > 0 && (
@@ -133,6 +149,7 @@ export function AdminCandidates() {
                     <th className="hidden px-3 py-3 font-semibold md:table-cell">{t("acan.colGender")}</th>
                     <th className="hidden px-3 py-3 text-center font-semibold md:table-cell">{t("acan.colAge")}</th>
                     <th className="hidden px-3 py-3 font-semibold sm:table-cell">{t("acan.colClass")}</th>
+                    <th className="hidden px-3 py-3 font-semibold lg:table-cell">{t("acan.colDepartment")}</th>
                     <th className="px-3 py-3 text-center font-semibold">{t("acan.colAvgGrade")}</th>
                     <th className="hidden px-3 py-3 text-center font-semibold sm:table-cell">{t("acan.colMissingDays")}</th>
                     <th className="px-3 py-3 text-right font-semibold">{t("acan.colActions")}</th>
@@ -140,9 +157,9 @@ export function AdminCandidates() {
                 </thead>
                 <tbody>
                   {pageRows.length === 0 && (
-                    <tr><td colSpan={9} className="px-4 py-12 text-center">
+                    <tr><td colSpan={10} className="px-4 py-12 text-center">
                       <p className="text-sm font-medium">{t("acan.noMatch")}</p>
-                      <button onClick={() => { setQ(""); setClassFilter(""); setGenderFilter(""); }} className="mt-1.5 text-xs text-[#c6ff34] hover:underline">{t("acan.clearFilters")}</button>
+                      <button onClick={() => { setQ(""); setClassFilter(""); setGenderFilter(""); setDepartmentFilter(""); }} className="mt-1.5 text-xs text-[#c6ff34] hover:underline">{t("acan.clearFilters")}</button>
                     </td></tr>
                   )}
                   {pageRows.map((r) => (
@@ -158,6 +175,7 @@ export function AdminCandidates() {
                       <td className="hidden px-3 py-3 text-[var(--muted)] md:table-cell">{r.gender ?? "—"}</td>
                       <td className="hidden px-3 py-3 text-center text-[var(--muted)] md:table-cell">{r.age ?? "—"}</td>
                       <td className="hidden px-3 py-3 sm:table-cell">{r.studentClass ? <span className="rounded-md bg-white/[0.05] px-2 py-0.5 text-xs">{r.studentClass}</span> : <span className="text-[var(--muted)]">—</span>}</td>
+                      <td className="hidden px-3 py-3 text-[var(--muted)] lg:table-cell">{r.departmentName ?? "—"}</td>
                       <td className={clsx("px-3 py-3 text-center font-semibold tabular-nums", gradeTone(r.avgScore))}>{r.avgScore === null ? "—" : `${r.avgScore}%`}</td>
                       <td className={clsx("hidden px-3 py-3 text-center tabular-nums sm:table-cell", r.missingDays > 0 ? "text-[#F59E0B]" : "text-[var(--muted)]")}>{r.missingDays}</td>
                       <td className="px-3 py-3">
@@ -315,16 +333,24 @@ function StudentForm({ title, student, onClose, onSaved }: { title: string; stud
   const [gender, setGender] = useState(student?.gender ?? "");
   const [age, setAge] = useState(student?.age?.toString() ?? "");
   const [phone, setPhone] = useState(student?.phone ?? "");
+  const [departmentId, setDepartmentId] = useState(student?.departmentId ?? "");
+  const [programId, setProgramId] = useState(student?.programId ?? "");
+  const [departments, setDepartments] = useState<OrgOpt[]>([]);
+  const [programs, setPrograms] = useState<OrgOpt[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const editMode = !!student;
+
+  useEffect(() => {
+    api.get<{ departments: OrgOpt[]; programs: OrgOpt[] }>("/admin/institution").then((d) => { setDepartments(d.departments); setPrograms(d.programs); }).catch(() => {});
+  }, []);
 
   async function save() {
     setErr(null);
     if (!name.trim() || !email.trim()) { setErr(t("acan.errNameEmail")); return; }
     setBusy(true);
     try {
-      const body = { name, email, gender: gender || undefined, age: age ? Number(age) : null, phone };
+      const body = { name, email, gender: gender || undefined, age: age ? Number(age) : null, phone, departmentId: departmentId || null, programId: programId || null };
       if (editMode) {
         await api.patch(`/admin/students/${student!.id}`, body);
         if (password) await api.patch(`/admin/candidates/${student!.id}/password`, { password });
@@ -347,6 +373,22 @@ function StudentForm({ title, student, onClose, onSaved }: { title: string; stud
           <Field label={t("acan.age")}><input type="number" min={0} className="input h-10" value={age} onChange={(e) => setAge(e.target.value)} /></Field>
         </div>
         <Field label={t("acan.phone")}><input className="input h-10" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+233…" /></Field>
+        {(departments.length > 0 || programs.length > 0) && (
+          <div className="grid grid-cols-2 gap-3">
+            <Field label={t("acan.department")}>
+              <select className="input h-10" value={departmentId} onChange={(e) => setDepartmentId(e.target.value)}>
+                <option value="">—</option>
+                {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
+            </Field>
+            <Field label={t("acan.programme")}>
+              <select className="input h-10" value={programId} onChange={(e) => setProgramId(e.target.value)}>
+                <option value="">—</option>
+                {programs.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </Field>
+          </div>
+        )}
         {editMode ? (
           <Field label={t("acan.resetPassword")}>
             <input type="password" className="input h-10" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={t("acan.leaveBlank")} />

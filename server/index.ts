@@ -9,7 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { createHmac, createHash, randomBytes } from "node:crypto";
-import { db, initDb, snapshotStore, proctorStore, answerStore, auditStore, superAdminAuditStore, emailStore, geofenceStore, reliabilityStore, reliabilityRollupStore, mediaAssetStore } from "./db.ts";
+import { db, initDb, snapshotStore, proctorStore, answerStore, auditStore, superAdminAuditStore, emailStore, geofenceStore, reliabilityStore, reliabilityRollupStore, mediaAssetStore, exportTenantData, deleteTenantData } from "./db.ts";
 import { currentTenantId, tenantExams, getOrgSettings } from "./tenant.ts";
 import { sendMail, mailerStatus, verifySmtp, buildHtml, ctaButton, esc } from "./mailer.ts";
 import { renderEmailTemplate, EMAIL_TEMPLATE_DEFS } from "./emailTemplates.ts";
@@ -18,6 +18,7 @@ import {
   clearSession, currentUser, issueSession, requireAuth, requireRole, requireRoles, toSafeUser,
   issuePending2fa, pending2faUserId, clearPending2fa, requirePermission, resolvePermissions,
   resolveCustomRolePermissions, permissionOverreach, passwordSetupToken, verifyPasswordSetupToken,
+  currentImpersonatorId,
 } from "./auth.ts";
 import {
   issueSuperAdminSession, currentSuperAdmin, requireSuperAdmin, clearSuperAdminSession, toSafeSuperAdmin,
@@ -130,7 +131,12 @@ function isAnonymized(attempt: Attempt, exam: Exam | undefined): boolean {
 /** Record an administrative action to the audit trail. */
 async function recordAudit(req: Request, action: string, target: string) {
   const u = currentUser(req);
-  const log = { id: nanoid(10), at: now(), tenantId: u?.tenantId, actorId: u?.id ?? "system", actorName: u?.name ?? "System", action, target };
+  // If this request is running inside a Super Admin "log in as" session, stamp
+  // who was actually driving it — the tenant's own audit log should show that
+  // transparently, not read as if the impersonated admin did it themselves.
+  const impId = currentImpersonatorId(req);
+  const viaImpersonation = impId ? db.data!.superAdmins.find((s) => s.id === impId)?.name : undefined;
+  const log = { id: nanoid(10), at: now(), tenantId: u?.tenantId, actorId: u?.id ?? "system", actorName: u?.name ?? "System", action, target, viaImpersonation };
   await auditStore.add(log);
 }
 
@@ -427,6 +433,22 @@ app.post("/api/auth/logout", async (req, res) => {
   res.json({ ok: true });
 });
 
+// Ends a Super Admin "log in as" session without touching the impersonated
+// admin's own tokenVersion — a real logout (above) revokes every session for
+// that account, which would be real collateral damage against an innocent
+// tenant admin whose account just happened to be the one being observed.
+// This just clears the borrowed cookie; the Super Admin's own session
+// (a separate cookie, untouched throughout) is unaffected and still valid.
+app.post("/api/admin/impersonation/end", requireAuth, async (req, res) => {
+  const impId = currentImpersonatorId(req);
+  if (!impId) return res.status(400).json({ error: "Not currently impersonating." });
+  const user = currentUser(req)!;
+  await recordAudit(req, "impersonation.ended", `${user.name} <${user.email}>`);
+  await recordSuperAdminAudit(req, "superadmin.impersonation_ended", `${user.name} <${user.email}>`);
+  clearSession(res);
+  res.json({ ok: true });
+});
+
 // ---- account: 2FA setup / management (any signed-in user) ----
 app.post("/api/auth/2fa/setup", requireAuth, async (req, res) => {
   const user = currentUser(req)!;
@@ -477,7 +499,11 @@ app.post("/api/auth/2fa/disable", requireAuth, validate(twoFaDisableSchema), asy
 
 app.get("/api/auth/me", (req, res) => {
   const user = currentUser(req);
-  res.json({ user: user ? toSafeUser(user) : null });
+  if (!user) return res.json({ user: null });
+  const impId = currentImpersonatorId(req);
+  const impersonator = impId ? db.data!.superAdmins.find((s) => s.id === impId) : null;
+  const impersonatedBy = impersonator ? { superAdminId: impersonator.id, superAdminName: impersonator.name } : null;
+  res.json({ user: { ...toSafeUser(user), impersonatedBy } });
 });
 
 // ---- Super Admin — fully separate identity, session, and audit trail from
@@ -881,6 +907,66 @@ app.patch("/api/super-admin/tenants/:id", requireSuperAdmin, async (req, res) =>
   await db.upsert("tenants", tenant);
   await recordSuperAdminAudit(req, tenant.status === "suspended" ? "superadmin.tenant.suspended" : "superadmin.tenant.updated", tenant.name);
   res.json({ tenant });
+});
+
+// Support tooling: "log in as" a tenant's admin account — the single riskiest
+// item in the original Super Admin plan, so every safeguard here is
+// deliberate. Issues a real tenant session for the school's own first admin
+// account (never a password, never chosen by the Super Admin), tagged with an
+// `imp` JWT claim so every audit-log entry written during it is attributed
+// (see recordAudit) and the tenant's own admins can see it happened at all —
+// this is oversight, not a secret backdoor.
+app.post("/api/super-admin/tenants/:id/impersonate", requireSuperAdmin, async (req, res) => {
+  const superAdmin = currentSuperAdmin(req)!;
+  const tenant = db.data!.tenants.find((t) => t.id === req.params.id);
+  if (!tenant) return res.status(404).json({ error: "Not found." });
+  if (tenant.status === "suspended") return res.status(400).json({ error: "Cannot log in to a suspended school." });
+  const admin = db.data!.users.find((u) => u.tenantId === tenant.id && u.role === "admin");
+  if (!admin) return res.status(404).json({ error: "This school has no admin account yet." });
+
+  issueSession(res, admin, superAdmin.id);
+  await recordSuperAdminAudit(req, "superadmin.impersonation_started", `${tenant.name} → ${admin.name} <${admin.email}>`);
+  // Written directly (not via recordAudit, which reads currentUser(req) — at
+  // this point in the request that's still null, since the new cookie won't
+  // take effect until this response reaches the browser) so the tenant's own
+  // audit trail shows this the instant it happens, not just the Super Admin's.
+  await auditStore.add({
+    id: nanoid(10), at: now(), tenantId: tenant.id, actorId: superAdmin.id, actorName: `Super Admin (${superAdmin.name})`,
+    action: "impersonation.started", target: `Logged in as ${admin.name} <${admin.email}>`,
+  });
+  res.json({ ok: true, admin: { name: admin.name, email: admin.email } });
+});
+
+// Compliance/offboarding — full data export. Streams a JSON bundle of every
+// row this tenant owns (secrets stripped, see exportTenantData) as a file
+// download rather than a normal API response.
+app.get("/api/super-admin/tenants/:id/export", requireSuperAdmin, async (req, res) => {
+  const tenant = db.data!.tenants.find((t) => t.id === req.params.id);
+  if (!tenant) return res.status(404).json({ error: "Not found." });
+  const bundle = await exportTenantData(tenant.id);
+  await recordSuperAdminAudit(req, "superadmin.tenant.exported", tenant.name);
+  res.setHeader("Content-Type", "application/json");
+  res.setHeader("Content-Disposition", `attachment; filename="${tenant.name.replace(/[^a-z0-9]+/gi, "-")}-export.json"`);
+  res.send(JSON.stringify({ exportedAt: now(), tenant: tenant.name, data: bundle }, null, 2));
+});
+
+// Compliance/offboarding — full, irreversible data deletion. Gated behind two
+// deliberate safeguards on top of requireSuperAdmin: the school must already
+// be suspended (so this can never be a hasty first action against a live
+// school), and the caller must repeat the tenant's own name back exactly —
+// the same "type it to confirm" pattern used everywhere else in the app a
+// destructive action can't be undone.
+app.delete("/api/super-admin/tenants/:id", requireSuperAdmin, async (req, res) => {
+  const tenant = db.data!.tenants.find((t) => t.id === req.params.id);
+  if (!tenant) return res.status(404).json({ error: "Not found." });
+  if (tenant.status !== "suspended") return res.status(400).json({ error: "Suspend this school before deleting its data." });
+  const confirmName = typeof req.body?.confirmName === "string" ? req.body.confirmName.trim() : "";
+  if (confirmName !== tenant.name) return res.status(400).json({ error: "Confirmation name didn't match — nothing was deleted." });
+
+  const counts = await deleteTenantData(tenant.id);
+  const totalRows = Object.values(counts).reduce((a, b) => a + b, 0);
+  await recordSuperAdminAudit(req, "superadmin.tenant.deleted", `${tenant.name} — ${totalRows} rows across ${Object.keys(counts).length} tables`);
+  res.json({ ok: true, deletedRows: counts });
 });
 
 // ---- Single Sign-On (Microsoft / Entra) ----
@@ -2553,6 +2639,8 @@ app.post("/api/admin/candidates", requirePermission("students.manage"), async (r
     age: typeof b.age === "number" ? b.age : undefined,
     studentClass: typeof b.studentClass === "string" ? b.studentClass.trim() : undefined,
     phone: typeof b.phone === "string" && b.phone.trim() ? encryptString(b.phone.trim()) : undefined,
+    departmentId: db.data!.departments.some((d) => d.id === b.departmentId && d.tenantId === tenantId) ? b.departmentId : undefined,
+    programId: db.data!.programs.some((p) => p.id === b.programId && p.tenantId === tenantId) ? b.programId : undefined,
     mustChangePassword: true,
   };
   db.data!.users.push(user);
@@ -3334,9 +3422,27 @@ app.get("/api/admin/exams/:id/item-analysis", requirePermission("results.view"),
     return {
       id: q.id, prompt: q.prompt, type: q.type, points: q.points, sectionId: q.sectionId ?? null,
       answered, correct, correctRate, avgPoints: answered ? Math.round((pts / answered) * 10) / 10 : null,
-      difficulty, discrimination, distractors,
+      difficulty, discrimination, distractors, tags: q.tags ?? [],
     };
   });
+
+  // Topic Performance: the same per-question answered/correct counts above,
+  // rolled up by the question's own topic tags (shared/types.ts's
+  // Question.tags — already used for blueprint assembly, so this adds no new
+  // question metadata). A question with several tags contributes to each;
+  // sorted weakest-first to match the spec's "identify weak teaching areas
+  // immediately." Empty when no question on this exam has any tag.
+  const topicStat = new Map<string, { answered: number; correct: number; items: number }>();
+  for (const it of items) {
+    for (const tag of it.tags) {
+      const st = topicStat.get(tag) ?? { answered: 0, correct: 0, items: 0 };
+      st.answered += it.answered; st.correct += it.correct; st.items += 1;
+      topicStat.set(tag, st);
+    }
+  }
+  const topics = [...topicStat.entries()]
+    .map(([topic, st]) => ({ topic, items: st.items, answered: st.answered, correctRate: st.answered ? Math.round((st.correct / st.answered) * 100) : null }))
+    .sort((a, b) => (a.correctRate ?? 101) - (b.correctRate ?? 101));
 
   // Cronbach's alpha — internal-consistency reliability across items.
   const variance = (xs: number[]) => {
@@ -3354,7 +3460,7 @@ app.get("/api/admin/exams/:id/item-analysis", requirePermission("results.view"),
     if (totalVar > 0) alpha = Math.round((k / (k - 1)) * (1 - sumItemVar / totalVar) * 100) / 100;
   }
 
-  res.json({ exam: { id: exam.id, title: exam.title, code: exam.code }, attempts: submitted.length, items, alpha });
+  res.json({ exam: { id: exam.id, title: exam.title, code: exam.code }, attempts: submitted.length, items, alpha, topics });
 });
 
 // Every candidate's answer to one specific question, side by side — the
@@ -4148,57 +4254,6 @@ app.post("/api/admin/attempts/:id/terminate", requirePermission("monitor.control
   res.json({ ok: true });
 });
 
-// ---- admin: analytics ----
-app.get("/api/admin/analytics", requirePermission("results.view"), async (req, res) => {
-  const tenantId = currentTenantId(req);
-  const submitted = db.data!.attempts.filter((a) => a.status === "submitted" && a.tenantId === tenantId);
-  const scores = submitted.map((a) => a.score ?? 0);
-  const evMap = await proctorStore.forAttempts(submitted.map((a) => a.id));
-  const integrityVals = submitted.map((a) => scoreOf(cleanEvents(evMap.get(a.id) ?? [], a.submittedAt)));
-  const avg = (xs: number[]) => (xs.length ? Math.round(xs.reduce((p, c) => p + c, 0) / xs.length) : 0);
-
-  const scoreBuckets = [
-    { label: "0–39", count: submitted.filter((a) => (a.score ?? 0) < 40).length },
-    { label: "40–59", count: submitted.filter((a) => { const s = a.score ?? 0; return s >= 40 && s < 60; }).length },
-    { label: "60–79", count: submitted.filter((a) => { const s = a.score ?? 0; return s >= 60 && s < 80; }).length },
-    { label: "80–100", count: submitted.filter((a) => (a.score ?? 0) >= 80).length },
-  ];
-  const integrityBuckets = [
-    { label: "Critical (<60)", count: integrityVals.filter((v) => v < 60).length },
-    { label: "Moderate (60–79)", count: integrityVals.filter((v) => v >= 60 && v < 80).length },
-    { label: "Minor (80–99)", count: integrityVals.filter((v) => v >= 80 && v < 100).length },
-    { label: "Clean (100)", count: integrityVals.filter((v) => v === 100).length },
-  ];
-  const flagsByType: Record<string, number> = {};
-  for (const evs of evMap.values()) {
-    for (const e of evs) if (e.severity !== "info") flagsByType[e.type] = (flagsByType[e.type] ?? 0) + 1;
-  }
-  const tenantExamsList = db.data!.exams.filter((e) => e.tenantId === tenantId);
-  const perExam = tenantExamsList
-    .map((exam) => {
-      const ax = submitted.filter((a) => a.examId === exam.id);
-      return { title: exam.title, attempts: ax.length, avgScore: avg(ax.map((a) => a.score ?? 0)), passRate: ax.length ? Math.round((ax.filter((a) => a.passed).length / ax.length) * 100) : 0 };
-    })
-    .filter((e) => e.attempts > 0);
-
-  res.json({
-    totals: {
-      exams: tenantExamsList.length,
-      published: tenantExamsList.filter((e) => e.status === "published").length,
-      candidates: db.data!.users.filter((u) => u.role === "candidate" && u.tenantId === tenantId).length,
-      submitted: submitted.length,
-      certificates: db.data!.certificates.filter((c) => c.tenantId === tenantId).length,
-    },
-    passRate: submitted.length ? Math.round((submitted.filter((a) => a.passed).length / submitted.length) * 100) : 0,
-    avgScore: avg(scores),
-    avgIntegrity: avg(integrityVals),
-    scoreBuckets,
-    integrityBuckets,
-    perExam,
-    flagsByType,
-  });
-});
-
 // Rich aggregation for the Results & Analytics dashboard — every field here is
 // a real institution-wide figure derived from submitted attempts/registrations/
 // questions; nothing is fabricated (no "loyalty score", "study hours", or
@@ -4298,6 +4353,45 @@ app.get("/api/admin/analytics-overview", requirePermission("results.view"), asyn
     .map(([type, st]) => ({ type: QUESTION_TYPE_LABEL[type] ?? type, score: st.t ? Math.round((st.c / st.t) * 100) : 0, volume: st.t }))
     .sort((a, b) => b.volume - a.volume).slice(0, 4);
 
+  // ---- Score Distribution: real submitted-score histogram, tenant-configurable
+  // band edges (Settings → Exam Defaults), defaulting to the spec's 5-band
+  // scheme. The final band's ceiling (100%) is always implicit. ----
+  const bandEdges = tenantId ? (getOrgSettings(tenantId).scoreBandEdges ?? [20, 40, 60, 80]) : [20, 40, 60, 80];
+  const scoreDistribution = (() => {
+    const edges = [0, ...bandEdges, 100];
+    const total = scores.length || 1;
+    const bands = [];
+    for (let i = 0; i < edges.length - 1; i++) {
+      const lo = i === 0 ? 0 : edges[i] + 1;
+      const hi = edges[i + 1];
+      const count = scores.filter((s) => s >= lo && s <= hi).length;
+      bands.push({ label: `${lo}–${hi}%`, count, pct: Math.round((count / total) * 100) });
+    }
+    return bands;
+  })();
+
+  // ---- Demographic Analysis: real average score + pass rate grouped by
+  // gender and by department — the only two demographic dimensions this app
+  // actually has data for today (see the Learning Structure notes: students
+  // aren't linked to Program/Campus with any real usage yet, and there's no
+  // age-group/category concept, so those stay out rather than being faked). ----
+  const demoGroup = (keyOf: (u: User) => string | null) => {
+    const buckets = new Map<string, Attempt[]>();
+    for (const a of submitted) {
+      const student = d.users.find((u) => u.id === a.candidateId);
+      const key = student ? keyOf(student) : null;
+      if (!key) continue;
+      (buckets.get(key) ?? buckets.set(key, []).get(key)!).push(a);
+    }
+    return [...buckets.entries()]
+      .map(([label, ax]) => ({ label, count: ax.length, avgScore: avg(ax.map((a) => a.score ?? 0)), passRate: passRateOf(ax) ?? 0 }))
+      .sort((a, b) => b.count - a.count);
+  };
+  const demographics = {
+    byGender: demoGroup((u) => u.gender ?? null),
+    byDepartment: demoGroup((u) => (u.departmentId ? (d.departments.find((dep) => dep.id === u.departmentId)?.name ?? null) : null)),
+  };
+
   // ---- Row 3A: question difficulty tiers (real correctness-rate bands, institution-wide) ----
   const qStat = new Map<string, { c: number; t: number }>();
   for (const arr of ansMap.values()) for (const an of arr) { const st = qStat.get(an.questionId) ?? { c: 0, t: 0 }; st.t++; if (an.correct === true) st.c++; qStat.set(an.questionId, st); }
@@ -4342,7 +4436,7 @@ app.get("/api/admin/analytics-overview", requirePermission("results.view"), asyn
 
   res.json({
     cards, subjectTrend, topSubjects, subjectBars, questionTypeAnalysis, questionDifficulty,
-    accuracy, paceBuckets, weeklyActivity, monthlyPerformance,
+    accuracy, paceBuckets, weeklyActivity, monthlyPerformance, scoreDistribution, demographics,
   });
 });
 
@@ -4468,6 +4562,10 @@ app.get("/api/admin/students", requirePermission("students.manage"), async (req,
         age: u.age ?? null,
         studentClass: u.studentClass ?? null,
         phone: u.phone ? (decryptString(u.phone) ?? null) : null,
+        departmentId: u.departmentId ?? null,
+        departmentName: u.departmentId ? (db.data!.departments.find((d) => d.id === u.departmentId)?.name ?? null) : null,
+        programId: u.programId ?? null,
+        programName: u.programId ? (db.data!.programs.find((p) => p.id === u.programId)?.name ?? null) : null,
         enrollments: regs.length,
         confirmed: regs.filter((r) => r.approval === "confirmed").length,
         completed: attempts.length,
@@ -4511,6 +4609,12 @@ app.patch("/api/admin/students/:id", requirePermission("students.manage"), async
   if ("age" in b) u.age = b.age === null || b.age === "" ? undefined : Number(b.age);
   if (typeof b.studentClass === "string") u.studentClass = b.studentClass.trim();
   if (typeof b.phone === "string") u.phone = b.phone.trim() ? encryptString(b.phone.trim()) : undefined;
+  if ("departmentId" in b) {
+    u.departmentId = b.departmentId && db.data!.departments.some((d) => d.id === b.departmentId && d.tenantId === u.tenantId) ? b.departmentId : null;
+  }
+  if ("programId" in b) {
+    u.programId = b.programId && db.data!.programs.some((p) => p.id === b.programId && p.tenantId === u.tenantId) ? b.programId : null;
+  }
   await db.upsert("users", u);
   await recordAudit(req, "student.updated", `${u.name} <${u.email}>`);
   res.json({ ok: true });
@@ -5554,6 +5658,11 @@ app.patch("/api/admin/settings", requirePermission("system.settings"), async (re
   if (typeof b.address === "string") s.address = b.address.trim();
   if (b.digestFrequency === "off" || b.digestFrequency === "daily" || b.digestFrequency === "weekly") s.digestFrequency = b.digestFrequency;
   if (typeof b.auditRetentionDays === "number") s.auditRetentionDays = Math.max(0, Math.min(3650, Math.floor(b.auditRetentionDays)));
+  if (Array.isArray(b.scoreBandEdges)) {
+    const edges = (b.scoreBandEdges as unknown[]).filter((v): v is number => typeof v === "number" && v > 0 && v < 100).map((v) => Math.round(v));
+    const ascending = edges.every((v, i) => i === 0 || v > edges[i - 1]);
+    if (edges.length >= 1 && edges.length <= 9 && ascending) s.scoreBandEdges = edges;
+  }
   if (typeof b.smsReminders === "boolean") s.smsReminders = b.smsReminders;
   if (Array.isArray(b.reliabilityAlertEmails)) s.reliabilityAlertEmails = (b.reliabilityAlertEmails as unknown[]).filter((v): v is string => typeof v === "string" && v.trim().length > 0).map((v) => v.trim());
   if (Array.isArray(b.reliabilityAlertSmsNumbers)) s.reliabilityAlertSmsNumbers = (b.reliabilityAlertSmsNumbers as unknown[]).filter((v): v is string => typeof v === "string" && v.trim().length > 0).map((v) => v.trim());

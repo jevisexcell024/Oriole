@@ -327,6 +327,78 @@ export async function dumpAll(): Promise<Record<string, unknown[]>> {
   return out;
 }
 
+// Tenant-scoped mirrored collections eligible for the Super Admin export/delete
+// tools below — every collection that carries a tenantId, in TABLES order.
+// Deliberately excludes platform-global collections with no tenantId (tenants
+// itself, superAdmins, maintenance, emailTemplates, reliabilityIncidents) and
+// "settings", which is keyed by id === tenantId rather than a tenantId field
+// and is handled as a one-row special case in both functions below.
+const TENANT_SCOPED_COLLECTIONS: (keyof Schema)[] = [
+  "users", "supportTickets", "exams", "questions", "registrations", "attempts", "certificates",
+  "announcements", "faculties", "departments", "programs", "campuses", "academicYears",
+  "classes", "regradeRequests", "books", "readingProgress", "resourceVersions", "resourceBookmarks",
+  "resourceRatings", "resourceDownloadLogs", "announcementReads", "customRoles",
+];
+
+/** Full export of one tenant's own data — every row it owns across the mirrored
+ *  collections above, its one OrgSettings row, and the 7 tenant-aware off-mirror
+ *  tables (see TENANT_ID_TABLES) — the "compliance/offboarding data export" tool
+ *  from the original Super Admin plan. Secrets that would never help the tenant
+ *  (password hashes, 2FA secrets, hashed API keys) are stripped; everything else
+ *  is exactly what's in the database. */
+export async function exportTenantData(tenantId: string): Promise<Record<string, unknown[]>> {
+  const out: Record<string, unknown[]> = {};
+  const tenant = db.data!.tenants.find((t) => t.id === tenantId);
+  out.tenant = tenant ? [tenant] : [];
+  const settingsRow = db.data!.settings.find((s) => s.id === tenantId);
+  out.settings = settingsRow ? [{ ...settingsRow, apiKeys: undefined }] : [];
+  for (const key of TENANT_SCOPED_COLLECTIONS) {
+    const rows = (db.data![key] as unknown as Record<string, unknown>[]).filter((r) => r.tenantId === tenantId);
+    out[key] = key === "users"
+      ? rows.map((r) => ({ ...r, passwordHash: undefined, twoFactorSecret: undefined, twoFactorBackupCodes: undefined }))
+      : rows;
+  }
+  for (const table of TENANT_ID_TABLES) {
+    const { rows } = await be().query<{ doc: unknown }>(`select doc from ${table} where tenant_id = $1`, [tenantId]);
+    out[table] = rows.map((r) => r.doc);
+  }
+  return out;
+}
+
+/** Irreversibly deletes every row this tenant owns — every collection above,
+ *  its OrgSettings row, every off-mirror row, and the Tenant row itself. The
+ *  "full tenant data deletion" compliance tool from the original Super Admin
+ *  plan; the caller is expected to gate this behind its own confirmation flow
+ *  and audit the returned counts (what was actually deleted, not just that a
+ *  delete was requested). */
+export async function deleteTenantData(tenantId: string): Promise<Record<string, number>> {
+  const counts: Record<string, number> = {};
+  const mutableData = db.data as unknown as Record<string, { id: string; tenantId?: string }[]>;
+  for (const key of TENANT_SCOPED_COLLECTIONS) {
+    const arr = mutableData[key];
+    const removedIds = arr.filter((r) => r.tenantId === tenantId).map((r) => r.id);
+    if (removedIds.length) {
+      mutableData[key] = arr.filter((r) => r.tenantId !== tenantId);
+      await db.removeMany(key, removedIds);
+    }
+    counts[key] = removedIds.length;
+  }
+  const settingsRow = db.data!.settings.find((s) => s.id === tenantId);
+  if (settingsRow) {
+    db.data!.settings = db.data!.settings.filter((s) => s.id !== tenantId);
+    await db.remove("settings", tenantId);
+  }
+  counts.settings = settingsRow ? 1 : 0;
+  for (const table of TENANT_ID_TABLES) {
+    const { rows } = await be().query<{ id: string }>(`delete from ${table} where tenant_id = $1 returning id`, [tenantId]);
+    counts[table] = rows.length;
+  }
+  const hadTenant = db.data!.tenants.some((t) => t.id === tenantId);
+  db.data!.tenants = db.data!.tenants.filter((t) => t.id !== tenantId);
+  if (hadTenant) await db.remove("tenants", tenantId);
+  return counts;
+}
+
 // Proctoring webcam frames — stored in their own table with indexed attempt_id /
 // at columns and queried directly (never held in the in-memory mirror). This
 // keeps per-node memory bounded regardless of how many frames accumulate, and
@@ -931,7 +1003,38 @@ async function recoverFromLatestBackup(): Promise<string> {
   // asserting it blindly (see shared/types.ts's ExamImpactAnalysis).
   await auditStore.add({ id: nanoid(10), at: new Date().toISOString(), actorId: "system", actorName: "System", action: "db.recovered_from_backup", target: latest });
   console.error(`   Auto-recovery complete — restored ${latest}.`);
+  cleanupOldRecoveryDirs(dataDir, recoverDir);
   return latest;
+}
+
+/** Best-effort sweep of this recovery's own past leftovers — every quarantined
+ *  (`.corrupted-*`) or fallback (`.recovered-*`) sibling directory that
+ *  recoverFromLatestBackup() has ever created and, until now, never cleaned
+ *  up. Left unbounded, these accumulate indefinitely (observed: 27
+ *  directories, 1.4GB, going back weeks, on this exact codebase) and the
+ *  growing directory itself makes every subsequent recovery slower to boot —
+ *  the opposite of what a self-healing path should do. Only removes
+ *  directories older than an hour, so it can never touch the one just
+ *  created this boot (`recoverDir`) or one still mid-use by another process;
+ *  a directory a genuine concurrent process still holds open simply fails to
+ *  delete and is left for next time, exactly like the original single-file
+ *  quarantine fallback above already tolerates. Never throws — a failed
+ *  cleanup is not a reason to fail a boot that has otherwise recovered. */
+function cleanupOldRecoveryDirs(dataDir: string, recoverDir: string): void {
+  try {
+    const parent = path.dirname(dataDir);
+    const prefix = path.basename(dataDir) + ".";
+    const cutoff = Date.now() - 60 * 60 * 1000;
+    for (const name of fs.readdirSync(parent)) {
+      if (!name.startsWith(prefix)) continue;
+      const full = path.join(parent, name);
+      if (full === recoverDir) continue;
+      try {
+        if (fs.statSync(full).birthtimeMs >= cutoff) continue;
+        fs.rmSync(full, { recursive: true, force: true });
+      } catch { /* still locked or already gone — leave it for next time */ }
+    }
+  } catch { /* best-effort only; never fail the boot over this */ }
 }
 
 async function importLegacyJson(): Promise<boolean> {

@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import {
   Loader2, Users, Award, CheckCircle2, AlertTriangle, Activity, ChevronDown,
   BarChart3, Download, Send, Copy, Search, Folder, ListChecks, PencilLine,
-  FileText, Mic2, Pin, MoreHorizontal, ExternalLink, ArrowUpDown, Users2,
+  FileText, Mic2, Pin, MoreHorizontal, ExternalLink, ArrowUpDown, Users2, ArrowRight,
 } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
 import { ErrorBanner } from "@/components/ui";
@@ -380,7 +380,7 @@ function ExamFolder({ folder, attempts, isOpen, onToggle, isPinned, onPin, relea
   const [menuOpen, setMenuOpen] = useState(false);
 
   const menuActions = [
-    { label: "Open Analysis",       icon: ExternalLink, onClick: () => onNavigate(`/admin/exams/${folder.examId}/analysis`) },
+    { label: "Responses & Analysis", icon: ExternalLink, onClick: () => onNavigate(`/admin/exams/${folder.examId}/analysis`) },
     { label: "Release All Results", icon: Send,         onClick: onReleaseAll, loading: releasing },
     { label: "Similarity Report",   icon: Copy,         onClick: () => onNavigate(`/admin/exams/${folder.examId}/similarity`) },
     { label: "Export CSV",          icon: Download,     onClick: () => exportFolderCsv(folder, attempts) },
@@ -392,8 +392,19 @@ function ExamFolder({ folder, attempts, isOpen, onToggle, isPinned, onPin, relea
       className="overflow-hidden rounded-2xl border transition-all duration-200"
       style={{ borderColor: isOpen ? p.border : "var(--border)", background: isOpen ? p.bg : "var(--card)" }}
     >
-      {/* Header row */}
-      <button className="flex w-full items-center gap-4 px-5 py-4 text-left" onClick={onToggle}>
+      {/* Header row — a div, not a <button>: it contains its own action
+          buttons (the "..." menu), and nesting <button> inside <button> is
+          invalid HTML that browsers silently repair by closing the outer tag
+          early, which broke the click target and threw React hydration
+          warnings. role="button" + tabIndex + explicit key handling restores
+          the same keyboard/AT behavior a real button gets for free. */}
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onToggle}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(); } }}
+        className="flex w-full cursor-pointer items-center gap-4 px-5 py-4 text-left"
+      >
         {/* Type icon */}
         <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl"
           style={{ background: p.bg, border: `1px solid ${p.border}` }}>
@@ -462,7 +473,7 @@ function ExamFolder({ folder, attempts, isOpen, onToggle, isPinned, onPin, relea
           <ChevronDown
             className={clsx("h-5 w-5 text-[var(--muted)] transition-transform duration-200", isOpen && "rotate-180")} />
         </div>
-      </button>
+      </div>
 
       {/* Expanded body */}
       {isOpen && (
@@ -617,8 +628,14 @@ function CohortFolder({ cohort, isOpen, onToggle, isPinned, onPin, onNavigate }:
       className="overflow-hidden rounded-2xl border transition-all duration-200"
       style={{ borderColor: isOpen ? p.border : "var(--border)", background: isOpen ? p.bg : "var(--card)" }}
     >
-      {/* Header row */}
-      <button className="flex w-full items-center gap-4 px-5 py-4 text-left" onClick={onToggle}>
+      {/* Header row — div, not <button>: see ExamFolder's identical comment above. */}
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onToggle}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(); } }}
+        className="flex w-full cursor-pointer items-center gap-4 px-5 py-4 text-left"
+      >
         <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl"
           style={{ background: p.bg, border: `1px solid ${p.border}` }}>
           <Users2 className="h-5 w-5" style={{ color: p.accent }} />
@@ -651,7 +668,7 @@ function CohortFolder({ cohort, isOpen, onToggle, isPinned, onPin, onNavigate }:
           <ChevronDown
             className={clsx("h-5 w-5 text-[var(--muted)] transition-transform duration-200", isOpen && "rotate-180")} />
         </div>
-      </button>
+      </div>
 
       {/* Expanded body */}
       {isOpen && (
@@ -716,6 +733,15 @@ function FolderBody({ folder, attempts, onNavigate, palette }: {
 
   return (
     <>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <p className="text-xs text-[var(--muted)]">A quick glance — question-level analysis, infographics and exports live in the full view.</p>
+        <button
+          onClick={() => onNavigate(`/admin/exams/${folder.examId}/analysis`)}
+          className="inline-flex shrink-0 items-center gap-1 text-xs font-semibold text-[#c6ff34] hover:underline"
+        >
+          View full analysis <ArrowRight className="h-3 w-3" />
+        </button>
+      </div>
       <div className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
         {statCards.map((s) => (
           <div key={s.label} className="rounded-xl p-3" style={{ background: "var(--card-2)" }}>

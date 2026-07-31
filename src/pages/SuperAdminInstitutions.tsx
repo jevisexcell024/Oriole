@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, Loader2, Check, ShieldCheck, PauseCircle, Copy, CheckCircle2 } from "lucide-react";
+import { Plus, Loader2, Check, ShieldCheck, PauseCircle, Copy, CheckCircle2, LogIn, Download, Trash2 } from "lucide-react";
 import { SuperAdminShell } from "@/components/SuperAdminShell";
 import { PageHeader } from "@/components/PageHeader";
 import { TableSkeleton, Modal, ErrorBanner } from "@/components/ui";
@@ -19,6 +19,9 @@ export function SuperAdminInstitutions() {
   const [creating, setCreating] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [confirmSuspend, setConfirmSuspend] = useState<TenantRow | null>(null);
+  const [confirmLogin, setConfirmLogin] = useState<TenantRow | null>(null);
+  const [exportingId, setExportingId] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<TenantRow | null>(null);
 
   const load = () => api.get<{ tenants: TenantRow[] }>("/super-admin/tenants").then((d) => setRows(d.tenants)).catch((e) => setError(e.message));
   useEffect(() => { load(); }, []);
@@ -29,6 +32,45 @@ export function SuperAdminInstitutions() {
     try {
       await api.patch(`/super-admin/tenants/${row.id}`, { status: row.status === "active" ? "suspended" : "active" });
       setConfirmSuspend(null);
+      load();
+    } catch (e) { setError((e as Error).message); }
+    finally { setBusyId(null); }
+  }
+
+  async function loginAs(row: TenantRow) {
+    setError(null);
+    setBusyId(row.id);
+    try {
+      await api.post(`/super-admin/tenants/${row.id}/impersonate`);
+      // Full navigation, not client-side routing: the impersonated session's
+      // cookie needs a fresh load of the tenant admin app, a separate React
+      // tree from the Super Admin console this page lives in.
+      window.location.href = "/admin/dashboard";
+    } catch (e) { setError((e as Error).message); setBusyId(null); }
+  }
+
+  async function exportData(row: TenantRow) {
+    setError(null);
+    setExportingId(row.id);
+    try {
+      const res = await fetch(`/api/super-admin/tenants/${row.id}/export`, { credentials: "include" });
+      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `${row.name.replace(/[^a-z0-9]+/gi, "-")}-export.json`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) { setError((e as Error).message); }
+    finally { setExportingId(null); }
+  }
+
+  async function deleteData(row: TenantRow, confirmName: string) {
+    setError(null);
+    setBusyId(row.id);
+    try {
+      await api.del(`/super-admin/tenants/${row.id}`, { confirmName });
+      setConfirmDelete(null);
       load();
     } catch (e) { setError((e as Error).message); }
     finally { setBusyId(null); }
@@ -80,17 +122,45 @@ export function SuperAdminInstitutions() {
                       <td className="px-3 py-3 text-right tabular-nums">{row.students}</td>
                       <td className="px-3 py-3 text-right tabular-nums">{row.exams}</td>
                       <td className="px-3 py-3 text-[var(--muted)]">{new Date(row.createdAt).toLocaleDateString()}</td>
-                      <td className="px-3 py-3 text-right">
-                        <button
-                          onClick={() => (row.status === "active" ? setConfirmSuspend(row) : toggleStatus(row))}
-                          disabled={busyId === row.id}
-                          className={clsx(
-                            "rounded-lg px-2.5 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-40",
-                            row.status === "active" ? "text-rose-400 hover:bg-rose-500/10" : "text-emerald-400 hover:bg-emerald-500/10",
+                      <td className="px-3 py-3">
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            onClick={() => setConfirmLogin(row)}
+                            disabled={busyId === row.id || row.admins === 0 || row.status === "suspended"}
+                            title={row.admins === 0 ? undefined : t("sad.instLoginAs")}
+                            className="rounded-lg p-1.5 text-[var(--muted)] hover:bg-white/[0.05] hover:text-[var(--fg)] disabled:cursor-not-allowed disabled:opacity-30"
+                          >
+                            <LogIn className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            onClick={() => exportData(row)}
+                            disabled={exportingId === row.id}
+                            title={t("sad.instExport")}
+                            className="rounded-lg p-1.5 text-[var(--muted)] hover:bg-white/[0.05] hover:text-[var(--fg)] disabled:cursor-not-allowed disabled:opacity-30"
+                          >
+                            {exportingId === row.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+                          </button>
+                          {row.status === "suspended" && (
+                            <button
+                              onClick={() => setConfirmDelete(row)}
+                              disabled={busyId === row.id}
+                              title={t("sad.instDelete")}
+                              className="rounded-lg p-1.5 text-rose-400 hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-30"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
                           )}
-                        >
-                          {busyId === row.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : row.status === "active" ? t("sad.instSuspend") : t("sad.instReactivate")}
-                        </button>
+                          <button
+                            onClick={() => (row.status === "active" ? setConfirmSuspend(row) : toggleStatus(row))}
+                            disabled={busyId === row.id}
+                            className={clsx(
+                              "rounded-lg px-2.5 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-40",
+                              row.status === "active" ? "text-rose-400 hover:bg-rose-500/10" : "text-emerald-400 hover:bg-emerald-500/10",
+                            )}
+                          >
+                            {busyId === row.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : row.status === "active" ? t("sad.instSuspend") : t("sad.instReactivate")}
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -114,7 +184,52 @@ export function SuperAdminInstitutions() {
           </div>
         </Modal>
       )}
+
+      {confirmLogin && (
+        <Modal title={t("sad.instLoginAsTitle")} onClose={() => setConfirmLogin(null)}>
+          <p className="mt-3 text-sm text-[var(--muted)]">{t("sad.instLoginAsBody", { name: confirmLogin.name })}</p>
+          <div className="mt-5 flex justify-end gap-2">
+            <button onClick={() => setConfirmLogin(null)} className="rounded-lg px-3 py-2 text-sm font-medium text-[var(--muted)] hover:text-[var(--fg)]">{t("ateam.cancel")}</button>
+            <button onClick={() => loginAs(confirmLogin)} disabled={busyId === confirmLogin.id} className="btn btn-primary disabled:opacity-50">
+              {busyId === confirmLogin.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />} {t("sad.instLoginAsConfirmBtn")}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {confirmDelete && (
+        <DeleteModal
+          row={confirmDelete}
+          busy={busyId === confirmDelete.id}
+          onClose={() => setConfirmDelete(null)}
+          onConfirm={(name) => deleteData(confirmDelete, name)}
+        />
+      )}
     </SuperAdminShell>
+  );
+}
+
+function DeleteModal({ row, busy, onClose, onConfirm }: { row: TenantRow; busy: boolean; onClose: () => void; onConfirm: (confirmName: string) => void }) {
+  const t = useT();
+  const [typed, setTyped] = useState("");
+  const matches = typed.trim() === row.name;
+  return (
+    <Modal title={t("sad.instDeleteTitle", { name: row.name })} onClose={onClose}>
+      <p className="mt-3 text-sm text-[var(--muted)]">{t("sad.instDeleteBody")}</p>
+      <input
+        className="input mt-4 h-10"
+        value={typed}
+        onChange={(e) => setTyped(e.target.value)}
+        placeholder={row.name}
+        autoFocus
+      />
+      <div className="mt-5 flex justify-end gap-2">
+        <button onClick={onClose} className="rounded-lg px-3 py-2 text-sm font-medium text-[var(--muted)] hover:text-[var(--fg)]">{t("ateam.cancel")}</button>
+        <button onClick={() => onConfirm(typed.trim())} disabled={busy || !matches} className="btn btn-danger disabled:opacity-50">
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />} {t("sad.instDeleteConfirmBtn")}
+        </button>
+      </div>
+    </Modal>
   );
 }
 

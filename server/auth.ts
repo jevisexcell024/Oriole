@@ -55,14 +55,38 @@ export function verifyPasswordSetupToken(token: string): string | null {
   }
 }
 
-export function issueSession(res: Response, user: User) {
-  const token = jwt.sign({ sub: user.id, role: user.role, tv: user.tokenVersion ?? 0, tenantId: user.tenantId }, JWT_SECRET, { expiresIn: "7d" });
+/** `impersonatorId`, when set, tags this session as a Super Admin "log in as"
+ *  session — see POST /api/super-admin/tenants/:id/impersonate. Nothing about
+ *  the token's shape or lifetime otherwise changes: it's a real, fully-working
+ *  session for `user`, just one that carries a breadcrumb of who's actually
+ *  driving it, read back by currentImpersonatorId() so the UI can show a
+ *  banner and every audit-log entry written during it can be attributed. */
+export function issueSession(res: Response, user: User, impersonatorId?: string) {
+  const token = jwt.sign(
+    { sub: user.id, role: user.role, tv: user.tokenVersion ?? 0, tenantId: user.tenantId, imp: impersonatorId },
+    JWT_SECRET, { expiresIn: "7d" },
+  );
   res.cookie(COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
     secure: env.isProd, // HTTPS-only cookie in production
     maxAge: 7 * 24 * 60 * 60 * 1000,
   });
+}
+
+/** The Super Admin id driving this session, if it's an impersonation session —
+ *  null for every ordinary login. Deliberately tolerant of a missing/invalid
+ *  cookie (returns null rather than throwing) since callers use this
+ *  opportunistically alongside currentUser(), not as an auth gate itself. */
+export function currentImpersonatorId(req: Request): string | null {
+  const token = req.cookies?.[COOKIE];
+  if (!token) return null;
+  try {
+    const payload = jwt.verify(token, JWT_SECRET) as { imp?: string };
+    return payload.imp ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export function clearSession(res: Response) {
