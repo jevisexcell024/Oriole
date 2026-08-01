@@ -14,6 +14,8 @@ interface Props {
 }
 
 const WINDOW_W = 300;
+// Rough initial-placement estimates only — actual window height is intrinsic
+// (sized to content, capped against the viewport) so these no longer clip keys.
 const WINDOW_H_BASIC = 400;
 const WINDOW_H_SCI = 560;
 
@@ -103,7 +105,7 @@ export function Calculator({ attemptId, type, allowKeyboard, saveHistory, state,
       ref={containerRef}
       tabIndex={-1}
       onKeyDown={onKeyDown}
-      style={{ left: pos.x, top: pos.y, width: WINDOW_W, height: minimized ? "auto" : winH }}
+      style={{ left: pos.x, top: pos.y, width: WINDOW_W, maxHeight: minimized ? undefined : "calc(100vh - 32px)" }}
       className="fixed z-30 flex flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--card)] shadow-2xl outline-none"
     >
       <div
@@ -120,7 +122,7 @@ export function Calculator({ attemptId, type, allowKeyboard, saveHistory, state,
       </div>
 
       {!minimized && (
-        <div className="flex flex-1 flex-col gap-2 p-3">
+        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-3">
           <div
             onCopy={blockClipboard} onCut={blockClipboard} onPaste={blockClipboard} onContextMenu={blockClipboard}
             className="select-none rounded-xl bg-[var(--card-2)] px-3 py-3 text-right"
