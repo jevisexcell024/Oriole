@@ -51,6 +51,12 @@ export function Calculator({ attemptId, type, allowKeyboard, saveHistory, state,
 
   const dispatch = (action: { op: CalcOp; digit?: string }) => onStateChange(calculatorReduce(state, action));
 
+  // Bound by the window's own rendered height (not just the header) so a drag or
+  // resize can never push the bottom of the window past the viewport — a `position:
+  // fixed` element that ends up there is genuinely unreachable, there's no page
+  // scroll that can bring it back into view.
+  const maxYFor = () => window.innerHeight - (containerRef.current?.getBoundingClientRect().height ?? 40) - 4;
+
   // ── Drag ──
   const onHeaderPointerDown = (e: React.PointerEvent) => {
     if ((e.target as HTMLElement).closest("button")) return; // don't drag when clicking window controls
@@ -61,7 +67,7 @@ export function Calculator({ attemptId, type, allowKeyboard, saveHistory, state,
     if (!dragState.current) return;
     const { startX, startY, origX, origY } = dragState.current;
     const maxX = window.innerWidth - WINDOW_W - 4;
-    const maxY = window.innerHeight - 40 - 4;
+    const maxY = maxYFor();
     setPos({
       x: Math.min(Math.max(4, origX + (e.clientX - startX)), Math.max(4, maxX)),
       y: Math.min(Math.max(4, origY + (e.clientY - startY)), Math.max(4, maxY)),
@@ -78,7 +84,7 @@ export function Calculator({ attemptId, type, allowKeyboard, saveHistory, state,
     if (!open) return;
     const clamp = () => {
       const maxX = window.innerWidth - WINDOW_W - 4;
-      const maxY = window.innerHeight - 40 - 4;
+      const maxY = maxYFor();
       setPos((p) => ({
         x: Math.min(Math.max(4, p.x), Math.max(4, maxX)),
         y: Math.min(Math.max(4, p.y), Math.max(4, maxY)),
@@ -87,7 +93,9 @@ export function Calculator({ attemptId, type, allowKeyboard, saveHistory, state,
     clamp();
     window.addEventListener("resize", clamp);
     return () => window.removeEventListener("resize", clamp);
-  }, [open]);
+    // Re-clamp when minimized toggles too — un-minimizing grows the window back to
+    // full height, which can push a bottom-parked window past the viewport edge.
+  }, [open, minimized]);
 
   // ── Keyboard input — scoped to the calculator window itself (focused container),
   // never a global document listener, so it can never intercept exam typing. ──
