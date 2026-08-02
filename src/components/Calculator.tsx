@@ -69,6 +69,26 @@ export function Calculator({ attemptId, type, allowKeyboard, saveHistory, state,
   };
   const onHeaderPointerUp = () => { dragState.current = null; };
 
+  // Keep the window on-screen if the viewport changes while it's open — device
+  // rotation, browser chrome resizing, a mobile keyboard opening/closing — since
+  // nothing else re-clamps its position and it would otherwise end up stranded
+  // off-screen with no way to reach it (only dragging re-clamps, and touch users
+  // rarely drag a calculator).
+  useEffect(() => {
+    if (!open) return;
+    const clamp = () => {
+      const maxX = window.innerWidth - WINDOW_W - 4;
+      const maxY = window.innerHeight - 40 - 4;
+      setPos((p) => ({
+        x: Math.min(Math.max(4, p.x), Math.max(4, maxX)),
+        y: Math.min(Math.max(4, p.y), Math.max(4, maxY)),
+      }));
+    };
+    clamp();
+    window.addEventListener("resize", clamp);
+    return () => window.removeEventListener("resize", clamp);
+  }, [open]);
+
   // ── Keyboard input — scoped to the calculator window itself (focused container),
   // never a global document listener, so it can never intercept exam typing. ──
   useEffect(() => {
