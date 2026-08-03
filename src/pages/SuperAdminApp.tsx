@@ -13,6 +13,12 @@ import { SuperAdminMaintenance } from "@/pages/SuperAdminMaintenance";
 import { SuperAdminEmailTemplates } from "@/pages/SuperAdminEmailTemplates";
 import { SuperAdminTickets } from "@/pages/SuperAdminTickets";
 import { SuperAdminInstitutions } from "@/pages/SuperAdminInstitutions";
+import { SuperAdminTenantDetail } from "@/pages/SuperAdminTenantDetail";
+import { SuperAdminMonitoring } from "@/pages/SuperAdminMonitoring";
+import { SuperAdminPlans } from "@/pages/SuperAdminPlans";
+import { SuperAdminLicenses } from "@/pages/SuperAdminLicenses";
+import { SuperAdminLicenseKeys } from "@/pages/SuperAdminLicenseKeys";
+import { SuperAdminAnalytics } from "@/pages/SuperAdminAnalytics";
 
 /** Entire Super Admin subtree in one file, lazy-loaded as a single unit from
  *  main.tsx (one route: <Route path="/super-admin/*" element={<SuperAdminApp/>}/>).
@@ -43,6 +49,12 @@ function SuperAdminRoutes() {
       <Route path="email-templates" element={<SuperAdminProtected><SuperAdminEmailTemplates /></SuperAdminProtected>} />
       <Route path="tickets" element={<SuperAdminProtected><SuperAdminTickets /></SuperAdminProtected>} />
       <Route path="institutions" element={<SuperAdminProtected><SuperAdminInstitutions /></SuperAdminProtected>} />
+      <Route path="institutions/:id" element={<SuperAdminProtected><SuperAdminTenantDetail /></SuperAdminProtected>} />
+      <Route path="monitoring" element={<SuperAdminProtected><SuperAdminMonitoring /></SuperAdminProtected>} />
+      <Route path="plans" element={<SuperAdminProtected><SuperAdminPlans /></SuperAdminProtected>} />
+      <Route path="licenses" element={<SuperAdminProtected><SuperAdminLicenses /></SuperAdminProtected>} />
+      <Route path="license-keys" element={<SuperAdminProtected><SuperAdminLicenseKeys /></SuperAdminProtected>} />
+      <Route path="analytics" element={<SuperAdminProtected><SuperAdminAnalytics /></SuperAdminProtected>} />
       <Route path="*" element={<Navigate to="dashboard" replace />} />
     </Routes>
   );

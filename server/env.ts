@@ -17,8 +17,16 @@ const FALLBACK_SUPER_ADMIN_JWT = randomBytes(48).toString("base64");
 
 export const env = {
   isProd: process.env.NODE_ENV === "production",
-  // Hosts (Render/Railway/etc.) inject PORT; fall back to API_PORT then 8787.
-  port: Number(process.env.PORT) || Number(process.env.API_PORT) || 8787,
+  // API_PORT is this project's own explicit local-dev convention (server on
+  // 8787, Vite proxying to it from 5180) and wins if set — a generic PORT
+  // can get set by unrelated tooling that has nothing to do with this app's
+  // own two-process dev split (observed: a local dev-preview harness that
+  // injects PORT for whichever port it expects the browser to open, which
+  // collided with Vite's own port and made Express steal it instead). In any
+  // real single-process deploy (Render/Railway/etc.) API_PORT is never set,
+  // so PORT still applies exactly as before — this only changes behavior in
+  // the local two-process dev split.
+  port: Number(process.env.API_PORT) || Number(process.env.PORT) || 8787,
   jwtSecret: process.env.JWT_SECRET || FALLBACK_JWT,
   superAdminJwtSecret: process.env.SUPER_ADMIN_JWT_SECRET || FALLBACK_SUPER_ADMIN_JWT,
   databaseUrl: process.env.DATABASE_URL,

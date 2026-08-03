@@ -16,6 +16,77 @@ export interface Tenant {
   name: string;
   status: "active" | "suspended";
   createdAt: string;
+  /** The subscription plan this school is on — unset means no plan has ever
+   *  been assigned (a pre-Licensing-feature tenant, or one created outside
+   *  the license-key flow). Assigned manually by a Super Admin or via
+   *  redeeming a LicenseKey; there is no in-app payment processor, so a
+   *  "subscription" here is a billing-tier label the platform operator
+   *  tracks and enforces, not a live payment integration. */
+  planId?: string | null;
+  licenseStatus?: "trial" | "active" | "expired";
+  /** null = never expires (e.g. a manually-assigned permanent plan). */
+  licenseExpiresAt?: string | null;
+}
+
+/** A named usage cap. null on any field means "unlimited" for that
+ *  dimension — deliberately not 0, which would mean "allowed none". */
+export interface PlanLimits {
+  maxStudents: number | null;
+  maxStaff: number | null;
+  maxActiveExams: number | null;
+}
+
+/** A subscription tier a Super Admin defines and assigns to schools —
+ *  platform-global, not tenant-scoped (Plans are the platform operator's own
+ *  product catalog, not something any tenant owns or can see the internals
+ *  of beyond their own assigned plan's limits). */
+export interface Plan {
+  id: string;
+  name: string;
+  /** Short, stable identifier for external reference (invoices, support
+   *  tickets) — auto-derived from name if not set explicitly, never changes
+   *  once created even if the plan is later renamed. */
+  code: string;
+  description?: string;
+  limits: PlanLimits;
+  /** Bullet points shown on the plan's pricing card — operator-authored,
+   *  purely descriptive (not enforced anywhere, unlike `limits`). */
+  features?: string[];
+  /** Manually set by the operator — there is no payment processor, so this
+   *  is what the operator has agreed to charge, not a live billing amount.
+   *  null = price not set (e.g. a free or fully-custom-quote tier); the MRR/
+   *  ARR shown on the Plans dashboard are computed honestly from these
+   *  values × real plan assignments, never fabricated. */
+  priceMonthly?: number | null;
+  priceYearly?: number | null;
+  currency?: string;
+  /** Archived plans are hidden from "assign a plan" pickers but stay
+   *  resolvable for tenants already on them — never delete a plan a tenant
+   *  references, the same reason CustomRole soft-deletes. */
+  archived?: boolean;
+  createdAt: string;
+}
+
+/** A redeemable code that activates a Plan on a school — either a brand-new
+ *  school created through redemption, or an upgrade/renewal applied to an
+ *  existing one. Platform-global (Super-Admin-issued), single-use unless
+ *  explicitly reused (maxRedemptions), matching how a real license key
+ *  works for offline/manual distribution. */
+export interface LicenseKey {
+  id: string;
+  code: string;
+  planId: string;
+  note?: string;
+  /** How many times this code may be redeemed — almost always 1; a batch
+   *  code (e.g. for a reseller) can set this higher. */
+  maxRedemptions: number;
+  /** Tenant ids that have redeemed this code, most recent last. */
+  redeemedByTenantIds: string[];
+  /** The code itself can expire before ever being redeemed. */
+  expiresAt?: string | null;
+  createdAt: string;
+  createdBySuperAdminId: string;
+  revokedAt?: string | null;
 }
 
 export interface User {
@@ -109,6 +180,14 @@ export interface SuperAdmin {
    *  treated identically to a nonexistent one for login-response purposes,
    *  so revocation status is never leaked via the error message. */
   disabled?: boolean;
+  /** Unset (every pre-existing/bootstrap account) is treated as "owner" —
+   *  the platform never silently downgrades an existing operator's access.
+   *  "support" can do the day-to-day (impersonate, export, tickets,
+   *  maintenance, view everything) but not the handful of actions that are
+   *  either irreversible or expand who has platform-level access: deleting
+   *  a tenant's data, creating/suspending tenants, managing Super Admin
+   *  team members, and issuing/revoking license keys. See requireSuperAdminOwner. */
+  role?: "owner" | "support";
 }
 
 /** Client-facing DTO for SuperAdmin — no passwordHash, mirrors SafeUser below. */
@@ -117,6 +196,7 @@ export interface SafeSuperAdmin {
   email: string;
   name: string;
   mustChangePassword?: boolean;
+  role: "owner" | "support";
 }
 
 /** Row shape for the Super Admin team list — unlike SafeSuperAdmin (which is
@@ -128,6 +208,7 @@ export interface SuperAdminSummary {
   createdAt: string;
   mustChangePassword: boolean;
   disabled: boolean;
+  role: "owner" | "support";
 }
 
 /** Singleton (single row, id: "platform") — when enabled, the maintenance
@@ -142,6 +223,20 @@ export interface PlatformMaintenance {
   message: string;
   updatedAt: string;
   updatedBy: string;
+}
+
+/** A maintenance window scheduled in advance — the platform-wide "Maintenance
+ *  Mode" toggle above is manual/immediate; this is its scheduled counterpart.
+ *  A 60s sweep (server/index.ts) flips PlatformMaintenance on/off as each
+ *  window's startAt/endAt is reached. */
+export interface MaintenanceWindow {
+  id: string;
+  startAt: string;
+  endAt: string;
+  message: string;
+  status: "scheduled" | "active" | "completed" | "cancelled";
+  createdAt: string;
+  createdBy: string;
 }
 
 /** A Super Admin override for one curated outbound-email flow (see

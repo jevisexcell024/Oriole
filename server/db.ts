@@ -14,7 +14,7 @@ import type {
   Faculty, Department, Program, Campus, AcademicYear, ClassGroup, RegradeRequest, Book, ReadingProgress,
   ResourceVersion, ResourceBookmark, ResourceRating, ResourceDownloadLog, GeofenceLog, CustomRole,
   ReliabilityIncident, ReliabilitySample, ReliabilityDailyRollup, ReliabilitySubsystemKey, MediaAsset, SuperAdmin,
-  PlatformMaintenance, EmailTemplate, SupportTicket, Tenant,
+  PlatformMaintenance, EmailTemplate, SupportTicket, Tenant, Plan, LicenseKey, MaintenanceWindow,
 } from "../shared/types.ts";
 import { DEFAULT_LOCKDOWN, DEFAULT_LEARNING_STRUCTURE } from "../shared/types.ts";
 
@@ -35,6 +35,12 @@ export interface Schema {
   maintenance: PlatformMaintenance[];
   emailTemplates: EmailTemplate[];
   supportTickets: SupportTicket[];
+  // Licensing — platform-global, Super-Admin-owned (see shared/types.ts's
+  // Plan/LicenseKey doc comments). Small, low-write-volume collections, so
+  // plain mirrored tables like everything else here rather than off-mirror.
+  plans: Plan[];
+  licenseKeys: LicenseKey[];
+  maintenanceWindows: MaintenanceWindow[];
   exams: Exam[];
   questions: Question[];
   registrations: Registration[];
@@ -78,7 +84,7 @@ const gunzipAsync = promisify(gunzip);
 
 const defaultData: Schema = {
   tenants: [],
-  users: [], superAdmins: [], maintenance: [], emailTemplates: [], supportTickets: [], exams: [], questions: [], registrations: [],
+  users: [], superAdmins: [], maintenance: [], emailTemplates: [], supportTickets: [], plans: [], licenseKeys: [], maintenanceWindows: [], exams: [], questions: [], registrations: [],
   attempts: [], certificates: [], announcements: [],
   settings: [],
   faculties: [], departments: [], programs: [], campuses: [], academicYears: [], classes: [], regradeRequests: [],
@@ -99,6 +105,9 @@ const TABLES: { key: keyof Schema; table: string; idField: string }[] = [
   { key: "maintenance", table: "platform_maintenance", idField: "id" },
   { key: "emailTemplates", table: "email_templates", idField: "id" },
   { key: "supportTickets", table: "support_tickets", idField: "id" },
+  { key: "plans", table: "plans", idField: "id" },
+  { key: "licenseKeys", table: "license_keys", idField: "id" },
+  { key: "maintenanceWindows", table: "maintenance_windows", idField: "id" },
   { key: "exams", table: "exams", idField: "id" },
   { key: "questions", table: "questions", idField: "id" },
   { key: "registrations", table: "registrations", idField: "id" },
@@ -405,10 +414,15 @@ export async function deleteTenantData(tenantId: string): Promise<Record<string,
 // makes the data correct across multiple API instances without a shared cache.
 export const snapshotStore = {
   async add(frame: Snapshot): Promise<void> {
+    // tenant_id isn't part of the Snapshot doc itself (webcam frames are always
+    // reached through an already tenant-checked attempt) — resolved from the
+    // owning attempt here purely so the column stays populated for defense in
+    // depth, matching every other off-mirror table.
+    const tenantId = db.data!.attempts.find((a) => a.id === frame.attemptId)?.tenantId ?? null;
     await be().query(
-      `insert into snapshots(id, attempt_id, at, doc) values ($1, $2, $3, $4::jsonb)
-       on conflict (id) do update set doc = excluded.doc, attempt_id = excluded.attempt_id, at = excluded.at`,
-      [frame.id, frame.attemptId, frame.at, JSON.stringify(frame)],
+      `insert into snapshots(id, attempt_id, at, doc, tenant_id) values ($1, $2, $3, $4::jsonb, $5)
+       on conflict (id) do update set doc = excluded.doc, attempt_id = excluded.attempt_id, at = excluded.at, tenant_id = excluded.tenant_id`,
+      [frame.id, frame.attemptId, frame.at, JSON.stringify(frame), tenantId],
     );
   },
   async forAttempt(attemptId: string): Promise<Snapshot[]> {
@@ -450,10 +464,11 @@ export const snapshotStore = {
 // `questions` mirror (questions IS mirrored — see the Schema comment above).
 export const mediaAssetStore = {
   async add(asset: MediaAsset): Promise<void> {
+    const tenantId = db.data!.exams.find((e) => e.id === asset.examId)?.tenantId ?? null;
     await be().query(
-      `insert into media_assets(id, exam_id, at, doc) values ($1, $2, $3, $4::jsonb)
-       on conflict (id) do update set doc = excluded.doc, exam_id = excluded.exam_id, at = excluded.at`,
-      [asset.id, asset.examId, asset.uploadedAt, JSON.stringify(asset)],
+      `insert into media_assets(id, exam_id, at, doc, tenant_id) values ($1, $2, $3, $4::jsonb, $5)
+       on conflict (id) do update set doc = excluded.doc, exam_id = excluded.exam_id, at = excluded.at, tenant_id = excluded.tenant_id`,
+      [asset.id, asset.examId, asset.uploadedAt, JSON.stringify(asset), tenantId],
     );
   },
   async get(id: string): Promise<MediaAsset | null> {
@@ -473,10 +488,11 @@ export const mediaAssetStore = {
 // single attempt's answers at a time; list views batch via `forAttempts`.
 export const answerStore = {
   async upsert(answer: Answer): Promise<void> {
+    const tenantId = db.data!.attempts.find((a) => a.id === answer.attemptId)?.tenantId ?? null;
     await be().query(
-      `insert into answers(id, attempt_id, doc) values ($1, $2, $3::jsonb)
-       on conflict (id) do update set doc = excluded.doc, attempt_id = excluded.attempt_id`,
-      [answer.id, answer.attemptId, JSON.stringify(answer)]);
+      `insert into answers(id, attempt_id, doc, tenant_id) values ($1, $2, $3::jsonb, $4)
+       on conflict (id) do update set doc = excluded.doc, attempt_id = excluded.attempt_id, tenant_id = excluded.tenant_id`,
+      [answer.id, answer.attemptId, JSON.stringify(answer), tenantId]);
   },
   async forAttempt(attemptId: string): Promise<Answer[]> {
     const { rows } = await be().query<{ doc: Answer }>(
@@ -517,10 +533,11 @@ export const answerStore = {
 // Batched `forAttempts` keeps list/aggregate handlers to one query instead of N.
 export const proctorStore = {
   async add(event: ProctorEvent): Promise<void> {
+    const tenantId = db.data!.attempts.find((a) => a.id === event.attemptId)?.tenantId ?? null;
     await be().query(
-      `insert into proctor_events(id, attempt_id, severity, at, doc) values ($1, $2, $3, $4, $5::jsonb)
-       on conflict (id) do update set doc = excluded.doc, attempt_id = excluded.attempt_id, severity = excluded.severity, at = excluded.at`,
-      [event.id, event.attemptId, event.severity, event.at, JSON.stringify(event)]);
+      `insert into proctor_events(id, attempt_id, severity, at, doc, tenant_id) values ($1, $2, $3, $4, $5::jsonb, $6)
+       on conflict (id) do update set doc = excluded.doc, attempt_id = excluded.attempt_id, severity = excluded.severity, at = excluded.at, tenant_id = excluded.tenant_id`,
+      [event.id, event.attemptId, event.severity, event.at, JSON.stringify(event), tenantId]);
   },
   async forAttempt(attemptId: string): Promise<ProctorEvent[]> {
     const { rows } = await be().query<{ doc: ProctorEvent }>(
@@ -564,10 +581,13 @@ export const proctorStore = {
 // check (success or failure) is kept for the location audit trail/report.
 export const geofenceStore = {
   async add(log: GeofenceLog): Promise<void> {
+    // examId is always present (unlike attemptId, which is null for pre-attempt
+    // entry checks), so resolve tenant through the exam rather than the attempt.
+    const tenantId = db.data!.exams.find((e) => e.id === log.examId)?.tenantId ?? null;
     await be().query(
-      `insert into geofence_logs(id, registration_id, attempt_id, at, doc) values ($1, $2, $3, $4, $5::jsonb)
-       on conflict (id) do update set doc = excluded.doc, registration_id = excluded.registration_id, attempt_id = excluded.attempt_id, at = excluded.at`,
-      [log.id, log.registrationId, log.attemptId, log.at, JSON.stringify(log)]);
+      `insert into geofence_logs(id, registration_id, attempt_id, at, doc, tenant_id) values ($1, $2, $3, $4, $5::jsonb, $6)
+       on conflict (id) do update set doc = excluded.doc, registration_id = excluded.registration_id, attempt_id = excluded.attempt_id, at = excluded.at, tenant_id = excluded.tenant_id`,
+      [log.id, log.registrationId, log.attemptId, log.at, JSON.stringify(log), tenantId]);
   },
   async forRegistration(registrationId: string): Promise<GeofenceLog[]> {
     const { rows } = await be().query<{ doc: GeofenceLog }>(

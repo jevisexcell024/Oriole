@@ -9,11 +9,12 @@ import { useT } from "@/lib/i18n";
 import { initials } from "@/lib/format";
 import { clsx } from "clsx";
 
-interface Member { id: string; name: string; email: string; createdAt: string; mustChangePassword: boolean; disabled: boolean; }
+interface Member { id: string; name: string; email: string; createdAt: string; mustChangePassword: boolean; disabled: boolean; role: "owner" | "support"; }
 
 export function SuperAdminTeam() {
   const t = useT();
   const { superAdmin } = useSuperAdminAuth();
+  const isOwner = (superAdmin?.role ?? "owner") === "owner";
   const [rows, setRows] = useState<Member[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [invite, setInvite] = useState(false);
@@ -22,6 +23,7 @@ export function SuperAdminTeam() {
   useEffect(() => { load(); }, []);
 
   const activeCount = (rows ?? []).filter((r) => !r.disabled).length;
+  const activeOwnerCount = (rows ?? []).filter((r) => !r.disabled && r.role === "owner").length;
 
   async function toggleDisabled(m: Member) {
     setError(null);
@@ -29,26 +31,37 @@ export function SuperAdminTeam() {
     catch (e) { setError((e as Error).message); }
   }
 
+  async function toggleRole(m: Member) {
+    setError(null);
+    try { await api.patch(`/super-admin/team/${m.id}`, { role: m.role === "owner" ? "support" : "owner" }); load(); }
+    catch (e) { setError((e as Error).message); }
+  }
+
   return (
     <SuperAdminShell>
-      <div className="fade-in max-w-3xl">
+      <div className="fade-in max-w-4xl">
         <div className="flex items-center justify-between gap-3">
           <PageHeader eyebrow={t("sad.dashEyebrow")} title={t("sad.teamTitle")} subtitle={t("sad.teamSubtitle")} />
-          <button onClick={() => setInvite(true)} className="btn btn-primary shrink-0"><UserPlus className="h-4 w-4" /> {t("sad.teamInvite")}</button>
+          {isOwner && <button onClick={() => setInvite(true)} className="btn btn-primary shrink-0"><UserPlus className="h-4 w-4" /> {t("sad.teamInvite")}</button>}
         </div>
+
+        {!isOwner && (
+          <p className="mt-3 text-xs text-[var(--muted)]">You're on the Support tier — you can view the team but only an Owner can invite, disable, or change anyone's tier.</p>
+        )}
 
         {error && <ErrorBanner className="mt-4">{error}</ErrorBanner>}
 
         <div className="card mt-6 overflow-hidden">
           {!rows ? (
-            <TableSkeleton rows={3} cells={3} />
+            <TableSkeleton rows={3} cells={4} />
           ) : (
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-[var(--border)] text-left text-[11px] uppercase tracking-wide text-[var(--muted)]">
                   <th className="px-4 py-3 font-semibold">{t("sad.teamColMember")}</th>
+                  <th className="px-3 py-3 font-semibold">Tier</th>
                   <th className="px-3 py-3 font-semibold">{t("sad.teamColStatus")}</th>
-                  <th className="px-3 py-3 text-right font-semibold">{t("sad.teamColActions")}</th>
+                  {isOwner && <th className="px-3 py-3 text-right font-semibold">{t("sad.teamColActions")}</th>}
                 </tr>
               </thead>
               <tbody>
@@ -56,6 +69,7 @@ export function SuperAdminTeam() {
                   const isSelf = m.id === superAdmin?.id;
                   const lastActive = !m.disabled && activeCount <= 1;
                   const blocked = isSelf || lastActive;
+                  const lastOwner = m.role === "owner" && !m.disabled && activeOwnerCount <= 1;
                   return (
                     <tr key={m.id} className="border-b border-[var(--border)] last:border-0 hover:bg-white/[0.02]">
                       <td className="px-4 py-3">
@@ -68,6 +82,25 @@ export function SuperAdminTeam() {
                         </div>
                       </td>
                       <td className="px-3 py-3">
+                        {isOwner ? (
+                          <button
+                            onClick={() => toggleRole(m)}
+                            disabled={lastOwner}
+                            title={lastOwner ? "At least one Owner must remain" : `Switch to ${m.role === "owner" ? "Support" : "Owner"}`}
+                            className={clsx(
+                              "rounded-full px-2 py-0.5 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-60",
+                              m.role === "owner" ? "bg-[#c6ff34]/15 text-[#c6ff34] hover:bg-[#c6ff34]/25" : "bg-white/10 text-[var(--muted)] hover:bg-white/15",
+                            )}
+                          >
+                            {m.role === "owner" ? "Owner" : "Support"}
+                          </button>
+                        ) : (
+                          <span className={clsx("rounded-full px-2 py-0.5 text-xs font-semibold", m.role === "owner" ? "bg-[#c6ff34]/15 text-[#c6ff34]" : "bg-white/10 text-[var(--muted)]")}>
+                            {m.role === "owner" ? "Owner" : "Support"}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-3 py-3">
                         {m.disabled ? (
                           <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/15 px-2 py-0.5 text-xs font-semibold text-rose-400"><ShieldOff className="h-3 w-3" /> {t("sad.teamDisabled")}</span>
                         ) : m.mustChangePassword ? (
@@ -76,19 +109,21 @@ export function SuperAdminTeam() {
                           <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-semibold text-emerald-400"><ShieldCheck className="h-3 w-3" /> {t("sad.teamActive")}</span>
                         )}
                       </td>
-                      <td className="px-3 py-3 text-right">
-                        <button
-                          onClick={() => toggleDisabled(m)}
-                          disabled={blocked}
-                          title={isSelf ? t("sad.teamCantDisableSelf") : lastActive ? t("sad.teamCantDisableLast") : m.disabled ? t("sad.teamEnable") : t("sad.teamDisable")}
-                          className={clsx(
-                            "rounded-lg px-2.5 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-40",
-                            m.disabled ? "text-emerald-400 hover:bg-emerald-500/10" : "text-rose-400 hover:bg-rose-500/10",
-                          )}
-                        >
-                          {m.disabled ? t("sad.teamEnable") : t("sad.teamDisable")}
-                        </button>
-                      </td>
+                      {isOwner && (
+                        <td className="px-3 py-3 text-right">
+                          <button
+                            onClick={() => toggleDisabled(m)}
+                            disabled={blocked}
+                            title={isSelf ? t("sad.teamCantDisableSelf") : lastActive ? t("sad.teamCantDisableLast") : m.disabled ? t("sad.teamEnable") : t("sad.teamDisable")}
+                            className={clsx(
+                              "rounded-lg px-2.5 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-40",
+                              m.disabled ? "text-emerald-400 hover:bg-emerald-500/10" : "text-rose-400 hover:bg-rose-500/10",
+                            )}
+                          >
+                            {m.disabled ? t("sad.teamEnable") : t("sad.teamDisable")}
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
@@ -107,6 +142,7 @@ function InviteModal({ onClose, onDone }: { onClose: () => void; onDone: () => v
   const t = useT();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [role, setRole] = useState<"owner" | "support">("support");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [result, setResult] = useState<{ email: string; oneTimePassword: string } | null>(null);
@@ -118,7 +154,7 @@ function InviteModal({ onClose, onDone }: { onClose: () => void; onDone: () => v
     if (!valid) return;
     setBusy(true); setErr(null);
     try {
-      const r = await api.post<{ oneTimePassword: string }>("/super-admin/team", { name, email });
+      const r = await api.post<{ oneTimePassword: string }>("/super-admin/team", { name, email, role });
       setResult({ email, oneTimePassword: r.oneTimePassword });
     } catch (e) { setErr((e as Error).message); setBusy(false); }
   }
@@ -152,6 +188,13 @@ function InviteModal({ onClose, onDone }: { onClose: () => void; onDone: () => v
         <Field label={t("ateam.email")}>
           <input className="input h-10" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="jane@orcalis.dev" />
           {email.trim() && !emailOk && <span className="mt-1 block text-xs text-rose-400">{t("ateam.invalidEmail")}</span>}
+        </Field>
+        <Field label="Tier">
+          <div className="flex gap-1 rounded-lg border border-[var(--border)] bg-[var(--card-2)] p-1">
+            <button type="button" onClick={() => setRole("support")} className={clsx("flex-1 rounded-md px-3 py-1.5 text-sm font-medium", role === "support" ? "bg-[#c6ff34] text-[#111110]" : "text-[var(--muted)]")}>Support</button>
+            <button type="button" onClick={() => setRole("owner")} className={clsx("flex-1 rounded-md px-3 py-1.5 text-sm font-medium", role === "owner" ? "bg-[#c6ff34] text-[#111110]" : "text-[var(--muted)]")}>Owner</button>
+          </div>
+          <p className="mt-1 text-xs text-[var(--muted)]">Support can do day-to-day work (impersonate, export, tickets, maintenance) but not delete tenant data, manage licensing, or manage the team.</p>
         </Field>
         <p className="text-xs text-[var(--muted)]">{t("sad.teamPasswordHint")}</p>
         {err && <p className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-400">{err}</p>}

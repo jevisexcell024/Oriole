@@ -24,16 +24,23 @@ import { clsx } from "clsx";
 // non-navigating, "Soon" badge). Deliberately NOT stub pages: a disabled list
 // item can't 404 or go stale the way an abandoned placeholder route can. Only
 // add a real `to` here in the same batch that builds that section for real.
-type NavItem = { labelKey: string; icon: typeof BookOpen; to?: string };
+type NavItem = { labelKey: string; icon: typeof BookOpen; to?: string; external?: boolean };
 type NavGroup = { key: string; labelKey: string; items: NavItem[] };
 
 const TOP_ITEM: NavItem = { to: "/super-admin/dashboard", labelKey: "sanav.dashboard", icon: LayoutDashboard };
 
 const GROUPS: NavGroup[] = [
   { key: "platform", labelKey: "sanav.secPlatform", items: [
-    { labelKey: "sanav.platformAnalytics", icon: BarChart3 },
+    { labelKey: "sanav.platformAnalytics", icon: BarChart3, to: "/super-admin/analytics" },
+    // Deliberately NOT built as its own page — see the CHANGELOG's own note
+    // on this decision: a Super Admin System Health page would ~100%
+    // duplicate the tenant-side /admin/system-health and the public status
+    // page (same reliability engine, just behind a different login). Left
+    // disabled rather than reversing that call.
     { labelKey: "sanav.systemHealth", icon: HeartPulse },
-    { labelKey: "sanav.statusOverview", icon: Activity },
+    // The public status page needs no tenant session, so it's a real link
+    // out (new tab) rather than a rebuilt duplicate.
+    { labelKey: "sanav.statusOverview", icon: Activity, to: "/status", external: true },
   ] },
   { key: "tenants", labelKey: "sanav.secTenants", items: [
     { labelKey: "sanav.institutions", icon: Building2, to: "/super-admin/institutions" },
@@ -42,26 +49,39 @@ const GROUPS: NavGroup[] = [
     { labelKey: "sanav.tenantArchive", icon: Archive },
   ] },
   { key: "licensing", labelKey: "sanav.secLicensing", items: [
-    { labelKey: "sanav.subscriptionPlans", icon: CreditCard },
-    { labelKey: "sanav.activeLicenses", icon: KeyRound },
-    { labelKey: "sanav.licenseKeys", icon: Key },
-    { labelKey: "sanav.usageLimits", icon: Gauge },
+    { labelKey: "sanav.subscriptionPlans", icon: CreditCard, to: "/super-admin/plans" },
+    { labelKey: "sanav.activeLicenses", icon: KeyRound, to: "/super-admin/licenses" },
+    { labelKey: "sanav.licenseKeys", icon: Key, to: "/super-admin/license-keys" },
+    // Usage Limits isn't a separate page — it's exactly what Active Licenses
+    // already shows (usage vs. each tenant's plan limits), so both nav items
+    // deliberately point at the same real page rather than building a
+    // duplicate. Matches this shell's own "no stub pages" rule.
+    { labelKey: "sanav.usageLimits", icon: Gauge, to: "/super-admin/licenses" },
   ] },
   { key: "users", labelKey: "sanav.secUsers", items: [
     { labelKey: "sanav.superAdmins", icon: ShieldCheck, to: "/super-admin/team" },
-    { labelKey: "sanav.platformSupportStaff", icon: Users },
-    { labelKey: "sanav.activityLogs", icon: ScrollText },
+    // Real now: Owner/Support tiers on the same Team page (an Owner-only
+    // toggle per member) — same page as Super Admins, not a separate list,
+    // since it's the same accounts with the same table, just a tier on each.
+    { labelKey: "sanav.platformSupportStaff", icon: Users, to: "/super-admin/team" },
+    // Security Center already IS the platform activity/audit log — same page.
+    { labelKey: "sanav.activityLogs", icon: ScrollText, to: "/super-admin/security" },
   ] },
   { key: "monitoring", labelKey: "sanav.secMonitoring", items: [
-    { labelKey: "sanav.livePlatform", icon: Radio },
-    { labelKey: "sanav.activeUsers", icon: UserCheck },
-    { labelKey: "sanav.activeExams", icon: BookOpen },
-    { labelKey: "sanav.activeSessions", icon: Monitor },
+    // All 4 are facets of one real fact — who's mid-exam right now — so all
+    // 4 point at the one real page rather than 4 near-identical builds.
+    { labelKey: "sanav.livePlatform", icon: Radio, to: "/super-admin/monitoring" },
+    { labelKey: "sanav.activeUsers", icon: UserCheck, to: "/super-admin/monitoring" },
+    { labelKey: "sanav.activeExams", icon: BookOpen, to: "/super-admin/monitoring" },
+    { labelKey: "sanav.activeSessions", icon: Monitor, to: "/super-admin/monitoring" },
   ] },
   { key: "maintenance", labelKey: "sanav.secMaintenance", items: [
     { labelKey: "sanav.maintenanceMode", icon: CalendarClock, to: "/super-admin/maintenance" },
-    { labelKey: "sanav.maintenanceHistory", icon: History },
-    { labelKey: "sanav.maintenanceQueue", icon: ClipboardList },
+    // Both now real sections ON that same page (History = a filtered slice
+    // of the audit trail; Queue = the new scheduled-windows feature) rather
+    // than separate pages for what's really one workflow.
+    { labelKey: "sanav.maintenanceHistory", icon: History, to: "/super-admin/maintenance" },
+    { labelKey: "sanav.maintenanceQueue", icon: ClipboardList, to: "/super-admin/maintenance" },
   ] },
   { key: "infrastructure", labelKey: "sanav.secInfrastructure", items: [
     { labelKey: "sanav.database", icon: Database },
@@ -72,8 +92,16 @@ const GROUPS: NavGroup[] = [
   ] },
   { key: "security", labelKey: "sanav.secSecurity", items: [
     { labelKey: "sanav.securityCenter", icon: FileSearch, to: "/super-admin/security" },
-    { labelKey: "sanav.loginLogs", icon: LogIn },
-    { labelKey: "sanav.securityEvents", icon: ShieldAlert },
+    // Both of these are already IN Security Center's own audit trail
+    // (login/login_failed events, security-relevant actions) — same page,
+    // not a second view of the same data.
+    { labelKey: "sanav.loginLogs", icon: LogIn, to: "/super-admin/security" },
+    { labelKey: "sanav.securityEvents", icon: ShieldAlert, to: "/super-admin/security" },
+    // A Super Admin API key system was fully built once and then reverted —
+    // see CHANGELOG.md "Not shipped — API Keys (duplicate of an existing
+    // feature)". The tenant-side system (AdminIntegrations.tsx) already
+    // covers this; a second, parallel key system would be exactly the
+    // confusing duplicate that entry describes. Left disabled on purpose.
     { labelKey: "sanav.apiKeys", icon: Lock },
   ] },
   { key: "configuration", labelKey: "sanav.secConfiguration", items: [
@@ -141,6 +169,24 @@ export function SuperAdminShell({ children }: { children: ReactNode }) {
             {t("sanav.soon")}
           </span>
         </span>
+      );
+    }
+    if (item.external) {
+      return (
+        <a
+          key={item.to}
+          href={item.to}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={collapsed ? t(item.labelKey) : undefined}
+          className={clsx(
+            "group relative flex items-center gap-2.5 rounded-[3px] px-3 py-2 text-[13px] font-medium text-[#D7E3E6] transition hover:bg-[#c6ff34] hover:text-[#111110]",
+            collapsed && "lg:justify-center lg:px-0",
+          )}
+        >
+          <item.icon className="h-4 w-4 shrink-0 text-[#9FBCC2] transition-colors group-hover:text-[#111110]" />
+          <span className={clsx("flex-1", collapsed && "lg:hidden")}>{t(item.labelKey)}</span>
+        </a>
       );
     }
     const active = isActive(item.to);

@@ -15,7 +15,7 @@ const JWT_SECRET = env.superAdminJwtSecret;
 const COOKIE = "orcalis_superadmin_session";
 
 export function toSafeSuperAdmin(s: SuperAdmin): SafeSuperAdmin {
-  return { id: s.id, email: s.email, name: s.name, mustChangePassword: !!s.mustChangePassword };
+  return { id: s.id, email: s.email, name: s.name, mustChangePassword: !!s.mustChangePassword, role: s.role ?? "owner" };
 }
 
 export function issueSuperAdminSession(res: Response, superAdmin: SuperAdmin) {
@@ -56,6 +56,20 @@ export function currentSuperAdmin(req: Request): SuperAdmin | null {
 export function requireSuperAdmin(req: Request, res: Response, next: NextFunction) {
   const superAdmin = currentSuperAdmin(req);
   if (!superAdmin) return res.status(401).json({ error: "Not authenticated" });
+  (req as Request & { superAdmin: SuperAdmin }).superAdmin = superAdmin;
+  next();
+}
+
+/** Stricter gate for the handful of "owner"-only actions — see SuperAdmin's
+ *  own doc comment on `role` for exactly which routes use this instead of
+ *  requireSuperAdmin. Always used ON TOP OF requireSuperAdmin, never alone
+ *  (it doesn't itself check authentication). */
+export function requireSuperAdminOwner(req: Request, res: Response, next: NextFunction) {
+  const superAdmin = currentSuperAdmin(req);
+  if (!superAdmin) return res.status(401).json({ error: "Not authenticated" });
+  if ((superAdmin.role ?? "owner") !== "owner") {
+    return res.status(403).json({ error: "Only an Owner-tier Super Admin can do this." });
+  }
   (req as Request & { superAdmin: SuperAdmin }).superAdmin = superAdmin;
   next();
 }

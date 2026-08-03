@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { Plus, Loader2, Check, ShieldCheck, PauseCircle, Copy, CheckCircle2, LogIn, Download, Trash2 } from "lucide-react";
 import { SuperAdminShell } from "@/components/SuperAdminShell";
 import { PageHeader } from "@/components/PageHeader";
 import { TableSkeleton, Modal, ErrorBanner } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { useSuperAdminAuth } from "@/lib/superAdminAuth";
 import { clsx } from "clsx";
 
 interface TenantRow {
@@ -14,6 +16,8 @@ interface TenantRow {
 
 export function SuperAdminInstitutions() {
   const t = useT();
+  const { superAdmin } = useSuperAdminAuth();
+  const isOwner = (superAdmin?.role ?? "owner") === "owner";
   const [rows, setRows] = useState<TenantRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -81,7 +85,7 @@ export function SuperAdminInstitutions() {
       <div className="fade-in max-w-5xl">
         <div className="flex items-center justify-between gap-3">
           <PageHeader eyebrow={t("sad.dashEyebrow")} title={t("sad.instTitle")} subtitle={t("sad.instSubtitle")} />
-          <button onClick={() => setCreating(true)} className="btn btn-primary shrink-0"><Plus className="h-4 w-4" /> {t("sad.instNew")}</button>
+          {isOwner && <button onClick={() => setCreating(true)} className="btn btn-primary shrink-0"><Plus className="h-4 w-4" /> {t("sad.instNew")}</button>}
         </div>
 
         {error && <ErrorBanner className="mt-4">{error}</ErrorBanner>}
@@ -109,7 +113,7 @@ export function SuperAdminInstitutions() {
                 <tbody>
                   {rows.map((row) => (
                     <tr key={row.id} className="border-b border-[var(--border)] last:border-0 hover:bg-white/[0.02]">
-                      <td className="px-4 py-3 font-medium">{row.name}</td>
+                      <td className="px-4 py-3 font-medium"><Link to={`/super-admin/institutions/${row.id}`} className="hover:text-[#c6ff34] hover:underline">{row.name}</Link></td>
                       <td className="px-3 py-3">
                         {row.status === "active" ? (
                           <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-semibold text-emerald-400"><ShieldCheck className="h-3 w-3" /> {t("sad.instActive")}</span>
@@ -140,7 +144,7 @@ export function SuperAdminInstitutions() {
                           >
                             {exportingId === row.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
                           </button>
-                          {row.status === "suspended" && (
+                          {isOwner && row.status === "suspended" && (
                             <button
                               onClick={() => setConfirmDelete(row)}
                               disabled={busyId === row.id}
@@ -150,16 +154,18 @@ export function SuperAdminInstitutions() {
                               <Trash2 className="h-3.5 w-3.5" />
                             </button>
                           )}
-                          <button
-                            onClick={() => (row.status === "active" ? setConfirmSuspend(row) : toggleStatus(row))}
-                            disabled={busyId === row.id}
-                            className={clsx(
-                              "rounded-lg px-2.5 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-40",
-                              row.status === "active" ? "text-rose-400 hover:bg-rose-500/10" : "text-emerald-400 hover:bg-emerald-500/10",
-                            )}
-                          >
-                            {busyId === row.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : row.status === "active" ? t("sad.instSuspend") : t("sad.instReactivate")}
-                          </button>
+                          {isOwner && (
+                            <button
+                              onClick={() => (row.status === "active" ? setConfirmSuspend(row) : toggleStatus(row))}
+                              disabled={busyId === row.id}
+                              className={clsx(
+                                "rounded-lg px-2.5 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-40",
+                                row.status === "active" ? "text-rose-400 hover:bg-rose-500/10" : "text-emerald-400 hover:bg-emerald-500/10",
+                              )}
+                            >
+                              {busyId === row.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : row.status === "active" ? t("sad.instSuspend") : t("sad.instReactivate")}
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -238,6 +244,7 @@ function CreateModal({ onClose, onDone }: { onClose: () => void; onDone: () => v
   const [tenantName, setTenantName] = useState("");
   const [adminName, setAdminName] = useState("");
   const [adminEmail, setAdminEmail] = useState("");
+  const [licenseKeyCode, setLicenseKeyCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [result, setResult] = useState<{ email: string; oneTimePassword: string } | null>(null);
@@ -249,7 +256,7 @@ function CreateModal({ onClose, onDone }: { onClose: () => void; onDone: () => v
     if (!valid) return;
     setBusy(true); setErr(null);
     try {
-      const r = await api.post<{ oneTimePassword: string }>("/super-admin/tenants", { tenantName, adminName, adminEmail });
+      const r = await api.post<{ oneTimePassword: string }>("/super-admin/tenants", { tenantName, adminName, adminEmail, licenseKeyCode: licenseKeyCode.trim() || undefined });
       setResult({ email: adminEmail, oneTimePassword: r.oneTimePassword });
     } catch (e) { setErr((e as Error).message); setBusy(false); }
   }
@@ -286,6 +293,9 @@ function CreateModal({ onClose, onDone }: { onClose: () => void; onDone: () => v
           {adminEmail.trim() && !emailOk && <span className="mt-1 block text-xs text-rose-400">{t("ateam.invalidEmail")}</span>}
         </Field>
         <p className="text-xs text-[var(--muted)]">{t("sad.instPasswordHint")}</p>
+        <Field label="License key (optional)">
+          <input className="input h-10" value={licenseKeyCode} onChange={(e) => setLicenseKeyCode(e.target.value)} placeholder="ORCL-XXXX-XXXX-XXXX" />
+        </Field>
         {err && <p className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-400">{err}</p>}
       </div>
       <div className="mt-5 flex justify-end gap-2">

@@ -21,7 +21,7 @@ import {
   currentImpersonatorId,
 } from "./auth.ts";
 import {
-  issueSuperAdminSession, currentSuperAdmin, requireSuperAdmin, clearSuperAdminSession, toSafeSuperAdmin,
+  issueSuperAdminSession, currentSuperAdmin, requireSuperAdmin, requireSuperAdminOwner, clearSuperAdminSession, toSafeSuperAdmin,
 } from "./superAdminAuth.ts";
 import { generateSecret, verifyTotp, verifyTotpStep, otpauthUrl, generateBackupCodes } from "./totp.ts";
 import { microsoftEnabled, authorizeUrl, exchangeCode } from "./sso.ts";
@@ -41,6 +41,7 @@ import { validate } from "./validate.ts";
 import {
   loginSchema, teamCreateSchema, passwordChangeSchema, passwordResetSchema, twoFaCodeSchema, twoFaDisableSchema,
   customRoleCreateSchema, customRoleUpdateSchema, roleAssignSchema, passwordSetupSchema, superAdminCreateSchema, tenantCreateSchema,
+  planCreateSchema, planUpdateSchema, licenseKeyCreateSchema, licenseKeyRedeemSchema, maintenanceWindowCreateSchema,
 } from "./schemas.ts";
 import { verifySeb } from "./seb.ts";
 import { nextStreak, displayStreak } from "./streak.ts";
@@ -61,7 +62,7 @@ import type {
   Answer, Attempt, Certificate, Exam, ExamListItem, ProctorEvent, PublicQuestion, Question, Registration, RubricCriterion, RegradeRequest, WebhookEvent,
   Book, BookGenre, ReadingProgress, ResourceType, ResourceDifficulty, ResourceVersion, ResourceBookmark, ResourceRating, ResourceDownloadLog, User,
   LearningStructureMode, AnnouncementRead, CustomRole, ReliabilitySubsystemKey, ReliabilityIncident, MediaAsset,
-  SuperAdminSummary, SuperAdmin, SupportTicket, Tenant, OrgSettings,
+  SuperAdminSummary, SuperAdmin, SupportTicket, Tenant, OrgSettings, Plan, LicenseKey, MaintenanceWindow,
 } from "../shared/types.ts";
 import { PERMISSIONS, PERMISSION_KEYS, isPermissionKey, SYSTEM_ROLE_PERMISSIONS, systemParentId, parseSystemParentId, type PermissionKey } from "../shared/permissions.ts";
 import {
@@ -288,9 +289,14 @@ const PORT = env.port;
 const now = () => new Date().toISOString();
 
 // In production, serve the built single-page app from the same origin.
+// Gated on env.isProd (not just the folder existing) — a `dist/` left over
+// from a local `npm run build` (e.g. while preparing a deploy) would
+// otherwise make dev mode silently serve that stale build's hashed assets
+// forever instead of Vite's live dev bundle, with no error to explain why
+// changes stop showing up.
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.join(__dirname, "..", "dist");
-const servingSpa = fs.existsSync(distDir);
+const servingSpa = env.isProd && fs.existsSync(distDir);
 if (servingSpa) {
   // Hashed assets (e.g. /assets/index-ABC123.js) are content-addressed — cache
   // them forever. index.html must NEVER be cached, or browsers keep loading an
@@ -588,6 +594,74 @@ app.get("/api/super-admin/dashboard", requireSuperAdmin, (_req, res) => {
   });
 });
 
+// Platform Analytics — cross-school trends and breakdowns nothing else on the
+// platform shows (unlike System Health/Status Overview, which would duplicate
+// the tenant-side page and the public status page, so those stay unbuilt —
+// see the "Platform" nav group's own comment). Computed live from each
+// record's own createdAt, not a separate rollup table — cheap at this data
+// volume and always exactly correct, no sync-drift risk.
+app.get("/api/super-admin/analytics", requireSuperAdmin, (_req, res) => {
+  const days = 30;
+  const dayKey = (iso: string) => iso.slice(0, 10); // YYYY-MM-DD, UTC
+  const todayKey = new Date().toISOString().slice(0, 10);
+  // No student-signups line here: User has no createdAt field at all (never
+  // added — students are provisioned by an admin, not self-registered), so a
+  // "students created" trend would just be a permanent flat zero. Schools and
+  // exams both have a real createdAt, so those stay honest.
+  const buckets: { date: string; schools: number; exams: number }[] = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(); d.setUTCDate(d.getUTCDate() - i);
+    buckets.push({ date: d.toISOString().slice(0, 10), schools: 0, exams: 0 });
+  }
+  const byDate = new Map(buckets.map((b) => [b.date, b]));
+  for (const t of db.data!.tenants) { const b = byDate.get(dayKey(t.createdAt)); if (b) b.schools++; }
+  for (const e of db.data!.exams) { const b = byDate.get(dayKey(e.createdAt)); if (b) b.exams++; }
+
+  const plans = db.data!.plans;
+  const planDistribution = [
+    ...plans.map((p) => ({ planId: p.id, planName: p.name, count: db.data!.tenants.filter((t) => t.planId === p.id).length })),
+    { planId: null, planName: "No plan assigned", count: db.data!.tenants.filter((t) => !t.planId).length },
+  ].filter((row) => row.count > 0);
+
+  const topInstitutions = db.data!.tenants
+    .map((t) => ({
+      id: t.id, name: t.name, status: t.status,
+      students: db.data!.users.filter((u) => u.tenantId === t.id && u.role === "candidate").length,
+      exams: db.data!.exams.filter((e) => e.tenantId === t.id).length,
+      createdAt: t.createdAt,
+    }))
+    .sort((a, b) => b.students - a.students)
+    .slice(0, 10);
+
+  res.json({ trend: buckets, planDistribution, topInstitutions, generatedFor: todayKey });
+});
+
+// Monitoring — "Live Platform" / "Active Users" / "Active Exams" / "Active
+// Sessions" are all really the same underlying fact (who's mid-exam right
+// now) sliced 4 different ways, so this is one endpoint backing one page
+// rather than 4 near-identical builds. Genuinely NOT a duplicate of the
+// tenant-side /admin/live — that shows one school's own live sessions; a
+// tenant admin can never see another school's, which is exactly what this
+// aggregates across every school at once.
+app.get("/api/super-admin/monitoring", requireSuperAdmin, (_req, res) => {
+  const inProgress = db.data!.attempts.filter((a) => a.status === "in_progress");
+  const sessions = inProgress.map((a) => {
+    const exam = db.data!.exams.find((e) => e.id === a.examId);
+    const candidate = db.data!.users.find((u) => u.id === a.candidateId);
+    const tenant = db.data!.tenants.find((t) => t.id === a.tenantId);
+    const deadline = new Date(a.startedAt).getTime() + a.durationMinutes * 60_000;
+    return {
+      attemptId: a.id, tenantName: tenant?.name ?? "Unknown", examTitle: exam?.title ?? "Unknown",
+      candidateName: candidate?.name ?? "Unknown", startedAt: a.startedAt, deadline: new Date(deadline).toISOString(),
+    };
+  }).sort((a, b) => a.deadline.localeCompare(b.deadline));
+  res.json({
+    sessions,
+    activeUserCount: new Set(inProgress.map((a) => a.candidateId)).size,
+    activeExamCount: new Set(inProgress.map((a) => a.examId)).size,
+  });
+});
+
 // Security Center — the super-admin audit trail (login/logout/password events
 // today) plus its own hash-chain integrity check. Mirrors GET /api/admin/audit-logs
 // exactly, against superAdminAuditStore instead of auditStore. Rate-limit
@@ -672,8 +746,56 @@ app.patch("/api/super-admin/maintenance", requireSuperAdmin, async (req, res) =>
   };
   db.data!.maintenance = [record];
   await db.upsert("maintenance", record);
+  // Manually turning it off must win over a still-"active" scheduled window —
+  // otherwise the 60s sweep below would just turn it back on at its next
+  // tick, silently fighting the operator's explicit action.
+  if (!enabled) {
+    for (const w of db.data!.maintenanceWindows) {
+      if (w.status === "active") { w.status = "cancelled"; await db.upsert("maintenanceWindows", w); }
+    }
+  }
   await recordSuperAdminAudit(req, enabled ? "superadmin.maintenance.enabled" : "superadmin.maintenance.disabled", message || "(no message)");
   res.json(record);
+});
+
+// Maintenance Queue — schedule a window in advance rather than toggling
+// Maintenance Mode by hand at the time. A 60s sweep (below, near the other
+// periodic sweeps) activates/completes windows as their times are reached.
+app.get("/api/super-admin/maintenance/windows", requireSuperAdmin, (_req, res) => {
+  const windows = [...db.data!.maintenanceWindows].sort((a, b) => b.startAt.localeCompare(a.startAt));
+  res.json({ windows });
+});
+
+app.post("/api/super-admin/maintenance/windows", requireSuperAdmin, validate(maintenanceWindowCreateSchema), async (req, res) => {
+  const superAdmin = currentSuperAdmin(req)!;
+  const { startAt, endAt, message } = req.body as { startAt: string; endAt: string; message: string };
+  const window: MaintenanceWindow = {
+    id: nanoid(10), startAt: new Date(startAt).toISOString(), endAt: new Date(endAt).toISOString(), message,
+    status: "scheduled", createdAt: now(), createdBy: superAdmin.name,
+  };
+  db.data!.maintenanceWindows.push(window);
+  await db.upsert("maintenanceWindows", window);
+  await recordSuperAdminAudit(req, "superadmin.maintenance.window_scheduled", `${window.startAt} → ${window.endAt}: ${message || "(no message)"}`);
+  res.status(201).json({ window });
+});
+
+app.post("/api/super-admin/maintenance/windows/:id/cancel", requireSuperAdmin, async (req, res) => {
+  const window = db.data!.maintenanceWindows.find((w) => w.id === req.params.id);
+  if (!window) return res.status(404).json({ error: "Not found." });
+  if (window.status !== "scheduled" && window.status !== "active") return res.status(400).json({ error: "Only a scheduled or active window can be cancelled." });
+  const wasActive = window.status === "active";
+  window.status = "cancelled";
+  await db.upsert("maintenanceWindows", window);
+  // If it was actively suppressing the platform right now, turning the
+  // window off must also turn Maintenance Mode itself back off — otherwise
+  // cancelling looks like it worked but the platform stays down.
+  if (wasActive) {
+    const record = { id: "platform" as const, enabled: false, message: "", updatedAt: now(), updatedBy: currentSuperAdmin(req)!.name };
+    db.data!.maintenance = [record];
+    await db.upsert("maintenance", record);
+  }
+  await recordSuperAdminAudit(req, "superadmin.maintenance.window_cancelled", `${window.startAt} → ${window.endAt}`);
+  res.json({ window });
 });
 
 // Email Templates — scoped to subject + intro paragraph only (see
@@ -792,7 +914,7 @@ app.get("/api/super-admin/platform-settings", requireSuperAdmin, (_req, res) => 
 });
 
 function toSuperAdminSummary(s: SuperAdmin): SuperAdminSummary {
-  return { id: s.id, email: s.email, name: s.name, createdAt: s.createdAt, mustChangePassword: !!s.mustChangePassword, disabled: !!s.disabled };
+  return { id: s.id, email: s.email, name: s.name, createdAt: s.createdAt, mustChangePassword: !!s.mustChangePassword, disabled: !!s.disabled, role: s.role ?? "owner" };
 }
 
 app.get("/api/super-admin/team", requireSuperAdmin, (_req, res) => {
@@ -803,7 +925,7 @@ app.get("/api/super-admin/team", requireSuperAdmin, (_req, res) => {
 // the inviter never chooses the new account's password, a random one-time
 // password is generated and returned once in the response (not emailed —
 // Configuration → Email Templates, which this would need, is still "Soon").
-app.post("/api/super-admin/team", requireSuperAdmin, validate(superAdminCreateSchema), async (req, res) => {
+app.post("/api/super-admin/team", requireSuperAdminOwner, validate(superAdminCreateSchema), async (req, res) => {
   const { name, email } = req.body as { name: string; email: string };
   if (db.data!.superAdmins.some((s) => s.email.toLowerCase() === email.toLowerCase())) {
     return res.status(409).json({ error: "A Super Admin with that email already exists." });
@@ -816,6 +938,7 @@ app.post("/api/super-admin/team", requireSuperAdmin, validate(superAdminCreateSc
     passwordHash: await bcrypt.hash(oneTimePassword, BCRYPT_COST),
     createdAt: new Date().toISOString(),
     mustChangePassword: true,
+    role: (req.body?.role === "support" ? "support" : "owner") as "owner" | "support",
   };
   db.data!.superAdmins.push(superAdmin);
   await db.upsert("superAdmins", superAdmin);
@@ -826,7 +949,7 @@ app.post("/api/super-admin/team", requireSuperAdmin, validate(superAdminCreateSc
 // Disable/enable — never a hard delete, so past audit entries still resolve
 // to a real name. Two guards against self-lockout: an admin can't disable
 // their own account, and the last remaining enabled account can't be disabled.
-app.patch("/api/super-admin/team/:id", requireSuperAdmin, async (req, res) => {
+app.patch("/api/super-admin/team/:id", requireSuperAdminOwner, async (req, res) => {
   const actor = currentSuperAdmin(req)!;
   const target = db.data!.superAdmins.find((s) => s.id === req.params.id);
   if (!target) return res.status(404).json({ error: "Not found." });
@@ -838,6 +961,13 @@ app.patch("/api/super-admin/team/:id", requireSuperAdmin, async (req, res) => {
   }
   target.disabled = disabled;
   target.tokenVersion = (target.tokenVersion ?? 0) + 1; // force any existing session to re-authenticate
+  if (req.body?.role === "owner" || req.body?.role === "support") {
+    if (target.id === actor.id && req.body.role === "support") {
+      const otherOwnerCount = db.data!.superAdmins.filter((s) => s.id !== target.id && !s.disabled && (s.role ?? "owner") === "owner").length;
+      if (otherOwnerCount === 0) return res.status(400).json({ error: "At least one Owner-tier Super Admin must remain — demote someone else first." });
+    }
+    target.role = req.body.role;
+  }
   await db.upsert("superAdmins", target);
   await recordSuperAdminAudit(req, disabled ? "superadmin.team.disabled" : "superadmin.team.enabled", `${target.name} <${target.email}>`);
   res.json({ superAdmin: toSuperAdminSummary(target) });
@@ -864,14 +994,29 @@ app.get("/api/super-admin/tenants", requireSuperAdmin, (_req, res) => {
   res.json({ tenants });
 });
 
-app.post("/api/super-admin/tenants", requireSuperAdmin, validate(tenantCreateSchema), async (req, res) => {
-  const { tenantName, adminName, adminEmail } = req.body as { tenantName: string; adminName: string; adminEmail: string };
+app.post("/api/super-admin/tenants", requireSuperAdminOwner, validate(tenantCreateSchema), async (req, res) => {
+  const { tenantName, adminName, adminEmail, licenseKeyCode } = req.body as { tenantName: string; adminName: string; adminEmail: string; licenseKeyCode?: string };
   if (db.data!.users.some((u) => u.email.toLowerCase() === adminEmail.toLowerCase())) {
     return res.status(409).json({ error: "An account with that email already exists." });
   }
+  // Validate the code (if given) before creating anything — a bad code must
+  // never leave behind an orphan tenant with no license.
+  let licenseResult: { key: LicenseKey; plan: Plan } | null = null;
+  if (licenseKeyCode) {
+    const result = findRedeemableLicenseKey(licenseKeyCode);
+    if ("error" in result) return res.status(400).json(result);
+    licenseResult = result;
+  }
+
   const tenant: Tenant = { id: nanoid(10), name: tenantName, status: "active", createdAt: new Date().toISOString() };
+  if (licenseResult) {
+    applyLicenseKeyRedemption(licenseResult.key, tenant.id);
+    tenant.planId = licenseResult.plan.id;
+    tenant.licenseStatus = "active";
+  }
   db.data!.tenants.push(tenant);
   await db.upsert("tenants", tenant);
+  if (licenseResult) await db.upsert("licenseKeys", licenseResult.key);
 
   // getOrgSettings(tenantId) throws if a tenant has no matching settings row —
   // true for tenant #1 only because the boot-time migration provisions it.
@@ -895,11 +1040,32 @@ app.post("/api/super-admin/tenants", requireSuperAdmin, validate(tenantCreateSch
   db.data!.users.push(admin);
   await db.upsert("users", admin);
 
-  await recordSuperAdminAudit(req, "superadmin.tenant.created", `${tenant.name} (admin: ${admin.email})`);
+  await recordSuperAdminAudit(req, "superadmin.tenant.created", `${tenant.name} (admin: ${admin.email})${licenseResult ? `, licensed via ${licenseResult.key.code} → ${licenseResult.plan.name}` : ""}`);
   res.status(201).json({ tenant, admin: { id: admin.id, name: admin.name, email: admin.email }, oneTimePassword });
 });
 
-app.patch("/api/super-admin/tenants/:id", requireSuperAdmin, async (req, res) => {
+// Tenant detail — everything about one school in one call: the flat
+// Institutions table plus what a Super Admin needs when actually looking
+// into a specific school (its admins, its license/usage, its own recent
+// activity). Reuses tenantUsage() (defined below, hoisted) and the tenant's
+// own audit trail (auditStore, tenant-scoped — never superAdminAuditStore,
+// which is platform-operator activity, a different thing).
+app.get("/api/super-admin/tenants/:id", requireSuperAdmin, async (req, res) => {
+  const tenant = db.data!.tenants.find((t) => t.id === req.params.id);
+  if (!tenant) return res.status(404).json({ error: "Not found." });
+  const plan = tenant.planId ? db.data!.plans.find((p) => p.id === tenant.planId) ?? null : null;
+  const admins = db.data!.users
+    .filter((u) => u.tenantId === tenant.id && u.role === "admin")
+    .map((u) => ({ id: u.id, name: u.name, email: u.email }));
+  const recentActivity = await auditStore.recentForTenant(tenant.id, 25);
+  const totalExams = db.data!.exams.filter((e) => e.tenantId === tenant.id).length;
+  res.json({
+    tenant, plan, usage: tenantUsage(tenant.id), totalExams, admins,
+    recentActivity: recentActivity.map((l) => ({ id: l.id, at: l.at, actorName: l.actorName, action: l.action, target: l.target })),
+  });
+});
+
+app.patch("/api/super-admin/tenants/:id", requireSuperAdminOwner, async (req, res) => {
   const tenant = db.data!.tenants.find((t) => t.id === req.params.id);
   if (!tenant) return res.status(404).json({ error: "Not found." });
   if (typeof req.body?.name === "string" && req.body.name.trim()) tenant.name = req.body.name.trim().slice(0, 160);
@@ -956,7 +1122,7 @@ app.get("/api/super-admin/tenants/:id/export", requireSuperAdmin, async (req, re
 // school), and the caller must repeat the tenant's own name back exactly —
 // the same "type it to confirm" pattern used everywhere else in the app a
 // destructive action can't be undone.
-app.delete("/api/super-admin/tenants/:id", requireSuperAdmin, async (req, res) => {
+app.delete("/api/super-admin/tenants/:id", requireSuperAdminOwner, async (req, res) => {
   const tenant = db.data!.tenants.find((t) => t.id === req.params.id);
   if (!tenant) return res.status(404).json({ error: "Not found." });
   if (tenant.status !== "suspended") return res.status(400).json({ error: "Suspend this school before deleting its data." });
@@ -967,6 +1133,246 @@ app.delete("/api/super-admin/tenants/:id", requireSuperAdmin, async (req, res) =
   const totalRows = Object.values(counts).reduce((a, b) => a + b, 0);
   await recordSuperAdminAudit(req, "superadmin.tenant.deleted", `${tenant.name} — ${totalRows} rows across ${Object.keys(counts).length} tables`);
   res.json({ ok: true, deletedRows: counts });
+});
+
+// ============================================================================
+// Licensing — Subscription Plans, Active Licenses, License Keys, Usage Limits.
+// No in-app payment processor exists (checked: no Stripe/PayPal dependency),
+// so a "subscription" here is a billing-tier label + enforced usage caps the
+// platform operator assigns manually or via a redeemable LicenseKey — not a
+// live checkout flow. See shared/types.ts's Plan/LicenseKey doc comments.
+// ============================================================================
+
+function slugifyPlanCode(name: string): string {
+  const base = name.trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "PLAN";
+  let code = base, n = 2;
+  while (db.data!.plans.some((p) => p.code === code)) code = `${base}_${n++}`;
+  return code;
+}
+
+/** Institutions currently on a plan, and the resulting monthly/annual total —
+ *  honest math over operator-entered prices × real assignments, not a live
+ *  payment-processor figure (this platform doesn't have one). Counts every
+ *  assigned tenant regardless of suspension status: a suspended school is
+ *  still owed on until the operator cancels its license, the same as any
+ *  real subscription. ARR is the standard MRR × 12 convention, not a sum of
+ *  actual annual invoices (this app doesn't track a per-tenant billing
+ *  cycle), which is a normal SaaS metric definition, not a fabricated one. */
+function planBilling(planId: string): { institutions: number; mrr: number } {
+  const plan = db.data!.plans.find((p) => p.id === planId);
+  const institutions = db.data!.tenants.filter((t) => t.planId === planId).length;
+  const mrr = (plan?.priceMonthly ?? 0) * institutions;
+  return { institutions, mrr };
+}
+
+app.get("/api/super-admin/plans", requireSuperAdmin, async (_req, res) => {
+  // Self-heal: any plan created before `code` existed gets one assigned on
+  // first read, rather than shipping a one-time migration script for what's
+  // a handful of rows at most.
+  for (const p of db.data!.plans) {
+    if (!p.code) { p.code = slugifyPlanCode(p.name); await db.upsert("plans", p); }
+  }
+  const plans = [...db.data!.plans].sort((a, b) => a.name.localeCompare(b.name));
+  const withBilling = plans.map((p) => ({ ...p, ...planBilling(p.id) }));
+  const totalMrr = withBilling.reduce((sum, p) => sum + p.mrr, 0);
+  res.json({
+    plans: withBilling,
+    summary: {
+      totalPlans: plans.length,
+      activePlans: plans.filter((p) => !p.archived).length,
+      totalInstitutions: db.data!.tenants.length,
+      mrr: totalMrr,
+      arr: totalMrr * 12,
+    },
+  });
+});
+
+app.post("/api/super-admin/plans", requireSuperAdminOwner, validate(planCreateSchema), async (req, res) => {
+  const { name, description, limits, features, priceMonthly, priceYearly, currency } = req.body as {
+    name: string; description?: string; limits: Plan["limits"]; features?: string[];
+    priceMonthly?: number | null; priceYearly?: number | null; currency?: string;
+  };
+  const code = (req.body?.code as string | undefined)?.trim() || slugifyPlanCode(name);
+  if (db.data!.plans.some((p) => p.code === code)) return res.status(409).json({ error: "That plan code is already in use." });
+  const plan: Plan = {
+    id: nanoid(10), name, code, description, limits, features,
+    priceMonthly: priceMonthly ?? null, priceYearly: priceYearly ?? null, currency: currency || "USD",
+    createdAt: now(),
+  };
+  db.data!.plans.push(plan);
+  await db.upsert("plans", plan);
+  await recordSuperAdminAudit(req, "superadmin.plan.created", plan.name);
+  res.status(201).json({ plan });
+});
+
+app.patch("/api/super-admin/plans/:id", requireSuperAdminOwner, validate(planUpdateSchema), async (req, res) => {
+  const plan = db.data!.plans.find((p) => p.id === req.params.id);
+  if (!plan) return res.status(404).json({ error: "Not found." });
+  const body = req.body as Partial<{
+    name: string; description: string; limits: Plan["limits"]; features: string[];
+    priceMonthly: number | null; priceYearly: number | null; currency: string;
+  }>;
+  if (body.name !== undefined) plan.name = body.name;
+  if (body.description !== undefined) plan.description = body.description;
+  if (body.limits !== undefined) plan.limits = body.limits;
+  if (body.features !== undefined) plan.features = body.features;
+  if (body.priceMonthly !== undefined) plan.priceMonthly = body.priceMonthly;
+  if (body.priceYearly !== undefined) plan.priceYearly = body.priceYearly;
+  if (body.currency !== undefined) plan.currency = body.currency;
+  await db.upsert("plans", plan);
+  await recordSuperAdminAudit(req, "superadmin.plan.updated", plan.name);
+  res.json({ plan });
+});
+
+// Archive/unarchive is a separate, unvalidated-body action (not part of
+// planUpdateSchema) — a plan referenced by a tenant is never deletable, only
+// hideable from future assignment, matching CustomRole's soft-delete.
+app.patch("/api/super-admin/plans/:id/archive", requireSuperAdminOwner, async (req, res) => {
+  const plan = db.data!.plans.find((p) => p.id === req.params.id);
+  if (!plan) return res.status(404).json({ error: "Not found." });
+  plan.archived = req.body?.archived !== false;
+  await db.upsert("plans", plan);
+  await recordSuperAdminAudit(req, plan.archived ? "superadmin.plan.archived" : "superadmin.plan.unarchived", plan.name);
+  res.json({ plan });
+});
+
+/** Live usage for one tenant against the 3 enforced dimensions. Shared by the
+ *  Active Licenses list and the enforcement checks below so both always agree
+ *  on what "usage" means. */
+function tenantUsage(tenantId: string) {
+  return {
+    students: db.data!.users.filter((u) => u.tenantId === tenantId && u.role === "candidate").length,
+    staff: db.data!.users.filter((u) => u.tenantId === tenantId && (u.role === "admin" || u.role === "facilitator" || u.role === "proctor")).length,
+    activeExams: db.data!.exams.filter((e) => e.tenantId === tenantId && e.status === "published").length,
+  };
+}
+
+/** Usage-limit enforcement. Returns an error message if adding `count` more
+ *  of `kind` would put a tenant over their plan's limit, or null if it's
+ *  fine — including when the tenant has no plan assigned at all (a
+ *  not-yet-licensed tenant is deliberately unrestricted rather than locked
+ *  out; Licensing only enforces once an operator actually assigns a plan). */
+function checkUsageLimit(tenantId: string | null | undefined, kind: keyof ReturnType<typeof tenantUsage>, count = 1): string | null {
+  if (!tenantId) return null;
+  const tenant = db.data!.tenants.find((t) => t.id === tenantId);
+  if (!tenant?.planId) return null;
+  const plan = db.data!.plans.find((p) => p.id === tenant.planId);
+  if (!plan) return null;
+  const limitKey = kind === "students" ? "maxStudents" : kind === "staff" ? "maxStaff" : "maxActiveExams";
+  const limit = plan.limits[limitKey];
+  if (limit === null || limit === undefined) return null;
+  const current = tenantUsage(tenantId)[kind];
+  if (current + count > limit) {
+    const noun = kind === "students" ? "students" : kind === "staff" ? "staff accounts" : "published exams";
+    return `This school's ${plan.name} plan allows up to ${limit} ${noun} (currently at ${current}). Ask a Super Admin to upgrade the plan to add more.`;
+  }
+  return null;
+}
+
+// "Active Licenses" — every tenant's assigned plan, status, and live usage
+// against that plan's limits in one place, so an operator can see who's near
+// a cap without opening each school individually.
+app.get("/api/super-admin/licenses", requireSuperAdmin, (_req, res) => {
+  const licenses = db.data!.tenants
+    .map((t) => {
+      const plan = t.planId ? db.data!.plans.find((p) => p.id === t.planId) ?? null : null;
+      return {
+        tenantId: t.id, tenantName: t.name, tenantStatus: t.status,
+        planId: t.planId ?? null, planName: plan?.name ?? null,
+        licenseStatus: t.licenseStatus ?? null, licenseExpiresAt: t.licenseExpiresAt ?? null,
+        limits: plan?.limits ?? null, usage: tenantUsage(t.id),
+      };
+    })
+    .sort((a, b) => a.tenantName.localeCompare(b.tenantName));
+  res.json({ licenses });
+});
+
+// Manual assignment path — separate from redeeming a LicenseKey below, for
+// directly putting a school on a plan (e.g. a verbal/offline agreement) with
+// no code involved.
+app.patch("/api/super-admin/tenants/:id/license", requireSuperAdminOwner, async (req, res) => {
+  const tenant = db.data!.tenants.find((t) => t.id === req.params.id);
+  if (!tenant) return res.status(404).json({ error: "Not found." });
+  const { planId, licenseStatus, licenseExpiresAt } = req.body as { planId?: string | null; licenseStatus?: Tenant["licenseStatus"]; licenseExpiresAt?: string | null };
+  if (planId !== undefined) {
+    if (planId !== null && !db.data!.plans.some((p) => p.id === planId)) return res.status(400).json({ error: "That plan doesn't exist." });
+    tenant.planId = planId;
+  }
+  if (licenseStatus !== undefined) tenant.licenseStatus = licenseStatus;
+  if (licenseExpiresAt !== undefined) tenant.licenseExpiresAt = licenseExpiresAt;
+  await db.upsert("tenants", tenant);
+  await recordSuperAdminAudit(req, "superadmin.tenant.license_updated", tenant.name);
+  res.json({ tenant });
+});
+
+function generateLicenseCode(): string {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no 0/O/1/I — read-aloud/typed by hand
+  const group = () => Array.from({ length: 4 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
+  return `ORCL-${group()}-${group()}-${group()}`;
+}
+
+app.get("/api/super-admin/license-keys", requireSuperAdmin, (_req, res) => {
+  const keys = [...db.data!.licenseKeys].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  res.json({ keys });
+});
+
+app.post("/api/super-admin/license-keys", requireSuperAdminOwner, validate(licenseKeyCreateSchema), async (req, res) => {
+  const superAdmin = currentSuperAdmin(req)!;
+  const { planId, note, maxRedemptions, expiresAt } = req.body as { planId: string; note?: string; maxRedemptions: number; expiresAt?: string | null };
+  const plan = db.data!.plans.find((p) => p.id === planId);
+  if (!plan) return res.status(400).json({ error: "That plan doesn't exist." });
+  const key: LicenseKey = {
+    id: nanoid(10), code: generateLicenseCode(), planId, note, maxRedemptions,
+    redeemedByTenantIds: [], expiresAt: expiresAt ?? null, createdAt: now(), createdBySuperAdminId: superAdmin.id,
+  };
+  db.data!.licenseKeys.push(key);
+  await db.upsert("licenseKeys", key);
+  await recordSuperAdminAudit(req, "superadmin.license_key.created", `${key.code} (${plan.name})`);
+  res.status(201).json({ key });
+});
+
+app.post("/api/super-admin/license-keys/:id/revoke", requireSuperAdminOwner, async (req, res) => {
+  const key = db.data!.licenseKeys.find((k) => k.id === req.params.id);
+  if (!key) return res.status(404).json({ error: "Not found." });
+  key.revokedAt = now();
+  await db.upsert("licenseKeys", key);
+  await recordSuperAdminAudit(req, "superadmin.license_key.revoked", key.code);
+  res.json({ key });
+});
+
+/** Read-only lookup — used both to validate a code before it's actually
+ *  applied (e.g. during tenant creation, before the tenant exists to redeem
+ *  against) and as the first half of applyLicenseKeyRedemption below. */
+function findRedeemableLicenseKey(code: string): { error: string } | { key: LicenseKey; plan: Plan } {
+  const key = db.data!.licenseKeys.find((k) => k.code.toUpperCase() === code.trim().toUpperCase());
+  if (!key) return { error: "That license key wasn't found." };
+  if (key.revokedAt) return { error: "That license key has been revoked." };
+  if (key.expiresAt && key.expiresAt < now()) return { error: "That license key has expired." };
+  if (key.redeemedByTenantIds.length >= key.maxRedemptions) return { error: "That license key has already been fully redeemed." };
+  const plan = db.data!.plans.find((p) => p.id === key.planId);
+  if (!plan) return { error: "This key's plan no longer exists." };
+  return { key, plan };
+}
+
+/** Actually marks a key redeemed against a tenant — call only after the
+ *  tenant is guaranteed to exist (findRedeemableLicenseKey alone is safe to
+ *  call speculatively; this mutates and must not be). */
+function applyLicenseKeyRedemption(key: LicenseKey, tenantId: string): void {
+  key.redeemedByTenantIds.push(tenantId);
+}
+
+app.post("/api/super-admin/tenants/:id/redeem-license", requireSuperAdminOwner, validate(licenseKeyRedeemSchema), async (req, res) => {
+  const tenant = db.data!.tenants.find((t) => t.id === req.params.id);
+  if (!tenant) return res.status(404).json({ error: "Not found." });
+  const result = findRedeemableLicenseKey(req.body.code);
+  if ("error" in result) return res.status(400).json(result);
+  applyLicenseKeyRedemption(result.key, tenant.id);
+  tenant.planId = result.plan.id;
+  tenant.licenseStatus = "active";
+  await db.upsert("tenants", tenant);
+  await db.upsert("licenseKeys", result.key);
+  await recordSuperAdminAudit(req, "superadmin.license_key.redeemed", `${result.key.code} → ${tenant.name} (${result.plan.name})`);
+  res.json({ tenant, plan: result.plan });
 });
 
 // ---- Single Sign-On (Microsoft / Entra) ----
@@ -1591,6 +1997,30 @@ async function sendAdminDigest(tenantId: string, sinceMs: number, periodLabel: s
 }
 
 /** Periodic check: send each tenant's configured daily/weekly digest when due. */
+/** Activates/completes scheduled maintenance windows as their times arrive.
+ *  Idempotent per tick (only acts on windows still in the state it expects),
+ *  so a missed tick just catches up on the next one instead of double-firing. */
+async function maintenanceWindowSweep() {
+  const nowMs = Date.now();
+  for (const w of db.data!.maintenanceWindows) {
+    if (w.status === "scheduled" && new Date(w.startAt).getTime() <= nowMs) {
+      w.status = "active";
+      await db.upsert("maintenanceWindows", w);
+      const record = { id: "platform" as const, enabled: true, message: w.message, updatedAt: now(), updatedBy: "Scheduled maintenance window" };
+      db.data!.maintenance = [record];
+      await db.upsert("maintenance", record);
+      await superAdminAuditStore.add({ id: nanoid(10), at: now(), actorId: "system", actorName: "System", action: "superadmin.maintenance.window_activated", target: w.message || "(no message)" });
+    } else if (w.status === "active" && new Date(w.endAt).getTime() <= nowMs) {
+      w.status = "completed";
+      await db.upsert("maintenanceWindows", w);
+      const record = { id: "platform" as const, enabled: false, message: "", updatedAt: now(), updatedBy: "Scheduled maintenance window" };
+      db.data!.maintenance = [record];
+      await db.upsert("maintenance", record);
+      await superAdminAuditStore.add({ id: nanoid(10), at: now(), actorId: "system", actorName: "System", action: "superadmin.maintenance.window_completed", target: w.message || "(no message)" });
+    }
+  }
+}
+
 async function digestSweep() {
   for (const tenant of db.data!.tenants) {
     const s = getOrgSettings(tenant.id);
@@ -2625,6 +3055,8 @@ app.post("/api/admin/candidates", requirePermission("students.manage"), async (r
   if (exists) return res.status(409).json({ error: "An account with that email already exists." });
   const b = req.body ?? {};
   const tenantId = currentTenantId(req);
+  const limitError = checkUsageLimit(tenantId, "students");
+  if (limitError) return res.status(403).json({ error: limitError });
   // Never emailed or shown anywhere — the student sets their real password via
   // the setup link below. This hash only exists so passwordHash has a value.
   const placeholderPassword = "dti-" + nanoid(6);
@@ -3180,6 +3612,13 @@ app.post("/api/admin/exams/:id/publish", requirePermission("exams.publish"), asy
     await db.write();
     await recordAudit(req, "exam.unpublished", exam.title);
     return res.json({ exam });
+  }
+  // Only counts against the limit if it isn't already published — re-saving
+  // an already-published exam (e.g. a minor edit) must never be blocked by
+  // a cap that exam is already counted in.
+  if (exam.status !== "published") {
+    const limitError = checkUsageLimit(exam.tenantId, "activeExams");
+    if (limitError) return res.status(403).json({ error: limitError });
   }
   const questions = db.data!.questions.filter((q) => q.examId === exam.id);
   const errors: string[] = [];
@@ -5765,8 +6204,14 @@ app.get("/api/admin/institution", requirePermission("org.view"), (req, res) => {
   const own = <T extends { tenantId?: string }>(arr: T[]) => arr.filter((x) => x.tenantId === tenantId);
   const faculties = own(db.data!.faculties), departments = own(db.data!.departments), programs = own(db.data!.programs);
   const campuses = own(db.data!.campuses), academicYears = own(db.data!.academicYears);
+  const tenant = tenantId ? db.data!.tenants.find((t) => t.id === tenantId) : undefined;
+  const plan = tenant?.planId ? db.data!.plans.find((p) => p.id === tenant.planId) ?? null : null;
   res.json({
     settings: tenantId ? getOrgSettings(tenantId) : null,
+    // Replaces the old dead OrgSettings.plan display field — this is the real,
+    // Super-Admin-assigned plan and live usage against its limits, or null if
+    // no plan has ever been assigned to this school.
+    license: tenantId ? { planName: plan?.name ?? null, limits: plan?.limits ?? null, usage: tenantUsage(tenantId) } : null,
     counts: { faculties: faculties.length, departments: departments.length, programs: programs.length, campuses: campuses.length, academicYears: academicYears.length },
     faculties: [...faculties].sort(byName),
     departments: [...departments].sort(byName),
@@ -7252,6 +7697,10 @@ app.post("/api/admin/classes/:id/import", requirePermission("students.manage"), 
       continue;
     }
     if (!name) { skipped.push({ email, reason: "New student needs a name" }); continue; }
+    // Checked per-row (not once before the loop) since each accepted new
+    // student changes the count the next row is checked against.
+    const limitError = checkUsageLimit(tenantId, "students");
+    if (limitError) { skipped.push({ email, reason: "Plan limit reached — " + limitError }); continue; }
     const tempPassword = "dti-" + nanoid(6);
     const ageNum = Number(row?.age);
     const user: User = {
@@ -7377,6 +7826,8 @@ app.post("/api/admin/team", requirePermission("roles.team_manage"), validate(tea
   if (db.data!.users.some((u) => u.email.toLowerCase() === String(email).trim().toLowerCase())) {
     return res.status(409).json({ error: "An account with that email already exists." });
   }
+  const limitError = checkUsageLimit(tenantId, "staff");
+  if (limitError) return res.status(403).json({ error: limitError });
   const user = { id: nanoid(10), tenantId: tenantId ?? undefined, email: String(email).trim(), passwordHash: await bcrypt.hash(String(password), BCRYPT_COST), name: String(name).trim(), role };
   db.data!.users.push(user);
   await db.upsert("users", user);
@@ -7742,6 +8193,11 @@ const reportTimer = setInterval(() => {
 }, 3_600_000);
 reportTimer.unref?.();
 
+const maintenanceWindowTimer = setInterval(() => {
+  void trackedSweep("maintenanceWindow", maintenanceWindowSweep, "maintenance window sweep failed");
+}, 60_000);
+maintenanceWindowTimer.unref?.();
+
 const server = app.listen(PORT, () => {
   logger.info({ port: PORT, backend: db.backendKind(), env: process.env.NODE_ENV ?? "development", encryptionAtRest: encryptionEnabled() },
     `🛡️  Oriole API listening on http://localhost:${PORT}`);
@@ -7758,6 +8214,7 @@ async function shutdown(signal: string) {
   clearInterval(reminderTimer);
   clearInterval(digestTimer);
   clearInterval(reportTimer); // was previously missing from this list — a pre-existing gap, fixed in passing
+  clearInterval(maintenanceWindowTimer);
 
   // Both the graceful path (server.close()'s callback, once every open
   // connection has drained) and the hard-cap timeout below must close the

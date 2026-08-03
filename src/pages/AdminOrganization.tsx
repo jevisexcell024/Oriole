@@ -21,8 +21,14 @@ interface Department { id: string; name: string; facultyId?: string | null; }
 interface Program { id: string; name: string; departmentId?: string | null; level?: string; }
 interface Campus { id: string; name: string; location?: string; }
 interface AcademicYear { id: string; name: string; startDate?: string | null; endDate?: string | null; current?: boolean; }
+interface License {
+  planName: string | null;
+  limits: { maxStudents: number | null; maxStaff: number | null; maxActiveExams: number | null } | null;
+  usage: { students: number; staff: number; activeExams: number };
+}
 interface Inst {
   settings: Settings;
+  license: License | null;
   counts: { faculties: number; departments: number; programs: number; campuses: number; academicYears: number };
   faculties: Faculty[]; departments: Department[]; programs: Program[]; campuses: Campus[]; academicYears: AcademicYear[];
 }
@@ -150,12 +156,25 @@ export function AdminOrganization() {
                 <Field label={t("aorg.address")}>
                   <input className="input h-10" value={profile.address ?? ""} placeholder="123 University Ave, City, Country" onChange={(e) => setProfile({ ...profile, address: e.target.value })} />
                 </Field>
-                <div className="flex items-center justify-between rounded-xl border border-[var(--border)] p-4">
-                  <div>
-                    <p className="text-sm font-semibold">{t("aorg.currentPlan")}</p>
-                    <p className="text-xs text-[var(--muted)]">{t("aorg.planDesc")}</p>
+                <div className="rounded-xl border border-[var(--border)] p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-semibold">{t("aorg.currentPlan")}</p>
+                      <p className="text-xs text-[var(--muted)]">{t("aorg.planDesc")}</p>
+                    </div>
+                    {data.license?.planName ? (
+                      <span className="rounded-lg border border-[var(--border)] px-3 py-1 text-sm font-semibold">{data.license.planName}</span>
+                    ) : (
+                      <span className="text-xs text-[var(--muted)]">{t("aorg.noPlan")}</span>
+                    )}
                   </div>
-                  <span className="rounded-lg border border-[var(--border)] px-3 py-1 text-sm font-semibold">{data.settings.plan ?? "Starter"}</span>
+                  {data.license?.planName && data.license.limits && (
+                    <div className="mt-3 grid grid-cols-3 gap-3 text-xs">
+                      <PlanUsageStat label={t("aorg.usageStudents")} used={data.license.usage.students} limit={data.license.limits.maxStudents} />
+                      <PlanUsageStat label={t("aorg.usageStaff")} used={data.license.usage.staff} limit={data.license.limits.maxStaff} />
+                      <PlanUsageStat label={t("aorg.usageExams")} used={data.license.usage.activeExams} limit={data.license.limits.maxActiveExams} />
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -187,6 +206,15 @@ function StatCard({ icon: Icon, label, value, onClick }: { icon: typeof Building
         <p className="text-sm text-[var(--muted)]">{label}</p>
       </div>
     </button>
+  );
+}
+
+function PlanUsageStat({ label, used, limit }: { label: string; used: number; limit: number | null }) {
+  return (
+    <div>
+      <p className="text-[var(--muted)]">{label}</p>
+      <p className="font-semibold tabular-nums">{used} {limit !== null ? `/ ${limit}` : ""}</p>
+    </div>
   );
 }
 

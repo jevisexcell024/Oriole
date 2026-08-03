@@ -86,7 +86,48 @@ export const tenantCreateSchema = z.object({
   tenantName: z.string().trim().min(1).max(160),
   adminName: z.string().trim().min(1).max(120),
   adminEmail: z.string().trim().email().max(254),
+  /** Optional — redeems a LicenseKey against the new school in the same step. */
+  licenseKeyCode: z.string().trim().min(1).max(64).optional(),
 });
+
+// Licensing — Subscription Plans. A limit field of null means "unlimited";
+// a limit of 0 is rejected below since "allow zero students" isn't a usable
+// plan, it's a misconfiguration.
+const planLimitSchema = z.number().int().min(1).max(1_000_000).nullable();
+const nonNegativePrice = z.number().min(0).max(1_000_000).nullable().optional();
+export const planCreateSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  code: z.string().trim().toUpperCase().regex(/^[A-Z0-9_-]+$/, "Letters, numbers, - and _ only").max(30).optional(),
+  description: z.string().trim().max(500).optional(),
+  features: z.array(z.string().trim().max(120)).max(20).optional(),
+  priceMonthly: nonNegativePrice,
+  priceYearly: nonNegativePrice,
+  currency: z.string().trim().toUpperCase().length(3).optional(),
+  limits: z.object({
+    maxStudents: planLimitSchema,
+    maxStaff: planLimitSchema,
+    maxActiveExams: planLimitSchema,
+  }),
+});
+export const planUpdateSchema = planCreateSchema.partial();
+
+export const licenseKeyCreateSchema = z.object({
+  planId: z.string().trim().min(1),
+  note: z.string().trim().max(200).optional(),
+  maxRedemptions: z.number().int().min(1).max(1000).default(1),
+  expiresAt: z.string().trim().nullable().optional(),
+});
+
+export const licenseKeyRedeemSchema = z.object({
+  code: z.string().trim().min(1).max(64),
+});
+
+const parseableDate = z.string().trim().min(1).refine((v) => !Number.isNaN(new Date(v).getTime()), { message: "Not a valid date/time." });
+export const maintenanceWindowCreateSchema = z.object({
+  startAt: parseableDate,
+  endAt: parseableDate,
+  message: z.string().trim().max(500),
+}).refine((v) => new Date(v.endAt).getTime() > new Date(v.startAt).getTime(), { message: "End time must be after start time.", path: ["endAt"] });
 
 // Two-factor: the verify/enable steps take a 6-digit TOTP or a backup code;
 // disable accepts either the current password or a current code.
