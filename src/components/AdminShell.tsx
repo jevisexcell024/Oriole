@@ -5,6 +5,7 @@ import { useAuth } from "@/lib/auth";
 import { useT } from "@/lib/i18n";
 import { can, type Cap } from "@/lib/roles";
 import { BrandMark } from "@/components/BrandMark";
+import { ThemeToggle } from "@/lib/theme";
 import { clsx } from "clsx";
 
 type NavItem = { to: string; labelKey: string; icon: typeof BookOpen; cap: Cap; badge?: boolean };
@@ -154,14 +155,17 @@ export function AdminShell({ children }: { children: ReactNode; wide?: boolean }
   return (
     <div className="flex min-h-screen">
       {/* Mobile top bar */}
-      <header className="fixed inset-x-0 top-0 z-30 flex h-14 items-center gap-3 border-b border-[var(--border)] bg-[var(--card)] px-4 print:hidden lg:hidden">
-        <button onClick={() => setMobileOpen(true)} aria-label={t("anav.openMenu")} className="rounded-lg p-1.5 text-[var(--muted)] hover:bg-white/[0.05] hover:text-[var(--fg)]">
-          <Menu className="h-5 w-5" />
-        </button>
-        <div className="flex items-center gap-2">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-white p-1"><BrandMark className="h-full w-full object-contain" /></span>
-          <span className="text-[15px] font-bold tracking-tight">Oriole</span>
+      <header className="fixed inset-x-0 top-0 z-30 flex h-14 items-center justify-between gap-3 border-b border-[var(--border)] bg-[var(--card)] px-4 print:hidden lg:hidden">
+        <div className="flex items-center gap-3">
+          <button onClick={() => setMobileOpen(true)} aria-label={t("anav.openMenu")} className="rounded-lg p-1.5 text-[var(--muted)] hover:bg-white/[0.05] hover:text-[var(--fg)]">
+            <Menu className="h-5 w-5" />
+          </button>
+          <div className="flex items-center gap-2">
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-white p-1"><BrandMark className="h-full w-full object-contain" /></span>
+            <span className="text-[15px] font-bold tracking-tight">Oriole</span>
+          </div>
         </div>
+        <ThemeToggle />
       </header>
 
       {/* Backdrop (mobile) */}
@@ -231,6 +235,7 @@ export function AdminShell({ children }: { children: ReactNode; wide?: boolean }
               <p className="text-xs capitalize text-[#9FBCC2] group-hover:text-[#111110]">{user?.role}</p>
             </div>
           </Link>
+          <ThemeToggle className={clsx("shrink-0", collapsed && "lg:hidden")} />
           <button
             className="rounded-lg p-2 text-[#9FBCC2] hover:bg-[#c6ff34] hover:text-[#111110]"
             title={t("anav.signOut")}

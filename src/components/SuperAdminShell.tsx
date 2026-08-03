@@ -10,6 +10,7 @@ import {
 import { useSuperAdminAuth } from "@/lib/superAdminAuth";
 import { useT } from "@/lib/i18n";
 import { BrandMark } from "@/components/BrandMark";
+import { ThemeToggle } from "@/lib/theme";
 import { clsx } from "clsx";
 
 // Clones AdminShell.tsx's structural pattern (collapsible groups, mobile
@@ -210,14 +211,17 @@ export function SuperAdminShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex min-h-screen">
-      <header className="fixed inset-x-0 top-0 z-30 flex h-14 items-center gap-3 border-b border-[var(--border)] bg-[var(--card)] px-4 print:hidden lg:hidden">
-        <button onClick={() => setMobileOpen(true)} aria-label={t("sanav.openMenu")} className="rounded-lg p-1.5 text-[var(--muted)] hover:bg-white/[0.05] hover:text-[var(--fg)]">
-          <Menu className="h-5 w-5" />
-        </button>
-        <div className="flex items-center gap-2">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-white p-1"><BrandMark className="h-full w-full object-contain" /></span>
-          <span className="text-[15px] font-bold tracking-tight">Oriole</span>
+      <header className="fixed inset-x-0 top-0 z-30 flex h-14 items-center justify-between gap-3 border-b border-[var(--border)] bg-[var(--card)] px-4 print:hidden lg:hidden">
+        <div className="flex items-center gap-3">
+          <button onClick={() => setMobileOpen(true)} aria-label={t("sanav.openMenu")} className="rounded-lg p-1.5 text-[var(--muted)] hover:bg-white/[0.05] hover:text-[var(--fg)]">
+            <Menu className="h-5 w-5" />
+          </button>
+          <div className="flex items-center gap-2">
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-white p-1"><BrandMark className="h-full w-full object-contain" /></span>
+            <span className="text-[15px] font-bold tracking-tight">Oriole</span>
+          </div>
         </div>
+        <ThemeToggle />
       </header>
 
       {mobileOpen && <div className="fixed inset-0 z-40 bg-black/50 lg:hidden" onClick={() => setMobileOpen(false)} />}
@@ -280,6 +284,7 @@ export function SuperAdminShell({ children }: { children: ReactNode }) {
               <p className="truncate text-xs text-[#9FBCC2]">{superAdmin?.email}</p>
             </div>
           </div>
+          <ThemeToggle className={clsx("shrink-0", collapsed && "lg:hidden")} />
           <button
             className="rounded-lg p-2 text-[#9FBCC2] hover:bg-[#c6ff34] hover:text-[#111110]"
             title={t("sanav.signOut")}
