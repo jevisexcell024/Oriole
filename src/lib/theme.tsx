@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { Sun, Moon } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -18,7 +18,14 @@ function readInitial(): Theme {
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setTheme] = useState<Theme>(readInitial);
+  const [theme, setThemeState] = useState<Theme>(readInitial);
+  // A brief dark veil when switching TO light — softens what would otherwise
+  // be a jarring instant brightness jump. setTheme only ever runs from a real
+  // click (nothing calls it on mount), so no "first click" guard is needed —
+  // just skip the no-op case of clicking the theme you're already on.
+  const [flashKey, setFlashKey] = useState(0);
+  const themeRef = useRef(theme);
+  themeRef.current = theme;
 
   useEffect(() => {
     const root = document.documentElement;
@@ -26,8 +33,38 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     try { localStorage.setItem(KEY, theme); } catch { /* ignore */ }
   }, [theme]);
 
-  const toggle = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
-  return <Ctx.Provider value={{ theme, setTheme, toggle }}>{children}</Ctx.Provider>;
+  const setTheme = (t: Theme) => {
+    if (t === "light" && themeRef.current !== "light") setFlashKey((k) => k + 1);
+    setThemeState(t);
+  };
+
+  const toggle = () => setTheme(theme === "dark" ? "light" : "dark");
+  return (
+    <Ctx.Provider value={{ theme, setTheme, toggle }}>
+      {children}
+      {flashKey > 0 && <ThemeSwitchVeil key={flashKey} />}
+    </Ctx.Provider>
+  );
+}
+
+/** Fixed full-screen dark overlay that fades in then straight back out — a
+ *  quick veil covering the moment the canvas repaints light. Skips itself
+ *  under reduced-motion (an instant opacity flash reads as a hard flicker,
+ *  not a "veil," when there's no transition to soften it). */
+function ThemeSwitchVeil() {
+  const [visible, setVisible] = useState(true);
+  useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const id = requestAnimationFrame(() => setVisible(false));
+    return () => cancelAnimationFrame(id);
+  }, []);
+  return (
+    <div
+      aria-hidden="true"
+      className="pointer-events-none fixed inset-0 z-[999] bg-black transition-opacity duration-300 ease-out"
+      style={{ opacity: visible ? 0.5 : 0 }}
+    />
+  );
 }
 
 export const useTheme = () => useContext(Ctx);

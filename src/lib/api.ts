@@ -1,5 +1,7 @@
 // Thin fetch wrapper around the API. Cookies carry the session automatically.
 
+import { reportMaintenance } from "./maintenance";
+
 // Default per-request timeout. Without this, a request that hangs during a
 // server cold-start never settles, which can wedge polling loops (the dashboard
 // retry) that guard against overlapping requests. 25s is comfortably longer
@@ -18,8 +20,17 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   });
   const data = res.status === 204 ? null : await res.json().catch(() => null);
   if (!res.ok) {
+    // Every tenant/candidate route 503s this exact shape while Super Admin
+    // has maintenance mode on (server/index.ts) — surface it globally so the
+    // app can swap to a full-screen maintenance page instead of scattering
+    // broken requests through every route. Any later successful request
+    // (including MaintenancePage's own poll) clears it again below.
+    if (res.status === 503 && (data as { maintenance?: boolean } | null)?.maintenance) {
+      reportMaintenance((data as { error?: string }).error || "The platform is temporarily down for maintenance.");
+    }
     throw new Error((data as { error?: string })?.error || `Request failed (${res.status})`);
   }
+  reportMaintenance(null);
   return data as T;
 }
 

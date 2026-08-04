@@ -108,7 +108,11 @@ export function CodeAnswer({ q, value, onChange, disabled, runner }: {
             value={value}
             onChange={(v) => onChange(v ?? "")}
             loading={<div className="flex h-[300px] items-center justify-center text-sm text-[var(--muted)]"><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading editor…</div>}
-            options={{ readOnly: disabled, minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false, automaticLayout: true, tabSize: 2, lineNumbersMinChars: 3 }}
+            options={{
+              readOnly: disabled, minimap: { enabled: false }, fontSize: 14, lineHeight: 22,
+              padding: { top: 12, bottom: 12 }, scrollBeyondLastLine: false, automaticLayout: true,
+              tabSize: 2, lineNumbersMinChars: 3,
+            }}
           />
         </div>
         {isMarkup && showPreview && (

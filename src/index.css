@@ -46,6 +46,16 @@
        badges) — near-black by default, flipped to white for a dark chosen
        brand color. src/lib/brandColor.ts overrides this inline per tenant. */
     --brand-ink: #111110;
+
+    /* Frosted-glass surfaces (Login.tsx's floating card) — translucent so a
+       backdrop-blur picks up whatever's behind it. Kept separate from --card
+       (opaque) since the two aren't interchangeable. */
+    --glass-surface: rgba(20, 20, 19, 0.52);
+    --glass-border: rgba(255, 255, 255, 0.14);
+    --glass-highlight: rgba(255, 255, 255, 0.08);
+    --glass-input: rgba(255, 255, 255, 0.06);
+    --glass-input-border: rgba(255, 255, 255, 0.16);
+    --glass-scrim: linear-gradient(135deg, rgba(14,14,13,0.80), rgba(14,14,13,0.45) 45%, rgba(14,14,13,0.82));
   }
   /* Light theme — soft warm canvas, dark-olive text (toggled via `.light` on <html>). */
   :root.light {
@@ -58,6 +68,16 @@
     --fg: #1B1D12;
     --muted: #565B47;
     --ring: oklch(0.86 0.18 112 / 0.35);
+
+    --glass-surface: rgba(255, 255, 255, 0.46);
+    --glass-border: rgba(255, 255, 255, 0.65);
+    --glass-highlight: rgba(255, 255, 255, 0.55);
+    --glass-input: rgba(255, 255, 255, 0.55);
+    --glass-input-border: rgba(38, 42, 22, 0.14);
+    /* No wash here (unlike dark theme's) — a light cream tint over the hero
+       photos/video reads as a hazy white film across them. The headline's
+       own drop-shadow (LoginHeroCopy) already keeps it legible without one. */
+    --glass-scrim: transparent;
   }
   html, body, #root { height: 100%; }
   body {
@@ -186,6 +206,51 @@
   }
   .input::placeholder { color: color-mix(in oklch, var(--muted) 75%, transparent); }
   .input:focus { border-color: var(--color-brand-500); box-shadow: 0 0 0 3px var(--ring); }
+
+  /* Liquid glass (Login.tsx) — a frosted surface that stays alive: a slow
+     drifting sheen plus a highlight that follows the pointer, layered under
+     the actual content (pointer-events: none on both so clicks pass through
+     to the form). Both read the same on dark or light glass since they're a
+     plain white highlight, not theme-tinted. */
+  .liquid-glass { position: relative; isolation: isolate; overflow: hidden; }
+  .liquid-glass::before,
+  .liquid-glass::after { content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 0; }
+  .liquid-glass::before {
+    background: linear-gradient(115deg, transparent 42%, rgba(255, 255, 255, 0.14) 50%, transparent 58%);
+    inset: -30% -10%;
+    animation: liquid-sheen 10s ease-in-out infinite;
+  }
+  .liquid-glass::after {
+    opacity: 0;
+    background: radial-gradient(220px circle at var(--mx, 50%) var(--my, 50%), rgba(255, 255, 255, 0.16), transparent 70%);
+    transition: opacity .4s ease;
+  }
+  .liquid-glass:hover::after { opacity: 1; }
+  .liquid-glass > * { position: relative; z-index: 1; }
+  @keyframes liquid-sheen {
+    0%, 100% { transform: translate(-18%, -8%) rotate(6deg); }
+    50% { transform: translate(18%, 8%) rotate(6deg); }
+  }
+
+  /* Ambient brand-colored halo behind the glass card — heaviest bottom-right,
+     fainter top-left — the "lit from within" rim glow that reads as thick
+     glass catching light, not a flat translucent rectangle. */
+  .liquid-glass-halo {
+    position: absolute; inset: -6%; border-radius: 40px;
+    background:
+      radial-gradient(circle at 78% 82%, color-mix(in oklch, var(--color-brand-500) 55%, transparent) 0%, transparent 60%),
+      radial-gradient(circle at 18% 12%, color-mix(in oklch, var(--color-brand-500) 25%, transparent) 0%, transparent 55%);
+    filter: blur(50px);
+    opacity: 0.7;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* Springy, slightly-overshooting easing for liquid-glass interactive bits
+     (buttons, inputs) — reads as fluid rather than mechanical. */
+  .liquid-spring { transition: transform .35s cubic-bezier(.34, 1.56, .64, 1), box-shadow .25s ease, border-color .25s ease, background-color .25s ease; }
+  .liquid-spring:hover { transform: translateY(-1px) scale(1.008); }
+  .liquid-spring:active { transform: translateY(0) scale(0.99); }
 }
 
 /* Subtle, dark-friendly scrollbars across the app. */

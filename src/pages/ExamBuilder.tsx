@@ -1,7 +1,7 @@
 ﻿import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
-  ArrowLeft, Eye, Send, Plus, Trash2, Copy, ChevronUp, ChevronDown, ChevronRight, Check,
+  ArrowLeft, Eye, Send, Plus, Trash2, Copy, ChevronUp, ChevronDown, ChevronRight, ChevronLeft, Check,
   Circle, X, CircleDot, ListChecks, ToggleLeft, Type as TypeIcon, AlertTriangle,
   Users, Globe, Lock, UserCheck, ShieldAlert, Shuffle, CheckSquare, Square, Hash, FileText,
   Code as CodeIcon, Target, Layers, GripVertical, Bold, Italic, Underline, List, Image as ImageIcon,
@@ -2213,63 +2213,106 @@ function PickFromBankModal({ excludeExamId, onClose, onAdd }: { excludeExamId: s
   );
 }
 
+/** One question at a time with a jump-to grid — mirrors how a candidate
+ *  actually takes the exam (src/pages/Session.tsx), instead of dumping every
+ *  question onto one endlessly-scrolling page. That also fixes the original
+ *  problem: a 200-question exam no longer means scrolling the whole preview
+ *  to reach the last one. */
 function PreviewView({ exam, questions }: { exam: Exam; questions: Question[] }) {
   const t = useT();
+  const [idx, setIdx] = useState(0);
+  useEffect(() => { if (idx >= questions.length) setIdx(0); }, [questions.length, idx]);
+  const q = questions[idx];
+
   return (
-    <div className="card overflow-hidden">
-      <div className="h-2.5 w-full" style={{ background: G.accent }} />
-      <div className="p-6">
-        <h2 className="text-2xl font-bold">{exam.title}</h2>
-        {exam.description && <p className="mt-1 text-sm text-[var(--muted)]">{exam.description}</p>}
-        <p className="mt-2 text-xs text-[var(--muted)]">{exam.durationMinutes} min · {t("eb.passGte")} {exam.passingScore}%{exam.proctored ? t("eb.proctoredTag") : ""}</p>
-        <div className="mt-6 space-y-6">
-          {questions.length === 0 && <p className="text-sm text-[var(--muted)]">{t("eb.noQuestionsYet")}</p>}
-          {questions.map((q, i) => (
-            <div key={q.id}>
-              <p className="text-sm font-medium">{i + 1}. <MathText>{q.prompt || t("eb.noPrompt")}</MathText> <span className="text-xs text-[var(--muted)]">· {q.points} pts</span></p>
-              <div className="mt-2 space-y-2 pl-4">
-                {q.type === "short" || q.type === "numeric" ? (
-                  <div className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--muted)]">{q.type === "numeric" ? t("eb.numericAnswerPlaceholder") : t("eb.shortTextAnswerPlaceholder")}</div>
-                ) : q.type === "essay" || q.type === "code" || q.type === "file_upload" ? (
-                  <div className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--muted)]">{q.type === "code" ? t("eb.codeEditorPlaceholder") : q.type === "file_upload" ? t("eb.fileUploadPlaceholder") : t("eb.longFormAnswerPlaceholder")}</div>
-                ) : q.type === "matching" ? (
-                  <div className="space-y-1.5">
-                    {(q.matchPairs ?? []).map((p, j) => (
-                      <div key={j} className="flex items-center gap-2 text-sm"><span className="min-w-[120px] rounded-lg border border-[var(--border)] px-3 py-1.5"><MathText>{p.left}</MathText></span><ArrowLeftRight className="h-3.5 w-3.5 text-[var(--muted)]" /><span className="rounded-lg border border-dashed border-[var(--border)] px-3 py-1.5 text-[var(--muted)]">{p.right}</span></div>
-                    ))}
-                  </div>
-                ) : q.type === "ordering" ? (
-                  <ol className="list-decimal space-y-1 pl-5 text-sm">{(q.sequence ?? []).map((it, j) => <li key={j}>{it}</li>)}</ol>
-                ) : q.type === "cloze" ? (
-                  <p className="text-sm text-[var(--muted)]">{t("eb.blanksToFill", { n: (q.blanks ?? []).length })}</p>
-                ) : q.type === "hotspot" ? (
-                  q.imageUrl ? <img src={q.imageUrl} alt="" className="max-h-48 rounded-lg border border-[var(--border)]" /> : <div className="rounded-lg border border-dashed border-[var(--border)] px-3 py-2 text-sm text-[var(--muted)]">{t("eb.noImageYet")}</div>
-                ) : q.type === "parameterized" ? (
-                  <div className="space-y-1.5 text-sm text-[var(--muted)]">
-                    <input className="input max-w-xs" type="number" placeholder={t("eb.enterNumberPlaceholder")} disabled />
-                    <p className="text-[11px]"><span className="text-brand-400">⚙</span> {t("eb.randomizedPerCandidate")}</p>
-                  </div>
-                ) : q.type === "media_comprehension" ? (
-                  <div className="space-y-2">
-                    <MediaStimulus
-                      mediaKind={q.mediaKind ?? "passage"}
-                      mediaUrls={(q.mediaAssetIds ?? []).map((id) => `/api/admin/media/${id}`)}
-                      mediaExternalUrl={q.mediaExternalUrl}
-                      mediaConfig={q.mediaConfig}
-                      passageText={q.passageGroupId ? questions.find((o) => o.passageGroupId === q.passageGroupId && o.passageText)?.passageText : q.passageText}
-                    />
-                    <p className="text-[11px] text-[var(--muted)]">{t("eb.answerFormatLabel")}: {q.answerFormat ? t(TYPE_META[q.answerFormat].shortKey) : "—"}</p>
-                  </div>
-                ) : (
-                  (q.options ?? []).map((opt) => (
-                    <div key={opt} className="flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm"><Circle className="h-4 w-4 text-[var(--muted)]" /> <span className="capitalize"><MathText>{opt}</MathText></span></div>
-                  ))
-                )}
+    <div className="grid gap-4 lg:grid-cols-[1fr_260px]">
+      <div className="card overflow-hidden">
+        <div className="h-2.5 w-full" style={{ background: G.accent }} />
+        <div className="p-6">
+          <h2 className="text-2xl font-bold">{exam.title}</h2>
+          {exam.description && <p className="mt-1 text-sm text-[var(--muted)]">{exam.description}</p>}
+          <p className="mt-2 text-xs text-[var(--muted)]">{exam.durationMinutes} min · {t("eb.passGte")} {exam.passingScore}%{exam.proctored ? t("eb.proctoredTag") : ""}</p>
+
+          {questions.length === 0 || !q ? (
+            <p className="mt-6 text-sm text-[var(--muted)]">{t("eb.noQuestionsYet")}</p>
+          ) : (
+            <div className="mt-6">
+              <p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">Question {idx + 1} of {questions.length}</p>
+              <div key={q.id} className="mt-2">
+                <p className="text-sm font-medium"><MathText>{q.prompt || t("eb.noPrompt")}</MathText> <span className="text-xs text-[var(--muted)]">· {q.points} pts</span></p>
+                <div className="mt-2 space-y-2 pl-4">
+                  {q.type === "short" || q.type === "numeric" ? (
+                    <div className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--muted)]">{q.type === "numeric" ? t("eb.numericAnswerPlaceholder") : t("eb.shortTextAnswerPlaceholder")}</div>
+                  ) : q.type === "essay" || q.type === "code" || q.type === "file_upload" ? (
+                    <div className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--muted)]">{q.type === "code" ? t("eb.codeEditorPlaceholder") : q.type === "file_upload" ? t("eb.fileUploadPlaceholder") : t("eb.longFormAnswerPlaceholder")}</div>
+                  ) : q.type === "matching" ? (
+                    <div className="space-y-1.5">
+                      {(q.matchPairs ?? []).map((p, j) => (
+                        <div key={j} className="flex items-center gap-2 text-sm"><span className="min-w-[120px] rounded-lg border border-[var(--border)] px-3 py-1.5"><MathText>{p.left}</MathText></span><ArrowLeftRight className="h-3.5 w-3.5 text-[var(--muted)]" /><span className="rounded-lg border border-dashed border-[var(--border)] px-3 py-1.5 text-[var(--muted)]">{p.right}</span></div>
+                      ))}
+                    </div>
+                  ) : q.type === "ordering" ? (
+                    <ol className="list-decimal space-y-1 pl-5 text-sm">{(q.sequence ?? []).map((it, j) => <li key={j}>{it}</li>)}</ol>
+                  ) : q.type === "cloze" ? (
+                    <p className="text-sm text-[var(--muted)]">{t("eb.blanksToFill", { n: (q.blanks ?? []).length })}</p>
+                  ) : q.type === "hotspot" ? (
+                    q.imageUrl ? <img src={q.imageUrl} alt="" className="max-h-48 rounded-lg border border-[var(--border)]" /> : <div className="rounded-lg border border-dashed border-[var(--border)] px-3 py-2 text-sm text-[var(--muted)]">{t("eb.noImageYet")}</div>
+                  ) : q.type === "parameterized" ? (
+                    <div className="space-y-1.5 text-sm text-[var(--muted)]">
+                      <input className="input max-w-xs" type="number" placeholder={t("eb.enterNumberPlaceholder")} disabled />
+                      <p className="text-[11px]"><span className="text-brand-400">⚙</span> {t("eb.randomizedPerCandidate")}</p>
+                    </div>
+                  ) : q.type === "media_comprehension" ? (
+                    <div className="space-y-2">
+                      <MediaStimulus
+                        mediaKind={q.mediaKind ?? "passage"}
+                        mediaUrls={(q.mediaAssetIds ?? []).map((id) => `/api/admin/media/${id}`)}
+                        mediaExternalUrl={q.mediaExternalUrl}
+                        mediaConfig={q.mediaConfig}
+                        passageText={q.passageGroupId ? questions.find((o) => o.passageGroupId === q.passageGroupId && o.passageText)?.passageText : q.passageText}
+                      />
+                      <p className="text-[11px] text-[var(--muted)]">{t("eb.answerFormatLabel")}: {q.answerFormat ? t(TYPE_META[q.answerFormat].shortKey) : "—"}</p>
+                    </div>
+                  ) : (
+                    (q.options ?? []).map((opt) => (
+                      <div key={opt} className="flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm"><Circle className="h-4 w-4 text-[var(--muted)]" /> <span className="capitalize"><MathText>{opt}</MathText></span></div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-6 flex items-center justify-between border-t border-[var(--border)] pt-4">
+                <button onClick={() => setIdx((i) => Math.max(0, i - 1))} disabled={idx === 0} className="btn btn-outline h-9 disabled:opacity-40">
+                  <ChevronLeft className="h-4 w-4" /> Previous
+                </button>
+                <button onClick={() => setIdx((i) => Math.min(questions.length - 1, i + 1))} disabled={idx === questions.length - 1} className="btn btn-primary h-9 disabled:opacity-40">
+                  Next <ChevronRight className="h-4 w-4" />
+                </button>
               </div>
             </div>
-          ))}
+          )}
         </div>
       </div>
+
+      {questions.length > 0 && (
+        <aside className="card h-fit p-4">
+          <p className="text-xs font-semibold">Jump to question</p>
+          <div className="mt-3 grid grid-cols-6 gap-1.5">
+            {questions.map((qq, i) => (
+              <button
+                key={qq.id}
+                onClick={() => setIdx(i)}
+                className={clsx(
+                  "flex h-8 items-center justify-center rounded-lg text-xs font-semibold transition",
+                  i === idx ? "bg-brand-600 text-white" : "border border-[var(--border)] text-[var(--muted)] hover:bg-white/[0.03]",
+                )}
+              >
+                {i + 1}
+              </button>
+            ))}
+          </div>
+        </aside>
+      )}
     </div>
   );
 }

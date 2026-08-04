@@ -1,6 +1,6 @@
 import { StrictMode, Suspense, lazy, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import "./index.css";
 import "katex/dist/katex.min.css";
 import "leaflet/dist/leaflet.css";
@@ -8,6 +8,8 @@ import { AuthProvider, useAuth } from "@/lib/auth";
 import { ThemeProvider } from "@/lib/theme";
 import { I18nProvider } from "@/lib/i18n";
 import { IdleLogout } from "@/components/IdleLogout";
+import { useMaintenanceMessage } from "@/lib/maintenance";
+import { MaintenancePage } from "@/pages/MaintenancePage";
 import { Login } from "@/pages/Login";
 import { Dashboard } from "@/pages/Dashboard";
 import { Exams } from "@/pages/Exams";
@@ -102,6 +104,14 @@ function Protected({ children, cap, staff }: { children: ReactNode; cap?: Cap; s
 }
 
 function App() {
+  const location = useLocation();
+  const maintenanceMessage = useMaintenanceMessage();
+  // Super Admin and the public status page stay reachable during maintenance
+  // — both server-side (isMaintenanceExempt, server/security.ts) and here.
+  const exempt = location.pathname.startsWith("/super-admin") || location.pathname.startsWith("/status");
+  if (maintenanceMessage && !exempt) {
+    return <MaintenancePage message={maintenanceMessage} />;
+  }
   return (
     <AuthProvider>
       <IdleLogout />

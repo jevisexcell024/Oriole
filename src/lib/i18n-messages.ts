@@ -2471,4 +2471,11 @@ export const messages: Record<string, Record<Lang, string>> = {
   "common.warning": { en: "Warning", fr: "Avertissement", es: "Advertencia", pt: "Aviso", ar: "تحذير" },
   "common.loading": { en: "Loading…", fr: "Chargement…", es: "Cargando…", pt: "Carregando…", ar: "جارٍ التحميل…" },
   "common.language": { en: "Language", fr: "Langue", es: "Idioma", pt: "Idioma", ar: "اللغة" },
+
+  // ── Maintenance takeover (MaintenancePage.tsx) — shown app-wide while a
+  // Super Admin has maintenance mode on; the message line itself is
+  // operator-entered and shown as-is, not translated. ──
+  "maint.title": { en: "Under Maintenance", fr: "En maintenance", es: "En mantenimiento", pt: "Em manutenção", ar: "قيد الصيانة" },
+  "maint.subtitle": { en: "We're making some improvements. Thanks for your patience.", fr: "Nous apportons des améliorations. Merci de votre patience.", es: "Estamos realizando mejoras. Gracias por su paciencia.", pt: "Estamos fazendo melhorias. Obrigado pela paciência.", ar: "نعمل على إجراء بعض التحسينات. شكرًا لصبرك." },
+  "maint.checking": { en: "Checking again shortly…", fr: "Nouvelle vérification sous peu…", es: "Volveremos a comprobarlo pronto…", pt: "Verificando novamente em breve…", ar: "سيتم التحقق مجددًا قريبًا…" },
 };
