@@ -79,6 +79,28 @@
        own drop-shadow (LoginHeroCopy) already keeps it legible without one. */
     --glass-scrim: transparent;
   }
+  /* Same values as :root.light, but as a plain class so a single page (e.g.
+     Login.tsx) can force the light palette regardless of the visitor's saved
+     dark/light preference — :root.light only fires from the class living on
+     <html>, not on an arbitrary descendant. */
+  .force-light {
+    --bg: #E9EADF;
+    --bg-subtle: #FFFFFF;
+    --card: #FFFFFF;
+    --card-2: #EFEFE4;
+    --border: rgba(38, 42, 22, 0.18);
+    --border-strong: rgba(38, 42, 22, 0.32);
+    --fg: #1B1D12;
+    --muted: #565B47;
+    --ring: oklch(0.86 0.18 112 / 0.35);
+
+    --glass-surface: rgba(255, 255, 255, 0.46);
+    --glass-border: rgba(255, 255, 255, 0.65);
+    --glass-highlight: rgba(255, 255, 255, 0.55);
+    --glass-input: rgba(255, 255, 255, 0.55);
+    --glass-input-border: rgba(38, 42, 22, 0.14);
+    --glass-scrim: transparent;
+  }
   html, body, #root { height: 100%; }
   body {
     margin: 0;

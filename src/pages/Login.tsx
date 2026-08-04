@@ -6,7 +6,6 @@ import { landingFor } from "@/lib/roles";
 import { BrandMark } from "@/components/BrandMark";
 import { useT } from "@/lib/i18n";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
-import { ThemeToggle } from "@/lib/theme";
 
 const PURPLE = "var(--color-brand-500)";
 
@@ -83,7 +82,7 @@ export function Login() {
   }, []);
 
   return (
-    <div className="relative flex h-screen items-center justify-center overflow-hidden px-4 py-6 lg:p-10" style={{ background: "var(--bg)" }}>
+    <div className="force-light relative flex h-screen items-center justify-center overflow-hidden px-4 py-6 lg:p-10" style={{ background: "var(--bg)" }}>
       {/* Full-bleed hero backdrop — the glass card blurs whatever's behind it,
          so the carousel spans the whole page instead of a boxed-off half. */}
       <LoginHeroBackdrop {...hero} />
@@ -104,7 +103,7 @@ export function Login() {
               boxShadow: "inset 0 1px 0 0 var(--glass-highlight), inset 0 0 40px 0 color-mix(in oklch, var(--color-brand-500) 8%, transparent), 0 25px 60px -12px rgba(0,0,0,0.5)",
             }}
           >
-          {/* Brand lockup + language/theme */}
+          {/* Brand lockup + language */}
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               <span className="flex h-11 w-11 items-center justify-center rounded-xl p-1.5" style={{ background: "var(--glass-input)", border: "1px solid var(--glass-input-border)" }}>
@@ -115,10 +114,7 @@ export function Login() {
                 <span className="block text-[10px] font-semibold uppercase tracking-[0.22em] text-brand-400">{t("auth.examPlatform")}</span>
               </span>
             </div>
-            <div className="flex items-center gap-1.5">
-              <ThemeToggle className="!border-[var(--glass-input-border)] !bg-[var(--glass-input)] backdrop-blur-sm" />
-              <LanguageSwitcher themed />
-            </div>
+            <LanguageSwitcher themed />
           </div>
 
           {/* Sign-in form (vertically centered) */}
