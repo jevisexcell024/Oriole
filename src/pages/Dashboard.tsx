@@ -393,9 +393,15 @@ const CHECKLIST_META: Record<"completed" | "in_progress" | "upcoming", { label: 
   upcoming: { label: "Upcoming", color: BLUE, icon: Circle },
 };
 
-// ── Shared panel shell ──────────────────────────────────────────────────
+// ── Shared panel shell — solid card (never glass; see Shell.tsx's nav for
+// where glass belongs), soft shadow instead of a heavy one, generous radius. ──
 function Panel({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
-  return <div className="rounded-2xl p-5" style={{ background: CARD, border: `1px solid ${BORDER}`, ...style }}>{children}</div>;
+  return (
+    <div className="rounded-[22px] p-5 shadow-[0_8px_30px_rgba(15,23,42,0.05)] transition-shadow duration-200 hover:shadow-[0_12px_36px_rgba(15,23,42,0.08)]"
+      style={{ background: CARD, border: `1px solid ${BORDER}`, ...style }}>
+      {children}
+    </div>
+  );
 }
 function PanelTitle({ title, sub }: { title: string; sub?: string }) {
   return (
@@ -407,7 +413,8 @@ function PanelTitle({ title, sub }: { title: string; sub?: string }) {
 }
 function StatPill({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="rounded-xl px-4 py-2.5" style={{ background: CARD, border: `1px solid ${BORDER}` }}>
+    <div className="rounded-2xl px-4 py-2.5 shadow-[0_8px_30px_rgba(15,23,42,0.05)] transition-[box-shadow,transform] duration-200 hover:-translate-y-0.5 hover:shadow-[0_12px_36px_rgba(15,23,42,0.08)]"
+      style={{ background: CARD, border: `1px solid ${BORDER}` }}>
       <p style={{ fontSize: 10, color: DIM, textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</p>
       <p style={{ fontFamily: BARLOW, fontWeight: 700, fontSize: 22, color: FG, lineHeight: 1.2 }}>{value}</p>
     </div>
@@ -421,7 +428,7 @@ function CourseCard({ it, color }: { it: ExamListItem; color: string }) {
   const statusMeta = done ? { label: "Completed", color: LIME } : active ? { label: "In progress", color: AMBER } : { label: "Not started", color: DIM };
   return (
     <Link to={done && it.attempt ? `/attempts/${it.attempt.id}/result` : `/exams/${it.registration.id}/checkin`}
-      className="group flex h-[188px] flex-col justify-between rounded-xl p-4 transition hover:-translate-y-0.5"
+      className="group flex h-[188px] flex-col justify-between rounded-2xl p-4 shadow-[0_8px_30px_rgba(15,23,42,0.05)] transition-[box-shadow,transform] duration-200 hover:-translate-y-0.5 hover:shadow-[0_12px_36px_rgba(15,23,42,0.08)]"
       style={{ background: SURFACE, border: `1px solid ${BORDER}` }}>
       <div>
         <span className="flex h-9 w-9 items-center justify-center rounded-lg" style={{ background: `${color}18` }}>

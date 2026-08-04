@@ -7,7 +7,6 @@ import {
 import { useAuth } from "@/lib/auth";
 import { NotificationsBell } from "@/components/Announcements";
 import { BrandMark } from "@/components/BrandMark";
-import { ThemeToggle } from "@/lib/theme";
 import { useT } from "@/lib/i18n";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { useExamLock } from "@/lib/examLock";
@@ -92,14 +91,18 @@ export function Shell({ children }: { children: ReactNode }) {
   const today = new Date();
 
   return (
-    <div className="flex min-h-screen">
+    <div className="force-light flex min-h-screen">
       {/* Backdrop (mobile) */}
       {mobileOpen && <div className="fixed inset-0 z-40 bg-black/50 lg:hidden" onClick={() => setMobileOpen(false)} />}
 
-      {/* Sidebar — static on desktop, slide-in drawer on mobile */}
+      {/* Sidebar — edge-to-edge slide-in drawer on mobile; floats with a soft
+         margin, rounded corners and translucent glass on desktop (still
+         `sticky`, i.e. in normal flow, so the collapse animation and content
+         reflow keep working exactly as before — only the box's own spacing
+         and material changed). */}
       <aside className={clsx(
-        "fixed inset-y-0 left-0 z-50 flex h-screen w-60 shrink-0 flex-col border-r border-[var(--border)] bg-[#111110] text-[#DCE8EA] transition-[transform,width] duration-200",
-        "lg:sticky lg:top-0 lg:z-auto lg:translate-x-0",
+        "fixed inset-y-0 left-0 z-50 flex h-screen w-60 shrink-0 flex-col border border-[var(--border)] bg-[#111110] text-[#DCE8EA] shadow-[0_20px_60px_-15px_rgba(0,0,0,0.5)] transition-[transform,width] duration-200",
+        "lg:sticky lg:top-6 lg:z-auto lg:my-6 lg:ml-6 lg:h-[calc(100vh-3rem)] lg:translate-x-0 lg:rounded-[28px] lg:bg-[#111110]/85 lg:backdrop-blur-2xl",
         collapsed ? "lg:w-[74px]" : "lg:w-60",
         mobileOpen ? "translate-x-0" : "-translate-x-full",
       )}>
@@ -207,7 +210,7 @@ export function Shell({ children }: { children: ReactNode }) {
       </aside>
 
       <div className="min-w-0 flex-1 bg-[var(--bg)]">
-        <header className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] bg-[#111110] px-4 py-3 sm:px-6">
+        <header className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] bg-[#111110] px-4 py-3 sm:px-6 lg:top-6 lg:mx-6 lg:rounded-2xl lg:border lg:bg-[#111110]/85 lg:px-6 lg:py-3.5 lg:shadow-[0_12px_40px_-12px_rgba(0,0,0,0.45)] lg:backdrop-blur-2xl">
           <div className="flex min-w-0 items-center gap-3">
             <button onClick={() => setMobileOpen(true)} aria-label="Open menu" className="rounded-lg p-1.5 text-[#C7D6DA] hover:bg-white/10 hover:text-white lg:hidden">
               <Menu className="h-5 w-5" />
@@ -221,7 +224,6 @@ export function Shell({ children }: { children: ReactNode }) {
           </div>
           <div className="flex items-center gap-2">
             <LanguageSwitcher className="hidden sm:inline-flex" />
-            <ThemeToggle />
             <div ref={appsRef} className="relative">
               <button onClick={() => setApps((a) => !a)} title={t("nav.quickAccess")} aria-label={t("nav.quickAccess")}
                 className={clsx("flex h-9 w-9 items-center justify-center rounded-full border transition", apps ? "border-white/30 bg-white/20 text-white" : "border-white/20 bg-white/10 text-[#C7D6DA] hover:text-white")}>
