@@ -24,7 +24,7 @@ import { clsx } from "clsx";
 type SaveStatus = "idle" | "saving" | "saved";
 type Tab = "structure" | "settings" | "proctoring";
 
-const G = { accent: "#c6ff34", deep: "#111110" };
+const G = { accent: "var(--color-brand-500)", deep: "#111110" };
 
 // label/desc hold i18n KEYS, not literal strings — these constants live
 // outside any component (no useT() available here), so callers translate
@@ -360,7 +360,7 @@ export function ExamBuilder() {
               {([["structure", t("eb.tabStructure")], ["settings", t("eb.tabSettings")], ["proctoring", t("eb.tabProctoring")]] as const).map(([id, label]) => (
                 <button key={id} onClick={() => setTab(id)}
                   className={clsx("relative -mb-px border-b-2 py-3 text-[13px] font-semibold transition",
-                    tab === id ? "border-[#c6ff34] text-[var(--fg)]" : "border-transparent text-[var(--muted)] hover:text-[var(--fg)]")}>
+                    tab === id ? "border-brand-500 text-[var(--fg)]" : "border-transparent text-[var(--muted)] hover:text-[var(--fg)]")}>
                   {label}
                 </button>
               ))}
@@ -381,7 +381,7 @@ export function ExamBuilder() {
                 onMove={moveInGroup}
                 onDelete={remove}
               />
-              <button onClick={() => setBankOpen(true)} className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-[#c6ff34]/40 py-2 text-xs font-semibold text-[#c6ff34] hover:bg-[rgba(198,255,52,0.08)]">
+              <button onClick={() => setBankOpen(true)} className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-brand-500/40 py-2 text-xs font-semibold text-brand-400 hover:bg-[color-mix(in oklch, var(--color-brand-500) 8%, transparent)]">
                 <Library className="h-3.5 w-3.5" /> {t("eb.pickFromBank")}
               </button>
               <div className="mt-3 flex items-center gap-2 border-t border-[var(--border)] pt-3">
@@ -446,7 +446,7 @@ export function ExamBuilder() {
             {tab === "structure" && active && (
               <div className="pointer-events-none sticky bottom-5 z-10 flex justify-end px-6">
                 <div className="pointer-events-auto flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--card)] p-1 shadow-lg">
-                  <button onClick={flushSaves} className="inline-flex items-center gap-1.5 rounded-full bg-[rgba(198,255,52,0.14)] px-4 py-1.5 text-sm font-semibold text-[#c6ff34]">
+                  <button onClick={flushSaves} className="inline-flex items-center gap-1.5 rounded-full bg-[color-mix(in oklch, var(--color-brand-500) 14%, transparent)] px-4 py-1.5 text-sm font-semibold text-brand-400">
                     {status === "saving" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} {status === "saving" ? t("eb.saving") : t("eb.saveQuestion")}
                   </button>
                 </div>
@@ -491,7 +491,7 @@ function StructureTree({
         return (
           <div key={g.id ?? "__none"} className="rounded-xl border border-[var(--border)] bg-[var(--card-2)]/40">
             <div className="flex items-center gap-1.5 px-2.5 pt-2.5">
-              <Layers className="h-3.5 w-3.5 shrink-0 text-[#c6ff34]" />
+              <Layers className="h-3.5 w-3.5 shrink-0 text-brand-400" />
               {g.id ? (
                 <input
                   className="min-w-0 flex-1 border-0 bg-transparent text-[13px] font-bold outline-none focus:ring-0"
@@ -536,20 +536,20 @@ function StructureTree({
                   <div key={q.id}
                     onClick={() => onSelect(q.id)}
                     className={clsx("group/q flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm transition",
-                      isActive ? "bg-[var(--card)] shadow-sm ring-1 ring-[#c6ff34]/40" : "hover:bg-[var(--card)]")}>
+                      isActive ? "bg-[var(--card)] shadow-sm ring-1 ring-brand-500/40" : "hover:bg-[var(--card)]")}>
                     <span className="hidden text-[var(--muted)] group-hover/q:block"><GripVertical className="h-3.5 w-3.5" /></span>
-                    <span className={clsx("flex h-5 w-5 shrink-0 items-center justify-center rounded text-[11px] font-bold", isActive ? "bg-[#c6ff34] text-[#111110]" : "bg-[var(--card-2)] text-[var(--muted)] group-hover/q:hidden")}>{i + 1}</span>
+                    <span className={clsx("flex h-5 w-5 shrink-0 items-center justify-center rounded text-[11px] font-bold", isActive ? "bg-brand-500 text-[var(--brand-ink)]" : "bg-[var(--card-2)] text-[var(--muted)] group-hover/q:hidden")}>{i + 1}</span>
                     <span className="min-w-0 flex-1 truncate">{q.prompt || <span className="text-[var(--muted)]">{t("eb.untitledQuestion")}</span>}</span>
                     <span className="hidden shrink-0 items-center gap-0.5 group-hover/q:flex">
                       <button onClick={(e) => { e.stopPropagation(); onMove(g.items, q.id, -1); }} disabled={i === 0} className="rounded p-0.5 text-[var(--muted)] hover:text-[var(--fg)] disabled:opacity-30"><ChevronUp className="h-3.5 w-3.5" /></button>
                       <button onClick={(e) => { e.stopPropagation(); onMove(g.items, q.id, 1); }} disabled={i === g.items.length - 1} className="rounded p-0.5 text-[var(--muted)] hover:text-[var(--fg)] disabled:opacity-30"><ChevronDown className="h-3.5 w-3.5" /></button>
                       <button onClick={(e) => { e.stopPropagation(); onDelete(q.id); }} className="rounded p-0.5 text-[var(--muted)] hover:text-rose-500"><Trash2 className="h-3.5 w-3.5" /></button>
                     </span>
-                    <span className={clsx("shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold group-hover/q:hidden", isActive ? "bg-[rgba(198,255,52,0.16)] text-[#c6ff34]" : "bg-[var(--card-2)] text-[var(--muted)]")}>{t(M.shortKey)}</span>
+                    <span className={clsx("shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold group-hover/q:hidden", isActive ? "bg-[color-mix(in oklch, var(--color-brand-500) 16%, transparent)] text-brand-400" : "bg-[var(--card-2)] text-[var(--muted)]")}>{t(M.shortKey)}</span>
                   </div>
                 );
               })}
-              <button onClick={() => onAddQuestion(g.id)} className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] py-1.5 text-xs font-semibold text-[#c6ff34] hover:bg-[var(--card)]">
+              <button onClick={() => onAddQuestion(g.id)} className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] py-1.5 text-xs font-semibold text-brand-400 hover:bg-[var(--card)]">
                 <Plus className="h-3.5 w-3.5" /> {t("eb.addQuestion")}
               </button>
             </div>
@@ -671,7 +671,7 @@ function QuestionEditor({
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <button type="button" onClick={suggestDifficulty} disabled={aiBusy || !q.prompt.trim()}
               title={!q.prompt.trim() ? t("eb.addPromptFirst") : t("eb.estimateDifficultyAI")}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs font-semibold text-[var(--muted)] transition hover:border-[#c6ff34]/40 hover:text-[#c6ff34] disabled:opacity-50">
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs font-semibold text-[var(--muted)] transition hover:border-brand-500/40 hover:text-brand-400 disabled:opacity-50">
               {aiBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} {t("eb.suggestDifficultyAI")}
             </button>
             {aiResult && (
@@ -680,7 +680,7 @@ function QuestionEditor({
                   aiResult.difficulty === "easy" ? "bg-emerald-500/15 text-emerald-500" : aiResult.difficulty === "medium" ? "bg-amber-500/15 text-amber-500" : "bg-rose-500/15 text-rose-500")}>{aiResult.difficulty}</span>
                 <span className="text-[var(--muted)]">{t("eb.confidentPct", { n: Math.round(aiResult.confidence * 100) })}</span>
                 {aiResult.difficulty !== (q.difficulty ?? "medium")
-                  ? <button type="button" onClick={() => patch({ difficulty: aiResult.difficulty })} className="font-semibold text-[#c6ff34] hover:underline">{t("eb.apply")}</button>
+                  ? <button type="button" onClick={() => patch({ difficulty: aiResult.difficulty })} className="font-semibold text-brand-400 hover:underline">{t("eb.apply")}</button>
                   : <span className="inline-flex items-center gap-0.5 text-emerald-500"><Check className="h-3 w-3" /> {t("eb.matches")}</span>}
               </span>
             )}
@@ -743,7 +743,7 @@ function QuestionEditor({
         {/* Advanced */}
         <div className="mt-5 rounded-lg border border-[var(--border)]">
           <button onClick={() => setAdvanced((a) => !a)} className="flex w-full items-center justify-between px-3 py-2.5 text-sm font-semibold">
-            <span className="inline-flex items-center gap-2"><SettingsIcon className="h-4 w-4 text-[#c6ff34]" /> {t("eb.advancedLogicSettings")}</span>
+            <span className="inline-flex items-center gap-2"><SettingsIcon className="h-4 w-4 text-brand-400" /> {t("eb.advancedLogicSettings")}</span>
             <ChevronDown className={clsx("h-4 w-4 text-[var(--muted)] transition", advanced && "rotate-180")} />
           </button>
           {advanced && (
@@ -775,9 +775,9 @@ function QuestionEditor({
                         </select>
                       )}
                       {rubric.length > 0 && (
-                        <button type="button" onClick={saveRubricTemplate} title={t("eb.saveRubricTooltip")} className="inline-flex items-center gap-1 text-xs text-[var(--muted)] hover:text-[#c6ff34]"><BookmarkPlus className="h-3.5 w-3.5" /> {t("eb.save")}</button>
+                        <button type="button" onClick={saveRubricTemplate} title={t("eb.saveRubricTooltip")} className="inline-flex items-center gap-1 text-xs text-[var(--muted)] hover:text-brand-400"><BookmarkPlus className="h-3.5 w-3.5" /> {t("eb.save")}</button>
                       )}
-                      <button type="button" onClick={addCriterion} className="inline-flex items-center gap-1 text-xs text-[#c6ff34] hover:underline"><Plus className="h-3.5 w-3.5" /> {t("eb.criterion")}</button>
+                      <button type="button" onClick={addCriterion} className="inline-flex items-center gap-1 text-xs text-brand-400 hover:underline"><Plus className="h-3.5 w-3.5" /> {t("eb.criterion")}</button>
                     </div>
                   </div>
                   {rubric.length === 0 ? (
@@ -826,9 +826,9 @@ function SettingsPanel({
       {/* Details */}
       <div className="card rounded-2xl p-6">
         <h2 className="text-sm font-bold">{t("eb.examDetails")}</h2>
-        <input className="mt-3 w-full border-0 border-b border-[var(--border)] bg-transparent pb-1.5 text-2xl font-bold outline-none focus:border-[#c6ff34]"
+        <input className="mt-3 w-full border-0 border-b border-[var(--border)] bg-transparent pb-1.5 text-2xl font-bold outline-none focus:border-brand-500"
           value={exam.title} placeholder={t("eb.untitledExam")} onChange={(e) => patchExam({ title: e.target.value })} />
-        <textarea className="mt-3 w-full resize-y rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 text-sm outline-none focus:border-[#c6ff34]"
+        <textarea className="mt-3 w-full resize-y rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 text-sm outline-none focus:border-brand-500"
           rows={2} value={exam.description} placeholder={t("eb.descriptionPlaceholder")} onChange={(e) => patchExam({ description: e.target.value })} />
         <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
           <Field label={t("eb.examCode")}><input className="input h-9" value={exam.code} placeholder="CS101-F2026" onChange={(e) => patchExam({ code: e.target.value })} /></Field>
@@ -837,9 +837,9 @@ function SettingsPanel({
           <Field label={t("eb.passMarkPct")}><input className="input h-9" type="number" min={0} max={100} value={exam.passingScore} onChange={(e) => patchExam({ passingScore: Number(e.target.value) })} /></Field>
           <Field label={t("eb.proctoring")}>
             <button onClick={() => { const on = !exam.proctored; patchExam(on ? { proctored: true } : { proctored: false, lockdown: { ...exam.lockdown, violationLimit: 0 } }); }}
-              className={clsx("flex h-9 items-center justify-between rounded-lg border px-3 text-sm font-medium", exam.proctored ? "border-[#c6ff34]/40 bg-[rgba(198,255,52,0.1)] text-[#c6ff34]" : "border-[var(--border)] text-[var(--muted)]")}>
+              className={clsx("flex h-9 items-center justify-between rounded-lg border px-3 text-sm font-medium", exam.proctored ? "border-brand-500/40 bg-[color-mix(in oklch, var(--color-brand-500) 10%, transparent)] text-brand-400" : "border-[var(--border)] text-[var(--muted)]")}>
               {exam.proctored ? t("eb.on") : t("eb.off")}
-              <span className={clsx("ml-2 inline-flex h-4 w-7 items-center rounded-full p-0.5 transition", exam.proctored ? "bg-[#c6ff34]" : "bg-[var(--border)]")}>
+              <span className={clsx("ml-2 inline-flex h-4 w-7 items-center rounded-full p-0.5 transition", exam.proctored ? "bg-brand-500" : "bg-[var(--border)]")}>
                 <span className={clsx("h-3 w-3 rounded-full bg-white transition", exam.proctored && "translate-x-3")} />
               </span>
             </button>
@@ -850,7 +850,7 @@ function SettingsPanel({
 
       {/* Scheduling — same availableFrom/availableUntil fields the Scheduler page reads/writes, so either place stays in sync */}
       <div className="card rounded-2xl p-6">
-        <div className="flex items-center gap-2 text-sm font-bold"><CalendarClock className="h-4 w-4 text-[#c6ff34]" /> {t("eb.schedulingWindow")}</div>
+        <div className="flex items-center gap-2 text-sm font-bold"><CalendarClock className="h-4 w-4 text-brand-400" /> {t("eb.schedulingWindow")}</div>
         <p className="mt-0.5 text-xs text-[var(--muted)]">{t("eb.schedulingWindowHint")}</p>
         <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label={t("eb.startTime")}>
@@ -866,17 +866,17 @@ function SettingsPanel({
 
       {/* Audience */}
       <div className="card rounded-2xl p-6">
-        <div className="flex items-center gap-2 text-sm font-bold"><Users className="h-4 w-4 text-[#c6ff34]" /> {t("eb.audience")}</div>
+        <div className="flex items-center gap-2 text-sm font-bold"><Users className="h-4 w-4 text-brand-400" /> {t("eb.audience")}</div>
         <p className="mt-0.5 text-xs text-[var(--muted)]">{t("eb.audienceHint")}</p>
         <button onClick={() => patchExam({ enrollment: open ? "assigned" : "open" })} className="mt-3 flex w-full items-center justify-between gap-4 rounded-xl border border-[var(--border)] p-4 text-left transition hover:bg-[var(--card-2)]">
           <div className="flex items-start gap-3">
-            {open ? <Globe className="mt-0.5 h-4 w-4 text-[#c6ff34]" /> : <Lock className="mt-0.5 h-4 w-4 text-amber-500" />}
+            {open ? <Globe className="mt-0.5 h-4 w-4 text-brand-400" /> : <Lock className="mt-0.5 h-4 w-4 text-amber-500" />}
             <div>
               <p className="text-sm font-medium">{t("eb.openToAll")}</p>
               <p className="text-xs text-[var(--muted)]">{open ? t("eb.openHintOn") : t("eb.openHintOff")}</p>
             </div>
           </div>
-          <span className={clsx("inline-flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition", open ? "bg-[#c6ff34]" : "bg-[var(--border)]")}>
+          <span className={clsx("inline-flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition", open ? "bg-brand-500" : "bg-[var(--border)]")}>
             <span className={clsx("h-5 w-5 rounded-full bg-white transition", open && "translate-x-5")} />
           </span>
         </button>
@@ -922,16 +922,16 @@ function SettingsPanel({
 
       {/* Question delivery */}
       <div className="card rounded-2xl p-6">
-        <div className="flex items-center gap-2 text-sm font-bold"><Shuffle className="h-4 w-4 text-[#c6ff34]" /> {t("eb.questionDelivery")}</div>
+        <div className="flex items-center gap-2 text-sm font-bold"><Shuffle className="h-4 w-4 text-brand-400" /> {t("eb.questionDelivery")}</div>
         <p className="mt-0.5 text-xs text-[var(--muted)]">{t("eb.questionDeliveryHint")}</p>
         <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
           {([["shuffleQuestions", t("eb.shuffleQuestionOrder"), t("eb.shuffleQuestionOrderDesc")], ["shuffleOptions", t("eb.shuffleAnswerOptions"), t("eb.shuffleAnswerOptionsDesc")]] as const).map(([key, label, desc]) => {
             const on = (exam as unknown as Record<string, unknown>)[key] !== false;
             return (
               <button key={key} onClick={() => patchExam({ [key]: !on } as Partial<Exam>)}
-                className={clsx("flex items-center justify-between gap-3 rounded-xl border p-3 text-left transition", on ? "border-[#c6ff34]/40 bg-[rgba(198,255,52,0.08)]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
+                className={clsx("flex items-center justify-between gap-3 rounded-xl border p-3 text-left transition", on ? "border-brand-500/40 bg-[color-mix(in oklch, var(--color-brand-500) 8%, transparent)]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
                 <div><p className="text-sm font-medium">{label}</p><p className="text-xs text-[var(--muted)]">{desc}</p></div>
-                <span className={clsx("inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition", on ? "bg-[#c6ff34]" : "bg-[var(--border)]")}><span className={clsx("h-4 w-4 rounded-full bg-white transition", on && "translate-x-4")} /></span>
+                <span className={clsx("inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition", on ? "bg-brand-500" : "bg-[var(--border)]")}><span className={clsx("h-4 w-4 rounded-full bg-white transition", on && "translate-x-4")} /></span>
               </button>
             );
           })}
@@ -948,12 +948,12 @@ function SettingsPanel({
 
       {/* Marking scheme */}
       <div className="card rounded-2xl p-6">
-        <div className="flex items-center gap-2 text-sm font-bold"><Target className="h-4 w-4 text-[#c6ff34]" /> {t("eb.markingScheme")}</div>
+        <div className="flex items-center gap-2 text-sm font-bold"><Target className="h-4 w-4 text-brand-400" /> {t("eb.markingScheme")}</div>
         <div className="mt-3 space-y-2">
           <button onClick={() => patchExam({ partialCredit: !exam.partialCredit })}
-            className={clsx("flex w-full items-center justify-between gap-3 rounded-xl border p-3 text-left transition", exam.partialCredit ? "border-[#c6ff34]/40 bg-[rgba(198,255,52,0.08)]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
+            className={clsx("flex w-full items-center justify-between gap-3 rounded-xl border p-3 text-left transition", exam.partialCredit ? "border-brand-500/40 bg-[color-mix(in oklch, var(--color-brand-500) 8%, transparent)]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
             <div><p className="text-sm font-medium">{t("eb.partialCreditMulti")}</p><p className="text-xs text-[var(--muted)]">{t("eb.partialCreditDesc")}</p></div>
-            <span className={clsx("inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition", exam.partialCredit ? "bg-[#c6ff34]" : "bg-[var(--border)]")}><span className={clsx("h-4 w-4 rounded-full bg-white transition", exam.partialCredit && "translate-x-4")} /></span>
+            <span className={clsx("inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition", exam.partialCredit ? "bg-brand-500" : "bg-[var(--border)]")}><span className={clsx("h-4 w-4 rounded-full bg-white transition", exam.partialCredit && "translate-x-4")} /></span>
           </button>
           <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)] p-3 text-sm">
             <AlertTriangle className="h-4 w-4 text-amber-500" /> {t("eb.negativeMarking")}
@@ -969,8 +969,8 @@ function SettingsPanel({
       {/* Study materials / resources */}
       <div className="card rounded-2xl p-6">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2 text-sm font-bold"><FileText className="h-4 w-4 text-[#c6ff34]" /> {t("eb.studyMaterials")}</div>
-          <button onClick={() => patchExam({ resources: [...(exam.resources ?? []), { label: "", url: "" }] })} className="inline-flex items-center gap-1 text-xs font-semibold text-[#c6ff34] hover:underline"><Plus className="h-3.5 w-3.5" /> {t("eb.addLink")}</button>
+          <div className="flex items-center gap-2 text-sm font-bold"><FileText className="h-4 w-4 text-brand-400" /> {t("eb.studyMaterials")}</div>
+          <button onClick={() => patchExam({ resources: [...(exam.resources ?? []), { label: "", url: "" }] })} className="inline-flex items-center gap-1 text-xs font-semibold text-brand-400 hover:underline"><Plus className="h-3.5 w-3.5" /> {t("eb.addLink")}</button>
         </div>
         <p className="mt-0.5 text-xs text-[var(--muted)]">{t("eb.studyMaterialsHint")}</p>
         <div className="mt-3 space-y-2">
@@ -995,16 +995,16 @@ function ProctoringPanel({ exam, patchExam }: { exam: Exam; patchExam: (p: Parti
   const t = useT();
   return (
     <div className="card rounded-2xl p-6">
-      <div className="flex items-center gap-2 text-sm font-bold"><ShieldAlert className="h-4 w-4 text-[#c6ff34]" /> {t("eb.lockdownIntegrity")}</div>
+      <div className="flex items-center gap-2 text-sm font-bold"><ShieldAlert className="h-4 w-4 text-brand-400" /> {t("eb.lockdownIntegrity")}</div>
       <p className="mt-0.5 text-xs text-[var(--muted)]">{t("eb.lockdownIntegrityDesc")}</p>
       <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
         {LOCKDOWN_RULES.map(({ key, labelKey, descKey }) => {
           const on = !!exam.lockdown?.[key];
           return (
             <button key={key} onClick={() => patchExam({ lockdown: { ...exam.lockdown, [key]: !on } })}
-              className={clsx("flex items-center justify-between gap-3 rounded-xl border p-3 text-left transition", on ? "border-[#c6ff34]/40 bg-[rgba(198,255,52,0.08)]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
+              className={clsx("flex items-center justify-between gap-3 rounded-xl border p-3 text-left transition", on ? "border-brand-500/40 bg-[color-mix(in oklch, var(--color-brand-500) 8%, transparent)]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
               <div><p className="text-sm font-medium">{t(labelKey)}</p><p className="text-xs text-[var(--muted)]">{t(descKey)}</p></div>
-              <span className={clsx("inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition", on ? "bg-[#c6ff34]" : "bg-[var(--border)]")}><span className={clsx("h-4 w-4 rounded-full bg-white transition", on && "translate-x-4")} /></span>
+              <span className={clsx("inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition", on ? "bg-brand-500" : "bg-[var(--border)]")}><span className={clsx("h-4 w-4 rounded-full bg-white transition", on && "translate-x-4")} /></span>
             </button>
           );
         })}
@@ -1018,13 +1018,13 @@ function ProctoringPanel({ exam, patchExam }: { exam: Exam; patchExam: (p: Parti
       {/* Safe Exam Browser */}
       <div className="mt-4 border-t border-[var(--border)] pt-4">
         <button onClick={() => patchExam({ lockdown: { ...exam.lockdown, requireSafeExamBrowser: !exam.lockdown?.requireSafeExamBrowser } })}
-          className={clsx("flex w-full items-center justify-between gap-3 rounded-xl border p-3 text-left transition", exam.lockdown?.requireSafeExamBrowser ? "border-[#c6ff34]/40 bg-[rgba(198,255,52,0.08)]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
+          className={clsx("flex w-full items-center justify-between gap-3 rounded-xl border p-3 text-left transition", exam.lockdown?.requireSafeExamBrowser ? "border-brand-500/40 bg-[color-mix(in oklch, var(--color-brand-500) 8%, transparent)]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
           <div>
             <p className="text-sm font-medium">{t("eb.requireSEB")}</p>
             <p className="text-xs text-[var(--muted)]">{t("eb.requireSEBDesc")}</p>
             <p className="mt-1 text-xs font-medium text-amber-500">{t("eb.sebPlatforms")}</p>
           </div>
-          <span className={clsx("inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition", exam.lockdown?.requireSafeExamBrowser ? "bg-[#c6ff34]" : "bg-[var(--border)]")}><span className={clsx("h-4 w-4 rounded-full bg-white transition", exam.lockdown?.requireSafeExamBrowser && "translate-x-4")} /></span>
+          <span className={clsx("inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition", exam.lockdown?.requireSafeExamBrowser ? "bg-brand-500" : "bg-[var(--border)]")}><span className={clsx("h-4 w-4 rounded-full bg-white transition", exam.lockdown?.requireSafeExamBrowser && "translate-x-4")} /></span>
         </button>
         {exam.lockdown?.requireSafeExamBrowser && (
           <div className="mt-3 space-y-3">
@@ -1051,7 +1051,7 @@ function ProctoringPanel({ exam, patchExam }: { exam: Exam; patchExam: (p: Parti
       {/* Geofencing */}
       <div className="mt-4 border-t border-[var(--border)] pt-4">
         <button onClick={() => patchExam({ lockdown: { ...exam.lockdown, requireGeofence: !exam.lockdown?.requireGeofence } })}
-          className={clsx("flex w-full items-center justify-between gap-3 rounded-xl border p-3 text-left transition", exam.lockdown?.requireGeofence ? "border-[#c6ff34]/40 bg-[rgba(198,255,52,0.08)]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
+          className={clsx("flex w-full items-center justify-between gap-3 rounded-xl border p-3 text-left transition", exam.lockdown?.requireGeofence ? "border-brand-500/40 bg-[color-mix(in oklch, var(--color-brand-500) 8%, transparent)]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
           <div className="flex items-center gap-2">
             <MapPin className="h-4 w-4 text-[var(--muted)]" />
             <div>
@@ -1059,7 +1059,7 @@ function ProctoringPanel({ exam, patchExam }: { exam: Exam; patchExam: (p: Parti
               <p className="text-xs text-[var(--muted)]">{t("eb.requireGeofenceDesc")}</p>
             </div>
           </div>
-          <span className={clsx("inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition", exam.lockdown?.requireGeofence ? "bg-[#c6ff34]" : "bg-[var(--border)]")}><span className={clsx("h-4 w-4 rounded-full bg-white transition", exam.lockdown?.requireGeofence && "translate-x-4")} /></span>
+          <span className={clsx("inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition", exam.lockdown?.requireGeofence ? "bg-brand-500" : "bg-[var(--border)]")}><span className={clsx("h-4 w-4 rounded-full bg-white transition", exam.lockdown?.requireGeofence && "translate-x-4")} /></span>
         </button>
         {exam.lockdown?.requireGeofence && <GeofencePanel exam={exam} patchExam={patchExam} />}
       </div>
@@ -1067,7 +1067,7 @@ function ProctoringPanel({ exam, patchExam }: { exam: Exam; patchExam: (p: Parti
       {/* Calculator */}
       <div className="mt-4 border-t border-[var(--border)] pt-4">
         <button onClick={() => patchExam({ lockdown: { ...exam.lockdown, calculatorEnabled: !exam.lockdown?.calculatorEnabled } })}
-          className={clsx("flex w-full items-center justify-between gap-3 rounded-xl border p-3 text-left transition", exam.lockdown?.calculatorEnabled ? "border-[#c6ff34]/40 bg-[rgba(198,255,52,0.08)]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
+          className={clsx("flex w-full items-center justify-between gap-3 rounded-xl border p-3 text-left transition", exam.lockdown?.calculatorEnabled ? "border-brand-500/40 bg-[color-mix(in oklch, var(--color-brand-500) 8%, transparent)]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
           <div className="flex items-center gap-2">
             <Calculator className="h-4 w-4 text-[var(--muted)]" />
             <div>
@@ -1075,7 +1075,7 @@ function ProctoringPanel({ exam, patchExam }: { exam: Exam; patchExam: (p: Parti
               <p className="text-xs text-[var(--muted)]">{t("eb.calculatorEnabledDesc")}</p>
             </div>
           </div>
-          <span className={clsx("inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition", exam.lockdown?.calculatorEnabled ? "bg-[#c6ff34]" : "bg-[var(--border)]")}><span className={clsx("h-4 w-4 rounded-full bg-white transition", exam.lockdown?.calculatorEnabled && "translate-x-4")} /></span>
+          <span className={clsx("inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition", exam.lockdown?.calculatorEnabled ? "bg-brand-500" : "bg-[var(--border)]")}><span className={clsx("h-4 w-4 rounded-full bg-white transition", exam.lockdown?.calculatorEnabled && "translate-x-4")} /></span>
         </button>
         {exam.lockdown?.calculatorEnabled && <CalculatorPanel exam={exam} patchExam={patchExam} />}
       </div>
@@ -1083,7 +1083,7 @@ function ProctoringPanel({ exam, patchExam }: { exam: Exam; patchExam: (p: Parti
       {/* Power Management (Screen Wake Lock) */}
       <div className="mt-4 border-t border-[var(--border)] pt-4">
         <button onClick={() => patchExam({ lockdown: { ...exam.lockdown, wakeLockEnabled: !exam.lockdown?.wakeLockEnabled } })}
-          className={clsx("flex w-full items-center justify-between gap-3 rounded-xl border p-3 text-left transition", exam.lockdown?.wakeLockEnabled ? "border-[#c6ff34]/40 bg-[rgba(198,255,52,0.08)]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
+          className={clsx("flex w-full items-center justify-between gap-3 rounded-xl border p-3 text-left transition", exam.lockdown?.wakeLockEnabled ? "border-brand-500/40 bg-[color-mix(in oklch, var(--color-brand-500) 8%, transparent)]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
           <div className="flex items-center gap-2">
             <BatteryCharging className="h-4 w-4 text-[var(--muted)]" />
             <div>
@@ -1091,7 +1091,7 @@ function ProctoringPanel({ exam, patchExam }: { exam: Exam; patchExam: (p: Parti
               <p className="text-xs text-[var(--muted)]">{t("eb.wakeLockEnabledDesc")}</p>
             </div>
           </div>
-          <span className={clsx("inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition", exam.lockdown?.wakeLockEnabled ? "bg-[#c6ff34]" : "bg-[var(--border)]")}><span className={clsx("h-4 w-4 rounded-full bg-white transition", exam.lockdown?.wakeLockEnabled && "translate-x-4")} /></span>
+          <span className={clsx("inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition", exam.lockdown?.wakeLockEnabled ? "bg-brand-500" : "bg-[var(--border)]")}><span className={clsx("h-4 w-4 rounded-full bg-white transition", exam.lockdown?.wakeLockEnabled && "translate-x-4")} /></span>
         </button>
         {exam.lockdown?.wakeLockEnabled && (
           <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -1145,7 +1145,7 @@ function CalculatorPanel({ exam, patchExam }: { exam: Exam; patchExam: (p: Parti
         <div className="mt-1 flex flex-wrap gap-1.5">
           {CALCULATOR_TYPE_OPTIONS.map((o) => (
             <button key={o.value} onClick={() => patchExam({ lockdown: { ...exam.lockdown, calculatorType: o.value } })}
-              className={clsx("rounded-lg border px-2.5 py-1 text-xs transition", (exam.lockdown?.calculatorType ?? "basic") === o.value ? "border-[#c6ff34]/50 bg-[rgba(198,255,52,0.12)] text-[#c6ff34]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
+              className={clsx("rounded-lg border px-2.5 py-1 text-xs transition", (exam.lockdown?.calculatorType ?? "basic") === o.value ? "border-brand-500/50 bg-[color-mix(in oklch, var(--color-brand-500) 12%, transparent)] text-brand-400" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
               {t(o.labelKey)}
             </button>
           ))}
@@ -1156,7 +1156,7 @@ function CalculatorPanel({ exam, patchExam }: { exam: Exam; patchExam: (p: Parti
         <div className="mt-1 flex flex-wrap gap-1.5">
           {CALCULATOR_POSITION_OPTIONS.map((o) => (
             <button key={o.value} onClick={() => patchExam({ lockdown: { ...exam.lockdown, calculatorPosition: o.value } })}
-              className={clsx("rounded-lg border px-2.5 py-1 text-xs transition", (exam.lockdown?.calculatorPosition ?? "floating") === o.value ? "border-[#c6ff34]/50 bg-[rgba(198,255,52,0.12)] text-[#c6ff34]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
+              className={clsx("rounded-lg border px-2.5 py-1 text-xs transition", (exam.lockdown?.calculatorPosition ?? "floating") === o.value ? "border-brand-500/50 bg-[color-mix(in oklch, var(--color-brand-500) 12%, transparent)] text-brand-400" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
               {t(o.labelKey)}
             </button>
           ))}
@@ -1167,9 +1167,9 @@ function CalculatorPanel({ exam, patchExam }: { exam: Exam; patchExam: (p: Parti
           const on = exam.lockdown?.[key] ?? (key !== "calculatorSaveHistory");
           return (
             <button key={key} onClick={() => patchExam({ lockdown: { ...exam.lockdown, [key]: !on } })}
-              className={clsx("flex items-center justify-between gap-3 rounded-xl border p-3 text-left transition", on ? "border-[#c6ff34]/40 bg-[rgba(198,255,52,0.08)]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
+              className={clsx("flex items-center justify-between gap-3 rounded-xl border p-3 text-left transition", on ? "border-brand-500/40 bg-[color-mix(in oklch, var(--color-brand-500) 8%, transparent)]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
               <div><p className="text-sm font-medium">{t(labelKey)}</p><p className="text-xs text-[var(--muted)]">{t(descKey)}</p></div>
-              <span className={clsx("inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition", on ? "bg-[#c6ff34]" : "bg-[var(--border)]")}><span className={clsx("h-4 w-4 rounded-full bg-white transition", on && "translate-x-4")} /></span>
+              <span className={clsx("inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition", on ? "bg-brand-500" : "bg-[var(--border)]")}><span className={clsx("h-4 w-4 rounded-full bg-white transition", on && "translate-x-4")} /></span>
             </button>
           );
         })}
@@ -1255,7 +1255,7 @@ function GeofencePanel({ exam, patchExam }: { exam: Exam; patchExam: (p: Partial
         <div className="mt-1 flex flex-wrap gap-1.5">
           {RADIUS_OPTIONS.map((r) => (
             <button key={r} onClick={() => { setRadius(r); setCustomRadius(""); }}
-              className={clsx("rounded-lg border px-2.5 py-1 text-xs transition", radius === r && !customRadius ? "border-[#c6ff34]/50 bg-[rgba(198,255,52,0.12)] text-[#c6ff34]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
+              className={clsx("rounded-lg border px-2.5 py-1 text-xs transition", radius === r && !customRadius ? "border-brand-500/50 bg-[color-mix(in oklch, var(--color-brand-500) 12%, transparent)] text-brand-400" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
               {r} m
             </button>
           ))}
@@ -1340,7 +1340,7 @@ function GeofencePanel({ exam, patchExam }: { exam: Exam; patchExam: (p: Partial
       {/* Continuous monitoring (Phase 2) — re-check location during the exam, not just at entry */}
       <div className="border-t border-[var(--border)] pt-3">
         <button onClick={() => patchExam({ lockdown: { ...exam.lockdown, geofenceContinuousMonitoring: !exam.lockdown?.geofenceContinuousMonitoring } })}
-          className={clsx("flex w-full items-center justify-between gap-3 rounded-xl border p-3 text-left transition", exam.lockdown?.geofenceContinuousMonitoring ? "border-[#c6ff34]/40 bg-[rgba(198,255,52,0.08)]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
+          className={clsx("flex w-full items-center justify-between gap-3 rounded-xl border p-3 text-left transition", exam.lockdown?.geofenceContinuousMonitoring ? "border-brand-500/40 bg-[color-mix(in oklch, var(--color-brand-500) 8%, transparent)]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
           <div className="flex items-center gap-2">
             <Clock className="h-4 w-4 text-[var(--muted)]" />
             <div>
@@ -1348,7 +1348,7 @@ function GeofencePanel({ exam, patchExam }: { exam: Exam; patchExam: (p: Partial
               <p className="text-xs text-[var(--muted)]">{t("eb.geofenceContinuousDesc")}</p>
             </div>
           </div>
-          <span className={clsx("inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition", exam.lockdown?.geofenceContinuousMonitoring ? "bg-[#c6ff34]" : "bg-[var(--border)]")}><span className={clsx("h-4 w-4 rounded-full bg-white transition", exam.lockdown?.geofenceContinuousMonitoring && "translate-x-4")} /></span>
+          <span className={clsx("inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition", exam.lockdown?.geofenceContinuousMonitoring ? "bg-brand-500" : "bg-[var(--border)]")}><span className={clsx("h-4 w-4 rounded-full bg-white transition", exam.lockdown?.geofenceContinuousMonitoring && "translate-x-4")} /></span>
         </button>
 
         {exam.lockdown?.geofenceContinuousMonitoring && (
@@ -1440,7 +1440,7 @@ function CodeQuestionFields({ q, patch }: { q: Question; patch: (p: Partial<Ques
         <div>
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t("eb.sampleTestCases")}{tests.length > 0 ? ` · ${tests.length}` : ""}</span>
-            <button type="button" onClick={() => patch({ testCases: [...tests, { input: "", expected: "" }] })} className="inline-flex items-center gap-1 text-xs text-[#c6ff34] hover:underline"><Plus className="h-3.5 w-3.5" /> {t("eb.testCase")}</button>
+            <button type="button" onClick={() => patch({ testCases: [...tests, { input: "", expected: "" }] })} className="inline-flex items-center gap-1 text-xs text-brand-400 hover:underline"><Plus className="h-3.5 w-3.5" /> {t("eb.testCase")}</button>
           </div>
           {tests.length > 0 && (
             <div className="mt-2 space-y-2">
@@ -1511,7 +1511,7 @@ function TagsField({ q, patch }: { q: Question; patch: (p: Partial<Question>) =>
     <Field label={t("eb.topicTags")}>
       <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-[var(--border)] px-2 py-1.5">
         {tags.map((tg) => (
-          <span key={tg} className="inline-flex items-center gap-1 rounded-full bg-[rgba(198,255,52,0.14)] px-2 py-0.5 text-xs font-medium text-[#c6ff34]">
+          <span key={tg} className="inline-flex items-center gap-1 rounded-full bg-[color-mix(in oklch, var(--color-brand-500) 14%, transparent)] px-2 py-0.5 text-xs font-medium text-brand-400">
             <Tag className="h-3 w-3" />{tg}
             <button type="button" onClick={() => patch({ tags: tags.filter((x) => x !== tg) })}><X className="h-3 w-3" /></button>
           </span>
@@ -1545,7 +1545,7 @@ function MatchingEditor({ q, patch }: { q: Question; patch: (p: Partial<Question
           </div>
         ))}
       </div>
-      <button type="button" onClick={() => patch({ matchPairs: [...pairs, { left: "", right: "" }] })} className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-[#c6ff34] hover:underline"><Plus className="h-4 w-4" /> {t("eb.addPair")}</button>
+      <button type="button" onClick={() => patch({ matchPairs: [...pairs, { left: "", right: "" }] })} className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-brand-400 hover:underline"><Plus className="h-4 w-4" /> {t("eb.addPair")}</button>
     </div>
   );
 }
@@ -1571,7 +1571,7 @@ function OrderingEditor({ q, patch }: { q: Question; patch: (p: Partial<Question
           </div>
         ))}
       </div>
-      <button type="button" onClick={() => patch({ sequence: [...seq, ""] })} className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-[#c6ff34] hover:underline"><Plus className="h-4 w-4" /> {t("eb.addItem")}</button>
+      <button type="button" onClick={() => patch({ sequence: [...seq, ""] })} className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-brand-400 hover:underline"><Plus className="h-4 w-4" /> {t("eb.addItem")}</button>
     </div>
   );
 }
@@ -1608,7 +1608,7 @@ function ClozeEditor({ q, patch }: { q: Question; patch: (p: Partial<Question>) 
             onRemove={() => patch({ blanks: blanks.filter((_, idx) => idx !== i) })} />
         ))}
       </div>
-      <button type="button" onClick={() => patch({ blanks: [...blanks, [""]] })} className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-[#c6ff34] hover:underline"><Plus className="h-4 w-4" /> {t("eb.addBlank")}</button>
+      <button type="button" onClick={() => patch({ blanks: [...blanks, [""]] })} className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-brand-400 hover:underline"><Plus className="h-4 w-4" /> {t("eb.addBlank")}</button>
     </div>
   );
 }
@@ -1648,7 +1648,7 @@ function ParameterizedEditor({ q, patch }: { q: Question; patch: (p: Partial<Que
             </div>
           ))}
         </div>
-        <button type="button" onClick={addVar} className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-[#c6ff34] hover:underline"><Plus className="h-4 w-4" /> {t("eb.addVariable")}</button>
+        <button type="button" onClick={addVar} className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-brand-400 hover:underline"><Plus className="h-4 w-4" /> {t("eb.addVariable")}</button>
       </div>
 
       <Field label={t("eb.answerFormula")}>
@@ -1758,7 +1758,7 @@ function ChoiceOptionsEditor({ q, patch, shuffleOptions, onShuffleOptionsChange 
       <div className="flex items-center justify-between">
         <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t("eb.answerOptions")}</span>
         <label className="flex items-center gap-2 text-xs text-[var(--muted)]">
-          <input type="checkbox" className="h-3.5 w-3.5 accent-[#c6ff34]" checked={shuffleOptions} onChange={(e) => onShuffleOptionsChange(e.target.checked)} />
+          <input type="checkbox" className="h-3.5 w-3.5 accent-brand-500" checked={shuffleOptions} onChange={(e) => onShuffleOptionsChange(e.target.checked)} />
           {t("eb.shuffleOptionsLabel")}
         </label>
       </div>
@@ -1771,8 +1771,8 @@ function ChoiceOptionsEditor({ q, patch, shuffleOptions, onShuffleOptionsChange 
               <GripVertical className="h-4 w-4 shrink-0 text-[var(--border)]" />
               <button type="button" title={correct ? t("eb.correctAnswerTag") : t("eb.markAsCorrect")} onClick={() => (isMulti ? toggleMultiCorrect(opt) : markCorrect(opt))} className="shrink-0">
                 {isMulti
-                  ? (correct ? <span className="flex h-5 w-5 items-center justify-center rounded bg-emerald-500 text-white"><Check className="h-3.5 w-3.5" /></span> : <Square className="h-5 w-5 text-[var(--muted)] hover:text-[#c6ff34]" />)
-                  : (correct ? <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500 text-white"><Check className="h-3.5 w-3.5" /></span> : <CircleDot className="h-5 w-5 text-[var(--muted)] hover:text-[#c6ff34]" />)}
+                  ? (correct ? <span className="flex h-5 w-5 items-center justify-center rounded bg-emerald-500 text-white"><Check className="h-3.5 w-3.5" /></span> : <Square className="h-5 w-5 text-[var(--muted)] hover:text-brand-400" />)
+                  : (correct ? <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500 text-white"><Check className="h-3.5 w-3.5" /></span> : <CircleDot className="h-5 w-5 text-[var(--muted)] hover:text-brand-400" />)}
               </button>
               {isTF
                 ? <span className="flex-1 text-sm capitalize">{opt}</span>
@@ -1786,7 +1786,7 @@ function ChoiceOptionsEditor({ q, patch, shuffleOptions, onShuffleOptionsChange 
         })}
       </div>
       {(q.type === "mcq" || q.type === "multi_select") && (
-        <button type="button" onClick={addOption} className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-[#c6ff34] hover:underline"><Plus className="h-4 w-4" /> {t("eb.addOption")}</button>
+        <button type="button" onClick={addOption} className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-brand-400 hover:underline"><Plus className="h-4 w-4" /> {t("eb.addOption")}</button>
       )}
       {q.type === "multi_select" && <p className="mt-1.5 text-[11px] text-[var(--muted)]">{t("eb.multiSelectHint")}</p>}
     </div>
@@ -1880,7 +1880,7 @@ function MediaComprehensionEditor({ q, patch, examId, allQuestions, shuffleOptio
         <div className="flex flex-wrap gap-1.5">
           {MEDIA_KIND_META.map((m) => (
             <button key={m.value} type="button" onClick={() => patch({ mediaKind: m.value, mediaAssetIds: [] })}
-              className={clsx("rounded-lg border px-3 py-1.5 text-sm font-medium", kind === m.value ? "border-[#c6ff34]/50 bg-[rgba(198,255,52,0.1)] text-[#c6ff34]" : "border-[var(--border)] text-[var(--muted)] hover:text-[var(--fg)]")}>
+              className={clsx("rounded-lg border px-3 py-1.5 text-sm font-medium", kind === m.value ? "border-brand-500/50 bg-[color-mix(in oklch, var(--color-brand-500) 10%, transparent)] text-brand-400" : "border-[var(--border)] text-[var(--muted)] hover:text-[var(--fg)]")}>
               {t(m.labelKey)}
             </button>
           ))}
@@ -1949,10 +1949,10 @@ function MediaComprehensionEditor({ q, patch, examId, allQuestions, shuffleOptio
       {/* Playback config */}
       {(kind === "audio" || kind === "video") && (
         <div className="grid grid-cols-2 gap-3 rounded-lg border border-[var(--border)] p-3 sm:grid-cols-3">
-          <label className="flex items-center gap-2 text-xs"><input type="checkbox" className="h-3.5 w-3.5 accent-[#c6ff34]" checked={cfg.allowSeek !== false} onChange={(e) => patchConfig({ allowSeek: e.target.checked })} /> {t("eb.mediaAllowSeek")}</label>
-          <label className="flex items-center gap-2 text-xs"><input type="checkbox" className="h-3.5 w-3.5 accent-[#c6ff34]" checked={!!cfg.autoplay} onChange={(e) => patchConfig({ autoplay: e.target.checked })} /> {t("eb.mediaAutoplay")}</label>
-          <label className="flex items-center gap-2 text-xs"><input type="checkbox" className="h-3.5 w-3.5 accent-[#c6ff34]" checked={cfg.preventDownload !== false} onChange={(e) => patchConfig({ preventDownload: e.target.checked })} /> {t("eb.mediaPreventDownload")}</label>
-          <label className="flex items-center gap-2 text-xs"><input type="checkbox" className="h-3.5 w-3.5 accent-[#c6ff34]" checked={!!cfg.playbackSpeedControl} onChange={(e) => patchConfig({ playbackSpeedControl: e.target.checked })} /> {t("eb.mediaSpeedControl")}</label>
+          <label className="flex items-center gap-2 text-xs"><input type="checkbox" className="h-3.5 w-3.5 accent-brand-500" checked={cfg.allowSeek !== false} onChange={(e) => patchConfig({ allowSeek: e.target.checked })} /> {t("eb.mediaAllowSeek")}</label>
+          <label className="flex items-center gap-2 text-xs"><input type="checkbox" className="h-3.5 w-3.5 accent-brand-500" checked={!!cfg.autoplay} onChange={(e) => patchConfig({ autoplay: e.target.checked })} /> {t("eb.mediaAutoplay")}</label>
+          <label className="flex items-center gap-2 text-xs"><input type="checkbox" className="h-3.5 w-3.5 accent-brand-500" checked={cfg.preventDownload !== false} onChange={(e) => patchConfig({ preventDownload: e.target.checked })} /> {t("eb.mediaPreventDownload")}</label>
+          <label className="flex items-center gap-2 text-xs"><input type="checkbox" className="h-3.5 w-3.5 accent-brand-500" checked={!!cfg.playbackSpeedControl} onChange={(e) => patchConfig({ playbackSpeedControl: e.target.checked })} /> {t("eb.mediaSpeedControl")}</label>
           <label className="flex items-center gap-2 text-xs">{t("eb.mediaReplayLimit")}
             <input type="number" min={0} className="input h-7 w-16 text-xs" value={cfg.replayLimit ?? 0} onChange={(e) => patchConfig({ replayLimit: Math.max(0, Number(e.target.value) || 0) })} />
           </label>
@@ -2011,7 +2011,7 @@ function BlueprintEditor({ exam, questions, patchExam }: { exam: Exam; questions
   const total = bp.reduce((s, r) => s + (r.count || 0), 0);
   return (
     <div className="card rounded-2xl p-6">
-      <div className="flex items-center gap-2 text-sm font-bold"><ListChecks className="h-4 w-4 text-[#c6ff34]" /> {t("eb.examBlueprint")}</div>
+      <div className="flex items-center gap-2 text-sm font-bold"><ListChecks className="h-4 w-4 text-brand-400" /> {t("eb.examBlueprint")}</div>
       <p className="mt-0.5 text-xs text-[var(--muted)]">{t("eb.examBlueprintHint")}</p>
       {allTags.length === 0 ? (
         <p className="mt-3 text-xs text-[var(--muted)]">{t("eb.tagQuestionsFirst")}</p>
@@ -2033,7 +2033,7 @@ function BlueprintEditor({ exam, questions, patchExam }: { exam: Exam; questions
               );
             })}
           </div>
-          <button type="button" onClick={() => patchExam({ blueprint: [...bp, { tag: allTags[0], count: 1 }] })} className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-[#c6ff34] hover:underline"><Plus className="h-4 w-4" /> {t("eb.addBlueprintRule")}</button>
+          <button type="button" onClick={() => patchExam({ blueprint: [...bp, { tag: allTags[0], count: 1 }] })} className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-brand-400 hover:underline"><Plus className="h-4 w-4" /> {t("eb.addBlueprintRule")}</button>
           {bp.length > 0 && <p className="mt-2 text-xs text-[var(--muted)]">{t("eb.assemblesQuestions", { n: total })}{exam.shuffleQuestions === false ? "" : t("eb.inShuffledOrder")}.</p>}
         </>
       )}
@@ -2063,7 +2063,7 @@ function GradingSchemeCard({ exam, patchExam }: { exam: Exam; patchExam: (p: Par
   };
   return (
     <div className="card rounded-2xl p-6">
-      <div className="flex items-center gap-2 text-sm font-bold"><Target className="h-4 w-4 text-[#c6ff34]" /> {t("eb.gradingSchemeRelease")}</div>
+      <div className="flex items-center gap-2 text-sm font-bold"><Target className="h-4 w-4 text-brand-400" /> {t("eb.gradingSchemeRelease")}</div>
       <p className="mt-0.5 text-xs text-[var(--muted)]">{t("eb.gradingSchemeReleaseHint")}</p>
 
       {/* Curve */}
@@ -2090,8 +2090,8 @@ function GradingSchemeCard({ exam, patchExam }: { exam: Exam; patchExam: (p: Par
         <div className="flex items-center justify-between">
           <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t("eb.gradeBoundaries")}{bands.length ? ` · ${bands.length}` : ""}</span>
           <div className="flex items-center gap-2">
-            <button type="button" onClick={() => patchExam({ gradeBands: DEFAULT_GRADE_BANDS.map((b) => ({ ...b })) })} className="text-xs text-[var(--muted)] hover:text-[#c6ff34]">{t("eb.useDefaultAF")}</button>
-            <button type="button" onClick={() => patchExam({ gradeBands: [...bands, { label: "", min: 0 }] })} className="inline-flex items-center gap-1 text-xs text-[#c6ff34] hover:underline"><Plus className="h-3.5 w-3.5" /> {t("eb.band")}</button>
+            <button type="button" onClick={() => patchExam({ gradeBands: DEFAULT_GRADE_BANDS.map((b) => ({ ...b })) })} className="text-xs text-[var(--muted)] hover:text-brand-400">{t("eb.useDefaultAF")}</button>
+            <button type="button" onClick={() => patchExam({ gradeBands: [...bands, { label: "", min: 0 }] })} className="inline-flex items-center gap-1 text-xs text-brand-400 hover:underline"><Plus className="h-3.5 w-3.5" /> {t("eb.band")}</button>
           </div>
         </div>
         {bands.length === 0 ? (
@@ -2130,9 +2130,9 @@ function GradingSchemeCard({ exam, patchExam }: { exam: Exam; patchExam: (p: Par
 
       {/* Anonymous grading */}
       <button type="button" onClick={() => patchExam({ anonymousGrading: !exam.anonymousGrading })}
-        className={clsx("mt-5 flex w-full items-center justify-between gap-3 rounded-xl border p-3 text-left transition", exam.anonymousGrading ? "border-[#c6ff34]/40 bg-[rgba(198,255,52,0.08)]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
+        className={clsx("mt-5 flex w-full items-center justify-between gap-3 rounded-xl border p-3 text-left transition", exam.anonymousGrading ? "border-brand-500/40 bg-[color-mix(in oklch, var(--color-brand-500) 8%, transparent)]" : "border-[var(--border)] hover:bg-[var(--card-2)]")}>
         <div><p className="text-sm font-medium">{t("eb.anonymousGrading")}</p><p className="text-xs text-[var(--muted)]">{t("eb.anonymousGradingDesc")}</p></div>
-        <span className={clsx("inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition", exam.anonymousGrading ? "bg-[#c6ff34]" : "bg-[var(--border)]")}><span className={clsx("h-4 w-4 rounded-full bg-white transition", exam.anonymousGrading && "translate-x-4")} /></span>
+        <span className={clsx("inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition", exam.anonymousGrading ? "bg-brand-500" : "bg-[var(--border)]")}><span className={clsx("h-4 w-4 rounded-full bg-white transition", exam.anonymousGrading && "translate-x-4")} /></span>
       </button>
 
       {/* Apply to existing */}
@@ -2166,7 +2166,7 @@ function PickFromBankModal({ excludeExamId, onClose, onAdd }: { excludeExamId: s
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
       <div className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-2xl border border-[var(--border)] bg-[var(--card)] shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-3.5">
-          <h2 className="inline-flex items-center gap-2 text-base font-bold"><Library className="h-5 w-5 text-[#c6ff34]" /> {t("eb.pickFromBank")}</h2>
+          <h2 className="inline-flex items-center gap-2 text-base font-bold"><Library className="h-5 w-5 text-brand-400" /> {t("eb.pickFromBank")}</h2>
           <button onClick={onClose} className="rounded p-1 text-[var(--muted)] hover:text-[var(--fg)]"><X className="h-4 w-4" /></button>
         </div>
         <div className="flex flex-wrap items-center gap-2 border-b border-[var(--border)] px-5 py-3">
@@ -2187,14 +2187,14 @@ function PickFromBankModal({ excludeExamId, onClose, onAdd }: { excludeExamId: s
           ) : filtered.map((q) => {
             const M = TYPE_META[q.type]; const on = sel.has(q.id);
             return (
-              <button key={q.id} onClick={() => toggle(q.id)} className={clsx("flex w-full items-start gap-3 rounded-lg px-2.5 py-2 text-left transition", on ? "bg-[rgba(198,255,52,0.1)] ring-1 ring-[#c6ff34]/40" : "hover:bg-[var(--card-2)]")}>
-                <span className={clsx("mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded", on ? "bg-[#c6ff34] text-[#111110]" : "border border-[var(--border)] text-transparent")}><Check className="h-3.5 w-3.5" /></span>
+              <button key={q.id} onClick={() => toggle(q.id)} className={clsx("flex w-full items-start gap-3 rounded-lg px-2.5 py-2 text-left transition", on ? "bg-[color-mix(in oklch, var(--color-brand-500) 10%, transparent)] ring-1 ring-brand-500/40" : "hover:bg-[var(--card-2)]")}>
+                <span className={clsx("mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded", on ? "bg-brand-500 text-[var(--brand-ink)]" : "border border-[var(--border)] text-transparent")}><Check className="h-3.5 w-3.5" /></span>
                 <M.icon className="mt-0.5 h-4 w-4 shrink-0 text-[var(--muted)]" />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-medium">{q.prompt || t("eb.noPrompt")}</span>
                   <span className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-[var(--muted)]">
                     <span>{t(M.shortKey)}</span> · <span>{q.points} pts</span> · <span className="truncate">{q.examTitle}</span>
-                    {(q.tags ?? []).slice(0, 3).map((tag) => <span key={tag} className="rounded-full bg-[var(--card-2)] px-1.5 py-px text-[#c6ff34]">{tag}</span>)}
+                    {(q.tags ?? []).slice(0, 3).map((tag) => <span key={tag} className="rounded-full bg-[var(--card-2)] px-1.5 py-px text-brand-400">{tag}</span>)}
                   </span>
                 </span>
               </button>
@@ -2247,7 +2247,7 @@ function PreviewView({ exam, questions }: { exam: Exam; questions: Question[] })
                 ) : q.type === "parameterized" ? (
                   <div className="space-y-1.5 text-sm text-[var(--muted)]">
                     <input className="input max-w-xs" type="number" placeholder={t("eb.enterNumberPlaceholder")} disabled />
-                    <p className="text-[11px]"><span className="text-[#c6ff34]">⚙</span> {t("eb.randomizedPerCandidate")}</p>
+                    <p className="text-[11px]"><span className="text-brand-400">⚙</span> {t("eb.randomizedPerCandidate")}</p>
                   </div>
                 ) : q.type === "media_comprehension" ? (
                   <div className="space-y-2">

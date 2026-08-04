@@ -21,7 +21,7 @@ const ROLES = [
   { value: "proctor", labelKey: "ateam.roleProctor", descKey: "ateam.roleProctorDesc", respKey: "ateam.roleProctorResp", accessKey: "ateam.accessMonitoring", icon: Radio },
 ];
 const ROLE_PILL: Record<string, string> = {
-  admin: "bg-[#c6ff34]/15 text-[#c6ff34]", facilitator: "bg-[#06B6D4]/15 text-[#06B6D4]", proctor: "bg-[#F59E0B]/15 text-[#F59E0B]",
+  admin: "bg-brand-500/15 text-brand-400", facilitator: "bg-[#06B6D4]/15 text-[#06B6D4]", proctor: "bg-[#F59E0B]/15 text-[#F59E0B]",
 };
 const PREVIEW_COUNT = 4;
 
@@ -44,7 +44,7 @@ function RoleCard({ role, t, selected, onSelect }: {
       className={clsx(
         "group relative rounded-2xl border p-4 transition-all duration-150",
         onSelect && "cursor-pointer hover:-translate-y-0.5 hover:shadow-lg",
-        selected ? "border-[#c6ff34] bg-[#c6ff34]/[0.06] ring-1 ring-[#c6ff34]/40" : "border-[var(--border)] hover:border-[var(--border-strong)]",
+        selected ? "border-brand-500 bg-brand-500/[0.06] ring-1 ring-brand-500/40" : "border-[var(--border)] hover:border-[var(--border-strong)]",
       )}
     >
       <div className="flex items-start justify-between gap-2">
@@ -56,18 +56,18 @@ function RoleCard({ role, t, selected, onSelect }: {
           </div>
         </div>
         {selected ? (
-          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#c6ff34] text-[#111110]"><Check className="h-3.5 w-3.5" /></span>
+          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand-500 text-[var(--brand-ink)]"><Check className="h-3.5 w-3.5" /></span>
         ) : (
           <span title={t("ateam.systemRoleTitle")} className="flex shrink-0 items-center gap-1 rounded-full bg-white/[0.04] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted)]"><Lock className="h-2.5 w-2.5" /> {t("ateam.systemRole")}</span>
         )}
       </div>
       <ul className="mt-3 space-y-1">
-        {shown.map((r, i) => <li key={i} className="flex items-start gap-1.5 text-xs text-[var(--muted)]"><CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-[#c6ff34]" /> {r}</li>)}
+        {shown.map((r, i) => <li key={i} className="flex items-start gap-1.5 text-xs text-[var(--muted)]"><CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-brand-400" /> {r}</li>)}
       </ul>
       <div className="mt-3 flex items-center justify-between border-t border-[var(--border)] pt-2.5">
         <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{t("ateam.permissionsN", { n: resp.length })}</span>
         {hiddenCount > 0 && (
-          <button type="button" onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }} className="text-[11px] font-medium text-[#c6ff34] hover:underline">
+          <button type="button" onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }} className="text-[11px] font-medium text-brand-400 hover:underline">
             {expanded ? t("ateam.showLess") : t("ateam.showMoreN", { n: hiddenCount })}
           </button>
         )}

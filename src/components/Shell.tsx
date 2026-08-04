@@ -113,10 +113,10 @@ export function Shell({ children }: { children: ReactNode }) {
             <span className="block text-[11px] font-medium text-[#9FBCC2]">{t("nav.studentPortal")}</span>
           </div>
           <button onClick={() => setCollapsed(true)} aria-label="Collapse sidebar" title="Collapse sidebar"
-            className={clsx("ml-auto hidden rounded-lg p-1.5 text-[#9FBCC2] hover:bg-[#c6ff34] hover:text-[#111110]", !collapsed && "lg:inline-flex")}>
+            className={clsx("ml-auto hidden rounded-lg p-1.5 text-[#9FBCC2] hover:bg-brand-500 hover:text-[var(--brand-ink)]", !collapsed && "lg:inline-flex")}>
             <ChevronsLeft className="h-4 w-4" />
           </button>
-          <button onClick={() => setMobileOpen(false)} aria-label="Close menu" className="ml-auto rounded-lg p-1.5 text-[#9FBCC2] hover:bg-[#c6ff34] hover:text-[#111110] lg:hidden">
+          <button onClick={() => setMobileOpen(false)} aria-label="Close menu" className="ml-auto rounded-lg p-1.5 text-[#9FBCC2] hover:bg-brand-500 hover:text-[var(--brand-ink)] lg:hidden">
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -173,10 +173,10 @@ export function Shell({ children }: { children: ReactNode }) {
                     className={clsx("group relative flex items-center gap-2.5 rounded-[3px] px-3 py-2 text-[13px] font-medium transition",
                       collapsed && "lg:justify-center lg:px-0",
                       active
-                        ? "bg-[#c6ff34] text-[#111110]"
-                        : "text-[#D7E3E6] hover:bg-[#c6ff34] hover:text-[#111110]")}>
-                    {active && <span className="absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-full bg-[#111110]" />}
-                    <n.icon className={clsx("h-4 w-4 shrink-0 transition-colors", active ? "text-[#111110]" : "text-[#9FBCC2] group-hover:text-[#111110]")} />
+                        ? "bg-brand-500 text-[var(--brand-ink)]"
+                        : "text-[#D7E3E6] hover:bg-brand-500 hover:text-[var(--brand-ink)]")}>
+                    {active && <span className="absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-full bg-[var(--brand-ink)]" />}
+                    <n.icon className={clsx("h-4 w-4 shrink-0 transition-colors", active ? "text-[var(--brand-ink)]" : "text-[#9FBCC2] group-hover:text-[var(--brand-ink)]")} />
                     <span className={clsx("flex-1", collapsed && "lg:hidden")}>{t(n.labelKey)}</span>
                   </Link>
                 );
@@ -188,18 +188,18 @@ export function Shell({ children }: { children: ReactNode }) {
 
         {/* User (→ profile) + sign out */}
         <div className={clsx("flex items-center gap-2.5 border-t border-[var(--border)] px-4 py-3", collapsed && "lg:flex-col lg:gap-2 lg:px-2")}>
-          <Link to="/profile" className={clsx("group flex min-w-0 flex-1 items-center gap-2.5 rounded-[3px] p-1 hover:bg-[#c6ff34]", collapsed && "lg:flex-none")} title="Profile">
+          <Link to="/profile" className={clsx("group flex min-w-0 flex-1 items-center gap-2.5 rounded-[3px] p-1 hover:bg-brand-500", collapsed && "lg:flex-none")} title="Profile">
             {user?.avatarUrl
               ? <img src={user.avatarUrl} alt="" className="h-9 w-9 shrink-0 rounded-full object-cover" />
               : <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#111110] text-sm font-bold text-white">
                   {user?.name?.split(" ").map((w) => w[0]).slice(0, 2).join("")}
                 </div>}
             <div className={clsx("min-w-0 flex-1", collapsed && "lg:hidden")}>
-              <p className="truncate text-sm font-semibold leading-tight text-white group-hover:text-[#111110]">{user?.name}</p>
-              <p className="text-xs capitalize text-[#9FBCC2] group-hover:text-[#111110]">{user?.role}</p>
+              <p className="truncate text-sm font-semibold leading-tight text-white group-hover:text-[var(--brand-ink)]">{user?.name}</p>
+              <p className="text-xs capitalize text-[#9FBCC2] group-hover:text-[var(--brand-ink)]">{user?.role}</p>
             </div>
           </Link>
-          <button className="rounded-lg p-2 text-[#9FBCC2] hover:bg-[#c6ff34] hover:text-[#111110]"
+          <button className="rounded-lg p-2 text-[#9FBCC2] hover:bg-brand-500 hover:text-[var(--brand-ink)]"
             title={t("nav.signOut")} onClick={async () => { await logout(); navigate("/login"); }}>
             <LogOut className="h-4 w-4" />
           </button>
@@ -238,7 +238,7 @@ export function Shell({ children }: { children: ReactNode }) {
                           onClick={() => { setApps(false); navigate(n.to); }}
                           className={clsx("flex flex-col items-center gap-1.5 rounded-lg p-2.5 text-center transition",
                             isLocked ? "cursor-not-allowed opacity-40" : "hover:bg-[var(--card-2)]")}>
-                          <n.icon className={clsx("h-5 w-5", isLocked ? "text-[var(--muted)]" : "text-[#c6ff34]")} />
+                          <n.icon className={clsx("h-5 w-5", isLocked ? "text-[var(--muted)]" : "text-brand-400")} />
                           <span className="text-[11px] leading-tight text-[var(--muted)]">{t(n.labelKey)}</span>
                         </button>
                       );

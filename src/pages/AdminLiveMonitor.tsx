@@ -108,7 +108,7 @@ export function AdminLiveMonitor() {
               </button>
             </div>
             {viewMode === "grid" && (
-              <button onClick={() => setFlaggedOnly((v) => !v)} className={clsx("inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-semibold transition", flaggedOnly ? "border-[#c6ff34] bg-[rgba(198,255,52,0.1)] text-[#c6ff34]" : "border-[var(--border)] text-[var(--muted)] hover:text-[var(--fg)]")}>
+              <button onClick={() => setFlaggedOnly((v) => !v)} className={clsx("inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-semibold transition", flaggedOnly ? "border-brand-500 bg-[color-mix(in oklch, var(--color-brand-500) 10%, transparent)] text-brand-400" : "border-[var(--border)] text-[var(--muted)] hover:text-[var(--fg)]")}>
                 <AlertTriangle className="h-4 w-4" /> Flagged only
               </button>
             )}

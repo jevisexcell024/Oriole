@@ -7,7 +7,7 @@ import { BrandMark } from "@/components/BrandMark";
 import { useT } from "@/lib/i18n";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 
-const PURPLE = "#c6ff34";
+const PURPLE = "var(--color-brand-500)";
 
 export function Login() {
   const { user, login, verify2fa } = useAuth();
@@ -80,7 +80,7 @@ export function Login() {
               </span>
               <span className="leading-tight">
                 <span className="block text-[17px] font-extrabold tracking-tight text-white">Oriole</span>
-                <span className="block text-[10px] font-semibold uppercase tracking-[0.22em] text-[#c6ff34]">{t("auth.examPlatform")}</span>
+                <span className="block text-[10px] font-semibold uppercase tracking-[0.22em] text-brand-400">{t("auth.examPlatform")}</span>
               </span>
             </div>
             <LanguageSwitcher />
@@ -97,13 +97,13 @@ export function Login() {
                     <div>
                       <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[#8FA0AC]">{t("auth.authCode")}</label>
                       <input
-                        className="w-full rounded-full border border-white/15 bg-[#1A1A18] px-5 py-3 text-center text-lg tracking-[0.4em] text-white placeholder-[#7E8B96] outline-none transition focus:border-[#c6ff34] focus:ring-2 focus:ring-[#c6ff34]/30"
+                        className="w-full rounded-full border border-white/15 bg-[#1A1A18] px-5 py-3 text-center text-lg tracking-[0.4em] text-white placeholder-[#7E8B96] outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30"
                         value={code} onChange={(e) => setCode(e.target.value)}
                         placeholder="123456" inputMode="numeric" autoComplete="one-time-code" autoFocus
                       />
                     </div>
                     {error && <div role="alert" className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">{error}</div>}
-                    <button type="submit" disabled={busy} className="flex w-full items-center justify-center gap-2 rounded-full px-5 py-3 text-sm font-bold text-[#111110] shadow-sm transition hover:brightness-95 disabled:opacity-70" style={{ background: PURPLE }}>
+                    <button type="submit" disabled={busy} className="flex w-full items-center justify-center gap-2 rounded-full px-5 py-3 text-sm font-bold text-[var(--brand-ink)] shadow-sm transition hover:brightness-95 disabled:opacity-70" style={{ background: PURPLE }}>
                       {busy ? <><Loader2 className="h-4 w-4 animate-spin" /> {t("auth.verifying")}</> : <>{t("auth.verify")} <ArrowRight className="h-4 w-4" /></>}
                     </button>
                     <div className="text-center">
@@ -122,7 +122,7 @@ export function Login() {
                       <div className="relative">
                         <Mail className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[#7E8B96]" />
                         <input
-                          className="w-full rounded-full border border-white/15 bg-[#1A1A18] py-3 pl-11 pr-4 text-sm text-white placeholder-[#7E8B96] outline-none transition focus:border-[#c6ff34] focus:ring-2 focus:ring-[#c6ff34]/30"
+                          className="w-full rounded-full border border-white/15 bg-[#1A1A18] py-3 pl-11 pr-4 text-sm text-white placeholder-[#7E8B96] outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30"
                           value={email}
                           onChange={(e) => setEmail(e.target.value)}
                           placeholder="you@institution.edu"
@@ -135,7 +135,7 @@ export function Login() {
                       <div className="relative">
                         <Lock className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[#7E8B96]" />
                         <input
-                          className="w-full rounded-full border border-white/15 bg-[#1A1A18] py-3 pl-11 pr-11 text-sm text-white placeholder-[#7E8B96] outline-none transition focus:border-[#c6ff34] focus:ring-2 focus:ring-[#c6ff34]/30"
+                          className="w-full rounded-full border border-white/15 bg-[#1A1A18] py-3 pl-11 pr-11 text-sm text-white placeholder-[#7E8B96] outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30"
                           type={showPw ? "text" : "password"}
                           value={password}
                           onChange={(e) => setPassword(e.target.value)}
@@ -159,7 +159,7 @@ export function Login() {
                     <button
                       type="submit"
                       disabled={busy}
-                      className="flex w-full items-center justify-center gap-2 rounded-full px-5 py-3 text-sm font-bold text-[#111110] shadow-sm transition hover:brightness-95 disabled:opacity-70"
+                      className="flex w-full items-center justify-center gap-2 rounded-full px-5 py-3 text-sm font-bold text-[var(--brand-ink)] shadow-sm transition hover:brightness-95 disabled:opacity-70"
                       style={{ background: PURPLE }}
                     >
                       {busy ? <><Loader2 className="h-4 w-4 animate-spin" /> {t("auth.signingIn")}</> : <>{t("auth.signIn")} <ArrowRight className="h-4 w-4" /></>}
@@ -177,7 +177,7 @@ export function Login() {
 
           {/* Footer */}
           <div className="flex items-center justify-center gap-1.5 text-[11px] text-[#6E7C87]">
-            <ShieldCheck className="h-3.5 w-3.5 text-[#c6ff34]" /> Secured by <span className="font-semibold text-[#AEBAC2]">JevisLab</span> · Oriole
+            <ShieldCheck className="h-3.5 w-3.5 text-brand-400" /> Secured by <span className="font-semibold text-[#AEBAC2]">JevisLab</span> · Oriole
           </div>
         </div>
 
@@ -270,7 +270,7 @@ function LoginHero() {
               onClick={() => setSlide(i)}
               aria-label={`Go to slide ${i + 1}`}
               aria-current={i === slide}
-              className={`h-1.5 rounded-full transition-all ${i === slide ? "w-6 bg-[#c6ff34]" : "w-1.5 bg-white/30 hover:bg-white/50"}`}
+              className={`h-1.5 rounded-full transition-all ${i === slide ? "w-6 bg-brand-500" : "w-1.5 bg-white/30 hover:bg-white/50"}`}
             />
           ))}
         </div>

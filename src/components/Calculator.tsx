@@ -121,7 +121,7 @@ export function Calculator({ attemptId, type, allowKeyboard, saveHistory, state,
       <button
         onClick={openCalc}
         aria-label="Open calculator"
-        className="fixed bottom-5 right-5 z-30 flex h-12 w-12 items-center justify-center rounded-full bg-[#c6ff34] text-[#111110] shadow-lg transition-transform hover:scale-105"
+        className="fixed bottom-5 right-5 z-30 flex h-12 w-12 items-center justify-center rounded-full bg-brand-500 text-[var(--brand-ink)] shadow-lg transition-transform hover:scale-105"
       >
         <CalcIcon className="h-5 w-5" />
       </button>
@@ -229,8 +229,8 @@ function Btn({ label, onClick, variant, className }: { label: string; onClick: (
       onClick={onClick}
       className={clsx(
         "h-10 rounded-lg text-sm font-medium transition-colors",
-        variant === "eq" ? "bg-[#c6ff34] text-[#111110] hover:brightness-95"
-          : variant === "op" ? "bg-[var(--card-2)] text-[#c6ff34] hover:bg-[var(--border)]"
+        variant === "eq" ? "bg-brand-500 text-[var(--brand-ink)] hover:brightness-95"
+          : variant === "op" ? "bg-[var(--card-2)] text-brand-400 hover:bg-[var(--border)]"
           : variant === "fn" ? "bg-[var(--card-2)] text-[var(--muted)] hover:bg-[var(--border)]"
           : "bg-transparent border border-[var(--border)] hover:bg-[var(--card-2)]",
         className,

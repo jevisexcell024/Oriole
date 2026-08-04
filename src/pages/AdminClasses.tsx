@@ -219,7 +219,7 @@ export function ClassDetail() {
             <ul className="divide-y divide-[var(--border)]">
               {d.members.map((m) => (
                 <li key={m.id} className="flex items-center justify-between px-4 py-2.5">
-                  <Link to={`/admin/students/${m.id}`} className="flex items-center gap-2.5 hover:text-[#c6ff34]">
+                  <Link to={`/admin/students/${m.id}`} className="flex items-center gap-2.5 hover:text-brand-400">
                     <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#111110] text-[11px] font-bold text-white">{initials(m.name)}</span>
                     <span><span className="block text-sm font-medium">{m.name}</span><span className="block text-xs text-[var(--muted)]">{m.email}</span></span>
                   </Link>

@@ -91,7 +91,7 @@ export function AdminReports() {
 
             <h2 className="mt-6 text-sm font-semibold">{t("arep.exports")}</h2>
             <div className="mt-2 flex flex-wrap items-end gap-3 rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3">
-              <CalendarClock className="mb-1.5 h-4 w-4 text-[#c6ff34]" />
+              <CalendarClock className="mb-1.5 h-4 w-4 text-brand-400" />
               <label className="text-[11px] text-[var(--muted)]">{t("arep.from")}<input type="date" className="input mt-1 h-9 w-40" value={from} onChange={(e) => setFrom(e.target.value)} /></label>
               <label className="text-[11px] text-[var(--muted)]">{t("arep.to")}<input type="date" className="input mt-1 h-9 w-40" value={to} onChange={(e) => setTo(e.target.value)} /></label>
               {(from || to) && <button onClick={() => { setFrom(""); setTo(""); }} className="btn btn-ghost mb-0.5 h-9 text-xs">{t("arep.clear")}</button>}
@@ -122,7 +122,7 @@ export function AdminReports() {
             <p className="mt-4 text-xs text-[var(--muted)]">{t("arep.csvNote")}</p>
 
             {/* Scheduled exports */}
-            <h2 className="mt-8 flex items-center gap-2 text-sm font-semibold"><Send className="h-4 w-4 text-[#c6ff34]" /> {t("arep.scheduledExports")}</h2>
+            <h2 className="mt-8 flex items-center gap-2 text-sm font-semibold"><Send className="h-4 w-4 text-brand-400" /> {t("arep.scheduledExports")}</h2>
             <p className="text-xs text-[var(--muted)]">{t("arep.scheduledDesc")}</p>
 
             <div className="card mt-3 flex flex-wrap items-end gap-3 p-4">
@@ -150,7 +150,7 @@ export function AdminReports() {
                 {data.scheduled.map((s) => (
                   <div key={s.id} className="card flex flex-wrap items-center justify-between gap-3 p-3.5">
                     <div className="min-w-0">
-                      <p className="text-sm font-semibold">{t(RTITLE[s.reportKey] ?? s.title)} · <span className="text-[#c6ff34]">{s.frequency === "daily" ? t("arep.daily") : t("arep.weekly")}</span></p>
+                      <p className="text-sm font-semibold">{t(RTITLE[s.reportKey] ?? s.title)} · <span className="text-brand-400">{s.frequency === "daily" ? t("arep.daily") : t("arep.weekly")}</span></p>
                       <p className="truncate text-xs text-[var(--muted)]">{s.recipients.join(", ")}{s.lastSentAt ? ` · ${t("arep.lastSent", { date: new Date(s.lastSentAt).toLocaleDateString() })}` : ` · ${t("arep.notSent")}`}</p>
                     </div>
                     <button onClick={() => removeSchedule(s.id)} className="rounded-lg p-2 text-[var(--muted)] hover:bg-rose-500/10 hover:text-rose-400" title={t("arep.scheduledExports")}><Trash2 className="h-4 w-4" /></button>

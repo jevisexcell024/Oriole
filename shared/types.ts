@@ -225,6 +225,18 @@ export interface PlatformMaintenance {
   updatedBy: string;
 }
 
+/** Singleton (single row, id: "platform") — the accent color a newly-created
+ *  or never-customized tenant's Admin console uses. A tenant's own
+ *  OrgSettings.brandColor, when set, wins over this. Changing this later
+ *  re-themes every tenant that never set their own color, by design — it's
+ *  a live default, not a one-time seed value. */
+export interface PlatformBranding {
+  id: "platform";
+  defaultBrandColor: string;
+  updatedAt: string;
+  updatedBy: string;
+}
+
 /** A maintenance window scheduled in advance — the platform-wide "Maintenance
  *  Mode" toggle above is manual/immediate; this is its scheduled counterpart.
  *  A 60s sweep (server/index.ts) flips PlatformMaintenance on/off as each
@@ -874,6 +886,12 @@ export interface OrgSettings {
   phone?: string;
   address?: string;
   plan?: string;                 // display-only subscription tier
+  /** Hex accent color for this school's own Admin console — overrides the
+   *  platform default (PlatformBranding.defaultBrandColor) when set. Unset
+   *  means "use whatever the platform default currently is", not "use
+   *  today's default forever" — a later platform-default change still
+   *  applies to every tenant that never picked their own color. */
+  brandColor?: string | null;
   /** Reusable named rubrics a grader can save once and apply to essay/code questions. */
   rubricLibrary?: { id: string; name: string; criteria: RubricCriterion[] }[];
   /** Cadence for the admin summary email digest. */

@@ -39,7 +39,7 @@ function InboxView() {
   return (
     <div className="fade-in max-w-[860px]">
       <PageHeader
-        title={<span className="inline-flex items-center gap-2"><InboxIcon className="h-6 w-6" /> {t("inbox.title")}{unreadCount > 0 ? <span className="rounded-full bg-[#c6ff34] px-2 py-0.5 text-xs font-bold text-[#111110]">{unreadCount}</span> : null}</span>}
+        title={<span className="inline-flex items-center gap-2"><InboxIcon className="h-6 w-6" /> {t("inbox.title")}{unreadCount > 0 ? <span className="rounded-full bg-brand-500 px-2 py-0.5 text-xs font-bold text-[var(--brand-ink)]">{unreadCount}</span> : null}</span>}
         subtitle={t("inbox.subtitle")}
         actions={unreadCount > 0 ? <button onClick={markAll} className="btn btn-ghost-teal"><CheckCheck className="h-4 w-4" /> {t("inbox.markAll")}</button> : undefined}
       />
@@ -60,10 +60,10 @@ function InboxView() {
             const unread = isUnread(n);
             return (
               <button key={n.id} onClick={() => { markAll(); navigate(n.link); }}
-                className={clsx("flex w-full items-start gap-3 px-4 py-3.5 text-left transition hover:bg-[var(--card-2)]", unread && "bg-[rgba(198,255,52,0.05)]")}>
+                className={clsx("flex w-full items-start gap-3 px-4 py-3.5 text-left transition hover:bg-[var(--card-2)]", unread && "bg-[color-mix(in oklch, var(--color-brand-500) 5%, transparent)]")}>
                 <span className="relative mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full" style={{ background: `${tint}22`, color: tint }}>
                   <Icon className="h-4 w-4" />
-                  {unread && <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-[#c6ff34] ring-2 ring-[var(--card)]" />}
+                  {unread && <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-brand-500 ring-2 ring-[var(--card)]" />}
                 </span>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">

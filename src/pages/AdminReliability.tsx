@@ -15,7 +15,7 @@ import { api } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { clsx } from "clsx";
 
-const LIME = "#c6ff34";
+const LIME = "var(--color-brand-500)";
 const CYAN = "#22d3ee";
 const ROSE = "#f43f5e";
 const AMBER = "#f59e0b";
@@ -280,7 +280,7 @@ export function AdminReliability() {
               <div className="card p-5">
                 <div className="flex items-center justify-between">
                   <h2 className="flex items-center gap-2 text-sm font-semibold"><Gauge className="h-4 w-4 text-brand-400" /> {t("relc.reliabilityScore")}</h2>
-                  <span className="font-display text-2xl font-bold tabular-nums text-[#c6ff34]">{score.score}</span>
+                  <span className="font-display text-2xl font-bold tabular-nums text-brand-400">{score.score}</span>
                 </div>
                 <div className="mt-3 space-y-2">
                   <ScoreBar label={t("relc.scoreUptime")} value={score.breakdown.uptimeComponent} />

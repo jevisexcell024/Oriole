@@ -52,7 +52,7 @@ export function ForcePasswordChange() {
       <div className="w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6 shadow-xl sm:p-8">
         <div className="flex justify-center"><span className="flex h-9 w-9 items-center justify-center rounded-lg bg-white p-1"><BrandMark className="h-full w-full object-contain" /></span></div>
         <div className="mt-5 flex justify-center">
-          <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#c6ff34]/15 text-[#8fb31f]"><KeyRound className="h-6 w-6" /></span>
+          <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-500/15 text-[#8fb31f]"><KeyRound className="h-6 w-6" /></span>
         </div>
         <h1 className="mt-4 text-center text-lg font-bold">{t("fpc.title")}</h1>
         <p className="mt-1.5 text-center text-sm text-[var(--muted)]">{t("fpc.body")}</p>

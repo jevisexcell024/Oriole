@@ -18,7 +18,7 @@ const BG = "var(--bg)";
 const CARD = "var(--card)";
 const SURFACE = "var(--card-2)";
 const DEEP = "var(--border-strong)";
-const LIME = "#c8f000";
+const LIME = "var(--color-brand-500)";
 const CYAN = "#22d3ee";
 const PURPLE = "#c084fc";
 const AMBER = "#f59e0b";
@@ -259,7 +259,7 @@ export function Dashboard() {
                 <div className="flex items-start justify-between">
                   <PanelTitle title="Hours Activity" sub="Time spent in exams · last 7 days" />
                   {weekOverWeekPct !== null && (
-                    <span className="flex items-center gap-1 rounded-md" style={{ fontSize: 10, fontWeight: 600, color: weekOverWeekPct >= 0 ? LIME : DESTRUCTIVE, background: `${weekOverWeekPct >= 0 ? LIME : DESTRUCTIVE}18`, padding: "3px 8px" }}>
+                    <span className="flex items-center gap-1 rounded-md" style={{ fontSize: 10, fontWeight: 600, color: weekOverWeekPct >= 0 ? LIME : DESTRUCTIVE, background: weekOverWeekPct >= 0 ? "color-mix(in oklch, var(--color-brand-500) 9%, transparent)" : `${DESTRUCTIVE}18`, padding: "3px 8px" }}>
                       {weekOverWeekPct >= 0 ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />} {weekOverWeekPct >= 0 ? "+" : ""}{weekOverWeekPct}% vs last week
                     </span>
                   )}
@@ -321,7 +321,7 @@ export function Dashboard() {
                   <div className="flex" style={{ gap: 2 }}>
                     {([["active", "Active"], ["all", "All"]] as const).map(([key, label]) => (
                       <button key={key} onClick={() => setActiveOnly(key === "active")} className="transition"
-                        style={{ padding: "4px 10px", borderRadius: 999, fontSize: 11, background: (activeOnly ? "active" : "all") === key ? "rgba(200,240,0,0.12)" : "transparent", color: (activeOnly ? "active" : "all") === key ? LIME : DIM }}>
+                        style={{ padding: "4px 10px", borderRadius: 999, fontSize: 11, background: (activeOnly ? "active" : "all") === key ? "color-mix(in oklch, var(--color-brand-500) 12%, transparent)" : "transparent", color: (activeOnly ? "active" : "all") === key ? LIME : DIM }}>
                         {label}
                       </button>
                     ))}
@@ -489,7 +489,7 @@ function MiniCalendar({ exams }: { exams: ExamListItem[] }) {
           return (
             <Link key={i} to={byDay.get(key(d))?.[0] ? `/exams/${byDay.get(key(d))![0].registration.id}/checkin` : "/calendar"}
               className="flex flex-col items-center justify-center gap-1 transition hover:opacity-80">
-              <span className="flex items-center justify-center font-medium transition" style={{ fontFamily: MONO, width: 26, height: 26, borderRadius: "50%", fontSize: 11, background: isToday ? LIME : "transparent", color: isToday ? "#0c0c0c" : has ? LIME : inMonth ? FG : "color-mix(in oklch, var(--muted) 55%, transparent)", fontWeight: isToday ? 700 : 400 }}>
+              <span className="flex items-center justify-center font-medium transition" style={{ fontFamily: MONO, width: 26, height: 26, borderRadius: "50%", fontSize: 11, background: isToday ? LIME : "transparent", color: isToday ? "var(--brand-ink)" : has ? LIME : inMonth ? FG : "color-mix(in oklch, var(--muted) 55%, transparent)", fontWeight: isToday ? 700 : 400 }}>
                 {d.getDate()}
               </span>
             </Link>

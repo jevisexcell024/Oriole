@@ -33,7 +33,7 @@ export function AdminSimilarity() {
         {data && (
           <>
             <div className="mt-5 flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3 text-sm">
-              <ShieldAlert className="h-4 w-4 text-[#c6ff34]" />
+              <ShieldAlert className="h-4 w-4 text-brand-400" />
               Compared written answers across <span className="font-semibold">{data.scannedQuestions}</span> question{data.scannedQuestions === 1 ? "" : "s"} and <span className="font-semibold">{data.attempts}</span> submission{data.attempts === 1 ? "" : "s"}.
               <span className="text-xs text-[var(--muted)]">Pairs at or above {data.threshold}% character similarity are flagged.</span>
             </div>

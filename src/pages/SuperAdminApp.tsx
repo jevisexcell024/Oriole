@@ -15,6 +15,7 @@ import { SuperAdminTickets } from "@/pages/SuperAdminTickets";
 import { SuperAdminInstitutions } from "@/pages/SuperAdminInstitutions";
 import { SuperAdminTenantDetail } from "@/pages/SuperAdminTenantDetail";
 import { SuperAdminMonitoring } from "@/pages/SuperAdminMonitoring";
+import { SuperAdminBranding } from "@/pages/SuperAdminBranding";
 import { SuperAdminPlans } from "@/pages/SuperAdminPlans";
 import { SuperAdminLicenses } from "@/pages/SuperAdminLicenses";
 import { SuperAdminLicenseKeys } from "@/pages/SuperAdminLicenseKeys";
@@ -51,6 +52,7 @@ function SuperAdminRoutes() {
       <Route path="institutions" element={<SuperAdminProtected><SuperAdminInstitutions /></SuperAdminProtected>} />
       <Route path="institutions/:id" element={<SuperAdminProtected><SuperAdminTenantDetail /></SuperAdminProtected>} />
       <Route path="monitoring" element={<SuperAdminProtected><SuperAdminMonitoring /></SuperAdminProtected>} />
+      <Route path="branding" element={<SuperAdminProtected><SuperAdminBranding /></SuperAdminProtected>} />
       <Route path="plans" element={<SuperAdminProtected><SuperAdminPlans /></SuperAdminProtected>} />
       <Route path="licenses" element={<SuperAdminProtected><SuperAdminLicenses /></SuperAdminProtected>} />
       <Route path="license-keys" element={<SuperAdminProtected><SuperAdminLicenseKeys /></SuperAdminProtected>} />

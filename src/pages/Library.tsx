@@ -14,8 +14,8 @@ import type { Book, ResourceType, ResourceVersion } from "@shared/types";
 import { RESOURCE_TYPES } from "@shared/types";
 import { clsx } from "clsx";
 
-const LIME = "oklch(0.86 0.18 112)";
-const LIME_TINT = "oklch(0.86 0.18 112 / 0.45)";
+const LIME = "var(--color-brand-500)";
+const LIME_TINT = "color-mix(in oklch, var(--color-brand-500) 45%, transparent)";
 
 const TYPE_ICON: Record<ResourceType, typeof BookOpen> = {
   "Textbook": BookOpen, "Lecture Notes": NotebookPen, "Past Questions": FileQuestion, "Video": Video, "Audio": Music,
@@ -225,8 +225,8 @@ function ResourceCard({ item, onOpen, onChanged }: { item: Item; onOpen: () => v
       <div className="relative">
         <BookCover title={book.title} coverImage={book.coverImage} progressPercent={item.progress ? pct(book, item.progress) : null} onRead={onOpen} />
         <div className="absolute left-1.5 top-1.5 flex gap-1">
-          {isNew(book.createdAt) && <span className="rounded-full px-1.5 py-0.5 text-[9px] font-bold text-[#08090a]" style={{ background: LIME }}>NEW</span>}
-          {isUpdated(book) && <span className="rounded-full bg-cyan-400 px-1.5 py-0.5 text-[9px] font-bold text-[#08090a]">UPDATED</span>}
+          {isNew(book.createdAt) && <span className="rounded-full px-1.5 py-0.5 text-[9px] font-bold text-[var(--brand-ink)]" style={{ background: LIME }}>NEW</span>}
+          {isUpdated(book) && <span className="rounded-full bg-cyan-400 px-1.5 py-0.5 text-[9px] font-bold text-[var(--brand-ink)]">UPDATED</span>}
         </div>
         <button onClick={toggleBookmark} disabled={busy}
           className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-black/60 text-white/80 opacity-0 transition group-hover:opacity-100 hover:text-white">
@@ -358,7 +358,7 @@ function ResourceDetailModal({ item, onClose, onChanged }: { item: Item; onClose
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {kind && canPreview && (
-            <button onClick={() => setReading(true)} className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold text-[#08090a]" style={{ background: LIME }}>
+            <button onClick={() => setReading(true)} className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold text-[var(--brand-ink)]" style={{ background: LIME }}>
               <BookOpenCheck className="h-3.5 w-3.5" /> Read online
             </button>
           )}
@@ -399,7 +399,7 @@ function ResourceDetailModal({ item, onClose, onChanged }: { item: Item; onClose
               <input type="number" min={0} max={book.totalPages} value={page}
                 onChange={(e) => setPage(Math.max(0, Math.min(book.totalPages, Number(e.target.value))))}
                 className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-[oklch(0.86_0.18_112)]" />
-              <button onClick={saveProgress} disabled={busy} className="shrink-0 rounded-lg px-3.5 py-2 text-xs font-bold text-[#08090a] disabled:opacity-60" style={{ background: LIME }}>
+              <button onClick={saveProgress} disabled={busy} className="shrink-0 rounded-lg px-3.5 py-2 text-xs font-bold text-[var(--brand-ink)] disabled:opacity-60" style={{ background: LIME }}>
                 {busy ? "Saving…" : "Save"}
               </button>
             </div>

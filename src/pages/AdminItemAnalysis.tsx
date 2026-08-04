@@ -175,7 +175,7 @@ export function AdminItemAnalysis() {
       </div>
     ) },
     { key: "actions", header: t("aitem.colActions"), sortValue: () => 0, th: "text-right", td: "text-right", render: (i) => (
-      <button onClick={() => setOpenQuestion(i)} className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-[#c6ff34] hover:bg-[#c6ff34]/10" title={t("aitem.viewResponses")}>
+      <button onClick={() => setOpenQuestion(i)} className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-brand-400 hover:bg-brand-500/10" title={t("aitem.viewResponses")}>
         <MessageSquareText className="h-3.5 w-3.5" /> {t("aitem.viewResponses")}
       </button>
     ) },
@@ -198,7 +198,7 @@ export function AdminItemAnalysis() {
     { key: "integrity", header: t("aitem.colIntegrity"), sortValue: (a) => a.integrity, csv: (a) => String(a.integrity), th: "text-right", td: "text-right tabular-nums", render: (a) => a.flagCount > 0 ? <span className="text-rose-500">{a.integrity}</span> : a.integrity },
     { key: "submitted", header: t("aitem.colSubmitted"), sortValue: (a) => a.submittedAt ?? "", csv: (a) => a.submittedAt ?? "", render: (a) => a.submittedAt ? new Date(a.submittedAt).toLocaleString() : "—" },
     { key: "actions", header: t("aitem.colActions"), sortValue: () => 0, th: "text-right", td: "text-right", render: (a) => (
-      <Link to={`/admin/attempts/${a.id}`} className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-[#c6ff34] hover:bg-[#c6ff34]/10">
+      <Link to={`/admin/attempts/${a.id}`} className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-brand-400 hover:bg-brand-500/10">
         <ExternalLink className="h-3.5 w-3.5" /> {t("aitem.viewAttempt")}
       </Link>
     ) },
@@ -298,7 +298,7 @@ export function AdminItemAnalysis() {
                   }}
                   className={clsx(
                     "inline-flex items-center gap-1.5 border-b-2 px-3 py-2.5 text-sm font-medium transition",
-                    tab === tb.id ? "border-[#c6ff34] text-[var(--fg)]" : "border-transparent text-[var(--muted)] hover:text-[var(--fg)]",
+                    tab === tb.id ? "border-brand-500 text-[var(--fg)]" : "border-transparent text-[var(--muted)] hover:text-[var(--fg)]",
                   )}
                 >
                   <tb.icon className="h-4 w-4" /> {t(tb.labelKey)}
@@ -315,18 +315,18 @@ export function AdminItemAnalysis() {
                     <div className="mt-5 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
                       <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]"><BarChart3 className="h-3.5 w-3.5" /> {t("aitem.insightsTitle")}</p>
                       <ul className="mt-2 space-y-1.5">
-                        {insights.map((line, i) => <li key={i} className="flex gap-2 text-sm"><span className="text-[#c6ff34]">•</span><span>{line}</span></li>)}
+                        {insights.map((line, i) => <li key={i} className="flex gap-2 text-sm"><span className="text-brand-400">•</span><span>{line}</span></li>)}
                       </ul>
                     </div>
                   ) : null;
                 })()}
                 <div className="mt-5 grid gap-3 sm:grid-cols-[1fr_auto]">
                   <div className="flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3 text-sm">
-                    <Users className="h-4 w-4 text-[#c6ff34]" /> {t("aitem.summary", { attempts: data.attempts, items: data.items.length })}
+                    <Users className="h-4 w-4 text-brand-400" /> {t("aitem.summary", { attempts: data.attempts, items: data.items.length })}
                     <span className="ml-2 hidden text-xs text-[var(--muted)] lg:inline">{t("aitem.summaryHint")}</span>
                   </div>
                   <div className="flex items-center gap-3 rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3" title={t("aitem.alphaTitle")}>
-                    <Activity className="h-4 w-4 text-[#c6ff34]" />
+                    <Activity className="h-4 w-4 text-brand-400" />
                     <div className="leading-tight">
                       <p className="text-[10px] uppercase tracking-wide text-[var(--muted)]">{t("aitem.reliability")}</p>
                       {data.alpha === null ? (
@@ -386,14 +386,14 @@ export function AdminItemAnalysis() {
             {tab === "reports" && (
               <div className="mt-6 grid gap-3 sm:grid-cols-2">
                 <Link to="/admin/reports" className="card card-hover flex items-center gap-3 p-4">
-                  <FileBarChart2 className="h-5 w-5 shrink-0 text-[#c6ff34]" />
+                  <FileBarChart2 className="h-5 w-5 shrink-0 text-brand-400" />
                   <span>
                     <span className="block text-sm font-semibold">{t("aitem.reportsLinkTitle")}</span>
                     <span className="block text-xs text-[var(--muted)]">{t("aitem.reportsLinkBody")}</span>
                   </span>
                 </Link>
                 <Link to={`/admin/exams/${examId}/similarity`} className="card card-hover flex items-center gap-3 p-4">
-                  <ShieldAlert className="h-5 w-5 shrink-0 text-[#c6ff34]" />
+                  <ShieldAlert className="h-5 w-5 shrink-0 text-brand-400" />
                   <span>
                     <span className="block text-sm font-semibold">{t("aitem.similarityLinkTitle")}</span>
                     <span className="block text-xs text-[var(--muted)]">{t("aitem.similarityLinkBody")}</span>
@@ -407,21 +407,21 @@ export function AdminItemAnalysis() {
                 <p className="mb-4 max-w-2xl text-xs text-[var(--muted)]">{t("aitem.exportsTabHint")}</p>
                 <div className="grid gap-3 sm:grid-cols-2">
                 <div className="card p-4">
-                  <p className="flex items-center gap-2 text-sm font-semibold"><Sheet className="h-4 w-4 text-[#c6ff34]" /> {t("aitem.exportAnswerSheet")}</p>
+                  <p className="flex items-center gap-2 text-sm font-semibold"><Sheet className="h-4 w-4 text-brand-400" /> {t("aitem.exportAnswerSheet")}</p>
                   <p className="mt-1 text-xs text-[var(--muted)]">{t("aitem.exportAnswerSheetBody")}</p>
                   <button onClick={exportAnswerSheet} disabled={exportingSheet} className="btn btn-primary mt-3 disabled:opacity-50">
                     {exportingSheet ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sheet className="h-4 w-4" />} {t("aitem.exportAnswerSheet")}
                   </button>
                 </div>
                 <div className="card p-4">
-                  <p className="flex items-center gap-2 text-sm font-semibold"><Printer className="h-4 w-4 text-[#c6ff34]" /> {t("aitem.printReport")}</p>
+                  <p className="flex items-center gap-2 text-sm font-semibold"><Printer className="h-4 w-4 text-brand-400" /> {t("aitem.printReport")}</p>
                   <p className="mt-1 text-xs text-[var(--muted)]">{t("aitem.printReportBody")}</p>
                   <button onClick={() => window.print()} className="btn btn-primary mt-3">
                     <Printer className="h-4 w-4" /> {t("aitem.printReport")}
                   </button>
                 </div>
                 <div className="card p-4">
-                  <p className="flex items-center gap-2 text-sm font-semibold"><Presentation className="h-4 w-4 text-[#c6ff34]" /> {t("aitem.exportPptx")}</p>
+                  <p className="flex items-center gap-2 text-sm font-semibold"><Presentation className="h-4 w-4 text-brand-400" /> {t("aitem.exportPptx")}</p>
                   <p className="mt-1 text-xs text-[var(--muted)]">{t("aitem.exportPptxBody")}</p>
                   <button onClick={exportPowerPoint} disabled={exportingPptx} className="btn btn-primary mt-3 disabled:opacity-50">
                     {exportingPptx ? <Loader2 className="h-4 w-4 animate-spin" /> : <Presentation className="h-4 w-4" />} {t("aitem.exportPptx")}

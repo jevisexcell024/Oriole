@@ -91,7 +91,7 @@ export function GeofenceMap({
       <FitToCenters centers={centers} candidates={candidates} />
       {centers.map((c) => (
         <Fragment key={c.id}>
-          <Circle center={[c.lat, c.lng]} radius={c.radiusM} pathOptions={{ color: "#c6ff34", fillColor: "#c6ff34", fillOpacity: 0.15, weight: 2 }} />
+          <Circle center={[c.lat, c.lng]} radius={c.radiusM} pathOptions={{ color: "var(--color-brand-500)", fillColor: "var(--color-brand-500)", fillOpacity: 0.15, weight: 2 }} />
           <Marker
             position={[c.lat, c.lng]}
             draggable={!!onMove}

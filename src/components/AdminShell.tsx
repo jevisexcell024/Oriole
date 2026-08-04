@@ -136,12 +136,12 @@ export function AdminShell({ children }: { children: ReactNode; wide?: boolean }
           "group relative flex items-center gap-2.5 rounded-[3px] px-3 py-2 text-[13px] font-medium transition",
           collapsed && "lg:justify-center lg:px-0",
           active
-            ? "bg-[#c6ff34] text-[#111110]"
-            : "text-[#D7E3E6] hover:bg-[#c6ff34] hover:text-[#111110]",
+            ? "bg-brand-500 text-[var(--brand-ink)]"
+            : "text-[#D7E3E6] hover:bg-brand-500 hover:text-[var(--brand-ink)]",
         )}
       >
-        {active && <span className="absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-full bg-[#111110]" />}
-        <item.icon className={clsx("h-4 w-4 shrink-0 transition-colors", active ? "text-[#111110]" : "text-[#9FBCC2] group-hover:text-[#111110]")} />
+        {active && <span className="absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-full bg-[var(--brand-ink)]" />}
+        <item.icon className={clsx("h-4 w-4 shrink-0 transition-colors", active ? "text-[var(--brand-ink)]" : "text-[#9FBCC2] group-hover:text-[var(--brand-ink)]")} />
         <span className={clsx("flex-1", collapsed && "lg:hidden")}>{t(item.labelKey)}</span>
         {item.badge && (
           <span className={clsx("inline-flex items-center gap-1 rounded-full bg-rose-500/15 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-400 ring-1 ring-inset ring-rose-500/25", collapsed && "lg:hidden")}>
@@ -188,10 +188,10 @@ export function AdminShell({ children }: { children: ReactNode; wide?: boolean }
             <span className="block text-[11px] font-medium text-[#9FBCC2]">{t("anav.adminConsole")}</span>
           </div>
           <button onClick={() => setCollapsed(true)} aria-label={t("anav.collapse")} title={t("anav.collapse")}
-            className={clsx("ml-auto hidden rounded-lg p-1.5 text-[#9FBCC2] hover:bg-[#c6ff34] hover:text-[#111110]", !collapsed && "lg:inline-flex")}>
+            className={clsx("ml-auto hidden rounded-lg p-1.5 text-[#9FBCC2] hover:bg-brand-500 hover:text-[var(--brand-ink)]", !collapsed && "lg:inline-flex")}>
             <ChevronsLeft className="h-4 w-4" />
           </button>
-          <button onClick={() => setMobileOpen(false)} aria-label={t("anav.closeMenu")} className="ml-auto rounded-lg p-1.5 text-[#9FBCC2] hover:bg-[#c6ff34] hover:text-[#111110] lg:hidden">
+          <button onClick={() => setMobileOpen(false)} aria-label={t("anav.closeMenu")} className="ml-auto rounded-lg p-1.5 text-[#9FBCC2] hover:bg-brand-500 hover:text-[var(--brand-ink)] lg:hidden">
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -224,20 +224,20 @@ export function AdminShell({ children }: { children: ReactNode; wide?: boolean }
 
         {/* User (→ account settings) + sign out */}
         <div className={clsx("flex items-center gap-2.5 border-t border-[var(--border)] px-4 py-3", collapsed && "lg:flex-col lg:gap-2 lg:px-2")}>
-          <Link to="/admin/account" className={clsx("group flex min-w-0 flex-1 items-center gap-2.5 rounded-[3px] p-1 hover:bg-[#c6ff34]", collapsed && "lg:flex-none")} title={t("acct.title")}>
+          <Link to="/admin/account" className={clsx("group flex min-w-0 flex-1 items-center gap-2.5 rounded-[3px] p-1 hover:bg-brand-500", collapsed && "lg:flex-none")} title={t("acct.title")}>
             {user?.avatarUrl
               ? <img src={user.avatarUrl} alt="" className="h-9 w-9 shrink-0 rounded-full object-cover" />
               : <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#111110] text-sm font-bold text-white">
                   {user?.name?.split(" ").map((w) => w[0]).slice(0, 2).join("")}
                 </div>}
             <div className={clsx("min-w-0 flex-1", collapsed && "lg:hidden")}>
-              <p className="truncate text-sm font-semibold leading-tight text-white group-hover:text-[#111110]">{user?.name}</p>
-              <p className="text-xs capitalize text-[#9FBCC2] group-hover:text-[#111110]">{user?.role}</p>
+              <p className="truncate text-sm font-semibold leading-tight text-white group-hover:text-[var(--brand-ink)]">{user?.name}</p>
+              <p className="text-xs capitalize text-[#9FBCC2] group-hover:text-[var(--brand-ink)]">{user?.role}</p>
             </div>
           </Link>
           <ThemeToggle className={clsx("shrink-0", collapsed && "lg:hidden")} />
           <button
-            className="rounded-lg p-2 text-[#9FBCC2] hover:bg-[#c6ff34] hover:text-[#111110]"
+            className="rounded-lg p-2 text-[#9FBCC2] hover:bg-brand-500 hover:text-[var(--brand-ink)]"
             title={t("anav.signOut")}
             onClick={async () => { await logout(); navigate("/login"); }}
           >

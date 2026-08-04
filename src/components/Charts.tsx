@@ -6,7 +6,7 @@
  * the middle. Prefer this over bars for proportions and rates.
  */
 export function RadialGauge({
-  value, max = 100, color = "#c6ff34", track = "var(--card-2)",
+  value, max = 100, color = "var(--color-brand-500)", track = "var(--card-2)",
   size = 96, thickness = 9, display, label,
 }: {
   value: number;
@@ -93,7 +93,7 @@ export function SegmentDonut({
  * series. A calm, glanceable alternative to a bar chart for time data.
  */
 export function TrendLine({
-  data, color = "#c6ff34", height = 120, yMax,
+  data, color = "var(--color-brand-500)", height = 120, yMax,
 }: {
   data: { label: string; value: number }[];
   color?: string;

@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { Loader2, CheckCircle2, Mail, Send, MessageSquare, Gauge, Headphones } from "lucide-react";
+import { Loader2, CheckCircle2, Mail, Send, MessageSquare, Gauge, Headphones, Palette } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
 import { ErrorBanner } from "@/components/ui";
 import { api } from "@/lib/api";
 import { PageHeader } from "@/components/PageHeader";
 import { useT } from "@/lib/i18n";
+import { useAuth } from "@/lib/auth";
 import { clsx } from "clsx";
 
 interface Settings {
@@ -18,12 +19,17 @@ interface Settings {
   reliabilityAlertSmsNumbers?: string[];
   reliabilityNotifyOnDegraded?: boolean;
   mediaAssessmentEnabled?: boolean;
+  brandColor?: string | null;
 }
+
+const HEX_RE = /^#[0-9a-fA-F]{6}$/;
+const BRAND_PRESETS = ["#c6ff34", "#22d3ee", "#c084fc", "#fb923c", "#4ade80", "#f43f5e", "#60a5fa", "#f59e0b"];
 interface SmsStatus { mode: string; channel: string; live: boolean; from: string | null; }
 type SaveStatus = "idle" | "saving" | "saved";
 
 export function AdminSettings() {
   const t = useT();
+  const { brandColor: effectiveBrandColor, refresh: refreshAuth } = useAuth();
   const [s, setS] = useState<Settings | null>(null);
   const [status, setStatus] = useState<SaveStatus>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -37,6 +43,7 @@ export function AdminSettings() {
   const [alertSmsText, setAlertSmsText] = useState("");
   const [scoreBandsText, setScoreBandsText] = useState("");
   const [scoreBandsErr, setScoreBandsErr] = useState(false);
+  const [brandColorText, setBrandColorText] = useState("");
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const sendSmsTest = async () => {
@@ -59,6 +66,7 @@ export function AdminSettings() {
       setAlertEmailsText((d.settings.reliabilityAlertEmails ?? []).join(", "));
       setAlertSmsText((d.settings.reliabilityAlertSmsNumbers ?? []).join(", "));
       setScoreBandsText((d.settings.scoreBandEdges ?? [20, 40, 60, 80]).join(", "));
+      setBrandColorText(d.settings.brandColor ?? "");
     }).catch((e) => setError(e.message));
   }, []);
   useEffect(() => { api.get<SmsStatus>("/admin/sms/status").then(setSms).catch(() => {}); }, []);
@@ -73,6 +81,19 @@ export function AdminSettings() {
       try { await api.patch("/admin/settings", partial); setStatus("saved"); }
       catch (e) { setError((e as Error).message); setStatus("idle"); }
     }, 500);
+  };
+
+  // Brand color skips the debounce (color-picker drags fire many events) and
+  // re-fetches /auth/me afterward so the console re-themes immediately.
+  const saveBrandColor = async (value: string | null) => {
+    setS((cur) => (cur ? { ...cur, brandColor: value } : cur));
+    setStatus("saving");
+    setError(null);
+    try {
+      await api.patch("/admin/settings", { brandColor: value });
+      setStatus("saved");
+      await refreshAuth();
+    } catch (e) { setError((e as Error).message); setStatus("idle"); }
   };
 
   return (
@@ -207,6 +228,50 @@ export function AdminSettings() {
             <p className="text-xs text-[var(--muted)]">{t("aset.mediaModuleHint")}</p>
             <div className="mt-3 space-y-3">
               <Toggle label={t("aset.mediaModuleToggle")} hint={t("aset.mediaModuleToggleHint")} on={s.mediaAssessmentEnabled ?? false} onChange={(v) => update({ mediaAssessmentEnabled: v })} />
+            </div>
+
+            <h2 className="mt-6 flex items-center gap-2 text-sm font-semibold"><Palette className="h-4 w-4 text-brand-400" /> Branding</h2>
+            <p className="text-xs text-[var(--muted)]">Pick your own accent color for this console, or leave it on the platform default.</p>
+            <div className="mt-3 space-y-3">
+              <div className="rounded-xl border border-[var(--border)] p-3">
+                <div className="flex flex-wrap items-center gap-3">
+                  <input
+                    type="color"
+                    value={HEX_RE.test(brandColorText) ? brandColorText : effectiveBrandColor}
+                    onChange={(e) => { setBrandColorText(e.target.value); saveBrandColor(e.target.value); }}
+                    className="h-9 w-12 shrink-0 cursor-pointer rounded-lg border border-[var(--border)] bg-transparent p-1"
+                  />
+                  <input
+                    className="input h-9 w-32 font-mono uppercase"
+                    value={brandColorText}
+                    placeholder={effectiveBrandColor.toUpperCase()}
+                    maxLength={7}
+                    onChange={(e) => setBrandColorText(e.target.value)}
+                    onBlur={() => { if (HEX_RE.test(brandColorText)) saveBrandColor(brandColorText); }}
+                  />
+                  <button
+                    className="btn btn-outline h-9 disabled:opacity-50"
+                    disabled={!s.brandColor}
+                    onClick={() => { setBrandColorText(""); saveBrandColor(null); }}
+                  >
+                    Use platform default
+                  </button>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {BRAND_PRESETS.map((p) => (
+                    <button
+                      key={p}
+                      onClick={() => { setBrandColorText(p); saveBrandColor(p); }}
+                      title={p}
+                      className="h-6 w-6 rounded-full border-2 transition"
+                      style={{ background: p, borderColor: brandColorText.toLowerCase() === p.toLowerCase() ? "var(--fg)" : "transparent" }}
+                    />
+                  ))}
+                </div>
+                <p className="mt-2 text-xs text-[var(--muted)]">
+                  {s.brandColor ? "Using your own color — it overrides the platform default." : "Currently using the platform default."}
+                </p>
+              </div>
             </div>
           </div>
         )}

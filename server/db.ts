@@ -14,7 +14,7 @@ import type {
   Faculty, Department, Program, Campus, AcademicYear, ClassGroup, RegradeRequest, Book, ReadingProgress,
   ResourceVersion, ResourceBookmark, ResourceRating, ResourceDownloadLog, GeofenceLog, CustomRole,
   ReliabilityIncident, ReliabilitySample, ReliabilityDailyRollup, ReliabilitySubsystemKey, MediaAsset, SuperAdmin,
-  PlatformMaintenance, EmailTemplate, SupportTicket, Tenant, Plan, LicenseKey, MaintenanceWindow,
+  PlatformMaintenance, EmailTemplate, SupportTicket, Tenant, Plan, LicenseKey, MaintenanceWindow, PlatformBranding,
 } from "../shared/types.ts";
 import { DEFAULT_LOCKDOWN, DEFAULT_LEARNING_STRUCTURE } from "../shared/types.ts";
 
@@ -41,6 +41,7 @@ export interface Schema {
   plans: Plan[];
   licenseKeys: LicenseKey[];
   maintenanceWindows: MaintenanceWindow[];
+  branding: PlatformBranding[];
   exams: Exam[];
   questions: Question[];
   registrations: Registration[];
@@ -84,7 +85,7 @@ const gunzipAsync = promisify(gunzip);
 
 const defaultData: Schema = {
   tenants: [],
-  users: [], superAdmins: [], maintenance: [], emailTemplates: [], supportTickets: [], plans: [], licenseKeys: [], maintenanceWindows: [], exams: [], questions: [], registrations: [],
+  users: [], superAdmins: [], maintenance: [], emailTemplates: [], supportTickets: [], plans: [], licenseKeys: [], maintenanceWindows: [], branding: [], exams: [], questions: [], registrations: [],
   attempts: [], certificates: [], announcements: [],
   settings: [],
   faculties: [], departments: [], programs: [], campuses: [], academicYears: [], classes: [], regradeRequests: [],
@@ -108,6 +109,7 @@ const TABLES: { key: keyof Schema; table: string; idField: string }[] = [
   { key: "plans", table: "plans", idField: "id" },
   { key: "licenseKeys", table: "license_keys", idField: "id" },
   { key: "maintenanceWindows", table: "maintenance_windows", idField: "id" },
+  { key: "branding", table: "branding", idField: "id" },
   { key: "exams", table: "exams", idField: "id" },
   { key: "questions", table: "questions", idField: "id" },
   { key: "registrations", table: "registrations", idField: "id" },

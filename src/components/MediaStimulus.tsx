@@ -215,7 +215,7 @@ function ImageLightbox({ urls, index, onClose, onChangeIndex }: { urls: string[]
           {urls.length > 1 && (
             <div className="ml-2 flex gap-1">
               {urls.map((_, i) => (
-                <button key={i} type="button" onClick={() => onChangeIndex(i)} className={clsx("h-7 w-7 rounded-md text-xs font-medium", i === index ? "bg-[#c6ff34] text-[#111110]" : "bg-white/10 text-white hover:bg-white/20")}>{i + 1}</button>
+                <button key={i} type="button" onClick={() => onChangeIndex(i)} className={clsx("h-7 w-7 rounded-md text-xs font-medium", i === index ? "bg-brand-500 text-[var(--brand-ink)]" : "bg-white/10 text-white hover:bg-white/20")}>{i + 1}</button>
               ))}
             </div>
           )}

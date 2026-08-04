@@ -29,3 +29,18 @@ export function getOrgSettings(tenantId: string): OrgSettings {
 export function tenantExams(tenantId: string | null): Exam[] {
   return db.data!.exams.filter((e) => e.tenantId === tenantId);
 }
+
+const FALLBACK_BRAND_COLOR = "#c6ff34";
+
+/** A tenant's own OrgSettings.brandColor if they've set one, else the
+ *  current platform default (Super Admin's Branding Defaults), else the
+ *  built-in lime fallback if neither has ever been set (fresh install,
+ *  before any Super Admin has touched branding). Always a real hex string —
+ *  every caller (the client's brand-color injection) can use it as-is. */
+export function effectiveBrandColor(tenantId: string | null): string {
+  if (tenantId) {
+    const settings = db.data!.settings.find((s) => s.id === tenantId);
+    if (settings?.brandColor) return settings.brandColor;
+  }
+  return db.data!.branding.find((b) => b.id === "platform")?.defaultBrandColor ?? FALLBACK_BRAND_COLOR;
+}

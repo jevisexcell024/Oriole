@@ -50,14 +50,14 @@ export function AdminIntegrations() {
         {error && <ErrorBanner className="mt-6">{error}</ErrorBanner>}
         {!data ? <div className="mt-8 flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div> : (
           <>
-            <h2 className="mt-6 flex items-center gap-2 text-sm font-semibold"><WebhookIcon className="h-4 w-4 text-[#c6ff34]" /> {t("aintg.webhooks")}</h2>
+            <h2 className="mt-6 flex items-center gap-2 text-sm font-semibold"><WebhookIcon className="h-4 w-4 text-brand-400" /> {t("aintg.webhooks")}</h2>
             <p className="text-xs text-[var(--muted)]">{t("aintg.webhookDesc1")}<code className="rounded bg-[var(--card-2)] px-1">x-orcalis-signature</code>{t("aintg.webhookDesc2")}</p>
 
             <div className="card mt-3 p-4">
               <input className="input h-9" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://your-system.example.com/orcalis-hook" />
               <div className="mt-3 flex flex-wrap gap-2">
                 {data.events.map((e) => (
-                  <button key={e} type="button" onClick={() => toggleEvent(e)} className={clsx("rounded-full border px-3 py-1 text-xs font-medium transition", sel.includes(e) ? "border-[#c6ff34] bg-[rgba(198,255,52,0.12)] text-[#c6ff34]" : "border-[var(--border)] text-[var(--muted)] hover:text-[var(--fg)]")}>{e}</button>
+                  <button key={e} type="button" onClick={() => toggleEvent(e)} className={clsx("rounded-full border px-3 py-1 text-xs font-medium transition", sel.includes(e) ? "border-brand-500 bg-[color-mix(in oklch, var(--color-brand-500) 12%, transparent)] text-brand-400" : "border-[var(--border)] text-[var(--muted)] hover:text-[var(--fg)]")}>{e}</button>
                 ))}
               </div>
               <button onClick={addHook} disabled={adding || !url.trim() || sel.length === 0} className="btn btn-primary mt-3 h-9 disabled:opacity-50">{adding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} {t("aintg.addWebhook")}</button>
@@ -87,7 +87,7 @@ export function AdminIntegrations() {
               ))}
             </div>
 
-            <h2 className="mt-8 flex items-center gap-2 text-sm font-semibold"><KeyRound className="h-4 w-4 text-[#c6ff34]" /> {t("aintg.apiKeys")}</h2>
+            <h2 className="mt-8 flex items-center gap-2 text-sm font-semibold"><KeyRound className="h-4 w-4 text-brand-400" /> {t("aintg.apiKeys")}</h2>
             <p className="text-xs text-[var(--muted)]">{t("aintg.apiDescPre")}<code className="rounded bg-[var(--card-2)] px-1">/api/v1/exams</code>, <code className="rounded bg-[var(--card-2)] px-1">/api/v1/results</code>{t("aintg.apiDescAnd")}<code className="rounded bg-[var(--card-2)] px-1">/api/v1/certificates</code>{t("aintg.apiDescAuth")}<code className="rounded bg-[var(--card-2)] px-1">Authorization: Bearer &lt;key&gt;</code>.</p>
 
             {newKey && (

@@ -51,10 +51,10 @@ export function CertificateView() {
 
         {/* Certificate sheet — always white so it prints cleanly */}
         <div className="relative overflow-hidden rounded-lg bg-white p-10 text-center text-[#111110] shadow-sm ring-1 ring-black/5 print:rounded-none print:shadow-none print:ring-0">
-          <div className="pointer-events-none absolute inset-3 rounded-md border-2 border-[#c6ff34]/40" />
+          <div className="pointer-events-none absolute inset-3 rounded-md border-2 border-brand-500/40" />
           <div className="relative">
             <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[#111110] text-white"><Award className="h-7 w-7" /></div>
-            <p className="mt-4 text-xs font-semibold uppercase tracking-[0.3em] text-[#c6ff34]">Certificate of Achievement</p>
+            <p className="mt-4 text-xs font-semibold uppercase tracking-[0.3em] text-brand-400">Certificate of Achievement</p>
             <p className="mt-6 text-sm text-[#5A7280]">This is to certify that</p>
             <h1 className="mt-1 text-3xl font-extrabold tracking-tight">{c.holderName}</h1>
             <p className="mt-4 text-sm text-[#5A7280]">has successfully completed</p>

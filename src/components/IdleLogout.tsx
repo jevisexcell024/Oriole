@@ -76,7 +76,7 @@ export function IdleLogout() {
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4">
       <div className="w-full max-w-sm rounded-2xl bg-[var(--card)] p-6 shadow-xl">
         <div className="flex items-center gap-2.5">
-          <span className="flex h-10 w-10 items-center justify-center rounded-full" style={{ background: "rgba(198,255,52,0.16)", color: "#c6ff34" }}><ShieldAlert className="h-5 w-5" /></span>
+          <span className="flex h-10 w-10 items-center justify-center rounded-full" style={{ background: "color-mix(in oklch, var(--color-brand-500) 16%, transparent)", color: "var(--color-brand-500)" }}><ShieldAlert className="h-5 w-5" /></span>
           <h2 className="text-lg font-bold">Still there?</h2>
         </div>
         <p className="mt-3 text-sm text-[var(--muted)]">

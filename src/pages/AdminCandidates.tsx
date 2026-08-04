@@ -115,7 +115,7 @@ export function AdminCandidates() {
         </div>
 
         {sel.size > 0 && (
-          <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-[#c6ff34]/40 bg-[rgba(198,255,52,0.08)] px-3 py-2 text-sm">
+          <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-brand-500/40 bg-[color-mix(in oklch, var(--color-brand-500) 8%, transparent)] px-3 py-2 text-sm">
             <span className="font-semibold">{t("acan.selected", { n: sel.size })}</span>
             <div className="ml-auto flex items-center gap-2">
               <button onClick={exportSelected} className="btn btn-outline h-8 text-xs"><Download className="h-3.5 w-3.5" /> {t("acan.exportSelected")}</button>
@@ -159,15 +159,15 @@ export function AdminCandidates() {
                   {pageRows.length === 0 && (
                     <tr><td colSpan={10} className="px-4 py-12 text-center">
                       <p className="text-sm font-medium">{t("acan.noMatch")}</p>
-                      <button onClick={() => { setQ(""); setClassFilter(""); setGenderFilter(""); setDepartmentFilter(""); }} className="mt-1.5 text-xs text-[#c6ff34] hover:underline">{t("acan.clearFilters")}</button>
+                      <button onClick={() => { setQ(""); setClassFilter(""); setGenderFilter(""); setDepartmentFilter(""); }} className="mt-1.5 text-xs text-brand-400 hover:underline">{t("acan.clearFilters")}</button>
                     </td></tr>
                   )}
                   {pageRows.map((r) => (
-                    <tr key={r.id} className={clsx("border-b border-[var(--border)] last:border-0 hover:bg-white/[0.02]", sel.has(r.id) && "bg-[#c6ff34]/10")}>
+                    <tr key={r.id} className={clsx("border-b border-[var(--border)] last:border-0 hover:bg-white/[0.02]", sel.has(r.id) && "bg-brand-500/10")}>
                       <td className="px-4 py-3"><input type="checkbox" checked={sel.has(r.id)} onChange={(e) => { const n = new Set(sel); e.target.checked ? n.add(r.id) : n.delete(r.id); setSel(n); }} /></td>
                       <td className="hidden px-3 py-3 font-mono text-xs text-[var(--muted)] lg:table-cell">{r.id.slice(-4).toUpperCase()}</td>
                       <td className="px-3 py-3">
-                        <button onClick={() => navigate(`/admin/students/${r.id}`)} className="flex items-center gap-2.5 text-left hover:text-[#c6ff34]">
+                        <button onClick={() => navigate(`/admin/students/${r.id}`)} className="flex items-center gap-2.5 text-left hover:text-brand-400">
                           <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[#111110] text-[11px] font-bold text-white">{initials(r.name)}</span>
                           <span><span className="block font-medium">{r.name}</span><span className="block text-xs text-[var(--muted)]">{r.email}</span></span>
                         </button>

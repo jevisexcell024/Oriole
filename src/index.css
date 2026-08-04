@@ -42,6 +42,10 @@
     --fg: #ECEDE6;
     --muted: #9FA096;
     --ring: oklch(0.86 0.18 112 / 0.45);
+    /* Text/icon color for content sitting ON a brand-colored surface (buttons,
+       badges) — near-black by default, flipped to white for a dark chosen
+       brand color. src/lib/brandColor.ts overrides this inline per tenant. */
+    --brand-ink: #111110;
   }
   /* Light theme — soft warm canvas, dark-olive text (toggled via `.light` on <html>). */
   :root.light {
@@ -141,13 +145,15 @@
     padding: .5625rem .875rem; transition: background-color .15s ease, border-color .15s ease, opacity .15s ease;
     cursor: pointer; border: 1px solid transparent; white-space: nowrap;
   }
-  /* Primary action = brand lime with near-black text. */
+  /* Primary action = brand accent with contrast-safe text. Hover/active are
+     computed relative to the live accent (not fixed hex) so a custom brand
+     color darkens correctly too. */
   .btn-primary {
-    background: #c6ff34; color: #111110;
+    background: var(--color-brand-500); color: var(--brand-ink);
     box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.18), 0 1px 2px 0 rgba(0, 0, 0, 0.20);
   }
-  .btn-primary:hover { background: #B7C523; }
-  .btn-primary:active { background: #A1AD1F; }
+  .btn-primary:hover { background: color-mix(in oklch, var(--color-brand-500) 85%, black); }
+  .btn-primary:active { background: color-mix(in oklch, var(--color-brand-500) 70%, black); }
   .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
   .btn-outline { background: rgba(255, 255, 255, 0.02); border-color: var(--border-strong); color: var(--fg); }
   .btn-outline:hover { background: rgba(255, 255, 255, 0.06); border-color: var(--border-strong); }
@@ -160,9 +166,9 @@
   .btn-danger:hover { background: #BE123C; }
   .btn-danger:disabled { opacity: .5; cursor: not-allowed; }
 
-  /* Buttons that sit ON the near-black page header — brand lime for contrast/accent. */
-  .btn-on-teal { background: #c6ff34; color: #111110; }
-  .btn-on-teal:hover { background: #B7C523; }
+  /* Buttons that sit ON the near-black page header — brand accent for contrast. */
+  .btn-on-teal { background: var(--color-brand-500); color: var(--brand-ink); }
+  .btn-on-teal:hover { background: color-mix(in oklch, var(--color-brand-500) 85%, black); }
   .btn-ghost-teal { background: rgba(255, 255, 255, 0.10); border-color: rgba(255, 255, 255, 0.25); color: #FFFFFF; }
   .btn-ghost-teal:hover { background: rgba(255, 255, 255, 0.20); }
 

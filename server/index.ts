@@ -10,7 +10,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { createHmac, createHash, randomBytes } from "node:crypto";
 import { db, initDb, snapshotStore, proctorStore, answerStore, auditStore, superAdminAuditStore, emailStore, geofenceStore, reliabilityStore, reliabilityRollupStore, mediaAssetStore, exportTenantData, deleteTenantData } from "./db.ts";
-import { currentTenantId, tenantExams, getOrgSettings } from "./tenant.ts";
+import { currentTenantId, tenantExams, getOrgSettings, effectiveBrandColor } from "./tenant.ts";
 import { sendMail, mailerStatus, verifySmtp, buildHtml, ctaButton, esc } from "./mailer.ts";
 import { renderEmailTemplate, EMAIL_TEMPLATE_DEFS } from "./emailTemplates.ts";
 import { sendSms, smsEnabled, smsStatus, recentSms } from "./sms.ts";
@@ -41,7 +41,7 @@ import { validate } from "./validate.ts";
 import {
   loginSchema, teamCreateSchema, passwordChangeSchema, passwordResetSchema, twoFaCodeSchema, twoFaDisableSchema,
   customRoleCreateSchema, customRoleUpdateSchema, roleAssignSchema, passwordSetupSchema, superAdminCreateSchema, tenantCreateSchema,
-  planCreateSchema, planUpdateSchema, licenseKeyCreateSchema, licenseKeyRedeemSchema, maintenanceWindowCreateSchema,
+  planCreateSchema, planUpdateSchema, licenseKeyCreateSchema, licenseKeyRedeemSchema, maintenanceWindowCreateSchema, brandingUpdateSchema,
 } from "./schemas.ts";
 import { verifySeb } from "./seb.ts";
 import { nextStreak, displayStreak } from "./streak.ts";
@@ -362,7 +362,7 @@ app.post("/api/auth/login", validate(loginSchema), async (req, res) => {
   }
   issueSession(res, user);
   await checkNewDeviceAndAlert(req, user);
-  res.json({ user: toSafeUser(user) });
+  res.json({ user: toSafeUser(user), brandColor: effectiveBrandColor(user.tenantId ?? null) });
 });
 
 // Step 2 of a 2FA login: verify the authenticator code (or a backup code).
@@ -405,7 +405,7 @@ app.post("/api/auth/2fa/verify", validate(twoFaCodeSchema), async (req, res) => 
   clearPending2fa(res);
   issueSession(res, user);
   await checkNewDeviceAndAlert(req, user);
-  res.json({ user: toSafeUser(user) });
+  res.json({ user: toSafeUser(user), brandColor: effectiveBrandColor(user.tenantId ?? null) });
 });
 
 // Public — the caller isn't signed in yet. The signed, 72h-expiring token from
@@ -427,7 +427,7 @@ app.post("/api/auth/setup-password", validate(passwordSetupSchema), async (req, 
   await db.upsert("users", user);
   await recordAuthAudit(req, "auth.password_setup_completed", user.email);
   issueSession(res, user);
-  res.json({ user: toSafeUser(user) });
+  res.json({ user: toSafeUser(user), brandColor: effectiveBrandColor(user.tenantId ?? null) });
 });
 
 app.post("/api/auth/logout", async (req, res) => {
@@ -509,7 +509,7 @@ app.get("/api/auth/me", (req, res) => {
   const impId = currentImpersonatorId(req);
   const impersonator = impId ? db.data!.superAdmins.find((s) => s.id === impId) : null;
   const impersonatedBy = impersonator ? { superAdminId: impersonator.id, superAdminName: impersonator.name } : null;
-  res.json({ user: { ...toSafeUser(user), impersonatedBy } });
+  res.json({ user: { ...toSafeUser(user), impersonatedBy }, brandColor: effectiveBrandColor(user.tenantId ?? null) });
 });
 
 // ---- Super Admin — fully separate identity, session, and audit trail from
@@ -796,6 +796,28 @@ app.post("/api/super-admin/maintenance/windows/:id/cancel", requireSuperAdmin, a
   }
   await recordSuperAdminAudit(req, "superadmin.maintenance.window_cancelled", `${window.startAt} → ${window.endAt}`);
   res.json({ window });
+});
+
+// Branding Defaults — the accent color a school's Admin console starts on.
+// A tenant's own OrgSettings.brandColor (set from their own Settings page)
+// always wins over this; see effectiveBrandColor() in server/tenant.ts.
+app.get("/api/super-admin/branding", requireSuperAdmin, (_req, res) => {
+  const b = db.data!.branding.find((r) => r.id === "platform");
+  res.json(b ?? { id: "platform", defaultBrandColor: "#c6ff34", updatedAt: null, updatedBy: null });
+});
+
+app.patch("/api/super-admin/branding", requireSuperAdminOwner, validate(brandingUpdateSchema), async (req, res) => {
+  const superAdmin = currentSuperAdmin(req)!;
+  const record = {
+    id: "platform" as const,
+    defaultBrandColor: (req.body as { defaultBrandColor: string }).defaultBrandColor,
+    updatedAt: now(),
+    updatedBy: superAdmin.name,
+  };
+  db.data!.branding = [record];
+  await db.upsert("branding", record);
+  await recordSuperAdminAudit(req, "superadmin.branding.updated", record.defaultBrandColor);
+  res.json(record);
 });
 
 // Email Templates — scoped to subject + intro paragraph only (see
@@ -6122,6 +6144,14 @@ app.patch("/api/admin/settings", requirePermission("system.settings"), async (re
       levelLabel: typeof ls.levelLabel === "string" && ls.levelLabel.trim() ? ls.levelLabel.trim() : current.levelLabel,
       cohortLabel: typeof ls.cohortLabel === "string" && ls.cohortLabel.trim() ? ls.cohortLabel.trim() : current.cohortLabel,
     };
+  }
+  // null explicitly clears back to "use the platform default" — distinct
+  // from the field simply being absent from this request (leave untouched).
+  if (b.brandColor === null) {
+    s.brandColor = null;
+  } else if (typeof b.brandColor === "string") {
+    const v = b.brandColor.trim();
+    if (/^#[0-9a-fA-F]{6}$/.test(v)) s.brandColor = v;
   }
   await db.upsert("settings", s);
   await recordAudit(req, "settings.updated", "Updated organization settings");

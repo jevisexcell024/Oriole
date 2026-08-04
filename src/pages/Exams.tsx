@@ -128,7 +128,7 @@ export function Exams() {
                     : opens && now < opens ? relFuture(opens, now) : "Available now";
                   return (
                     <button key={it.registration.id} onClick={() => setSelId(it.registration.id)}
-                      className={clsx("w-full rounded-xl border p-3.5 text-left transition", active ? "border-[#c6ff34] bg-[var(--card)] shadow-sm ring-1 ring-[#c6ff34]/30" : "border-[var(--border)] bg-[var(--card)] hover:border-[var(--border-strong)]")}>
+                      className={clsx("w-full rounded-xl border p-3.5 text-left transition", active ? "border-brand-500 bg-[var(--card)] shadow-sm ring-1 ring-brand-500/30" : "border-[var(--border)] bg-[var(--card)] hover:border-[var(--border-strong)]")}>
                       <div className="flex items-start justify-between gap-2">
                         <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">{it.exam.code || "EXAM"}</p>
                         <span className={clsx("rounded px-1.5 py-0.5 text-[9px] font-bold tracking-wide", s.cls)}>{s.label}</span>
@@ -242,7 +242,7 @@ function ExamDetail({ it, now, user, perm, tab, setTab }: {
       <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-[1.4fr_1fr]">
         <div className="rounded-xl border border-[var(--border)] p-4">
           <div className="flex items-center justify-between">
-            <p className="inline-flex items-center gap-1.5 text-sm font-bold"><ShieldCheck className="h-4 w-4 text-[#c6ff34]" /> Readiness Center</p>
+            <p className="inline-flex items-center gap-1.5 text-sm font-bold"><ShieldCheck className="h-4 w-4 text-brand-400" /> Readiness Center</p>
             <span className={clsx("rounded-full px-2 py-0.5 text-[11px] font-semibold", readyPassed === ready.length ? "bg-emerald-500/15 text-emerald-500" : "bg-amber-500/15 text-amber-500")}>{readyPassed} / {ready.length} Passed</span>
           </div>
           <div className="mt-3 grid grid-cols-1 gap-x-4 gap-y-2 sm:grid-cols-2">
@@ -269,7 +269,7 @@ function ExamDetail({ it, now, user, perm, tab, setTab }: {
       <div className="mt-6 flex gap-5 border-b border-[var(--border)] text-sm">
         {TABS.map((t) => (
           <button key={t} onClick={() => setTab(t)}
-            className={clsx("relative -mb-px border-b-2 pb-2.5 font-semibold transition", tab === t ? "border-[#c6ff34] text-[var(--fg)]" : "border-transparent text-[var(--muted)] hover:text-[var(--fg)]")}>
+            className={clsx("relative -mb-px border-b-2 pb-2.5 font-semibold transition", tab === t ? "border-brand-500 text-[var(--fg)]" : "border-transparent text-[var(--muted)] hover:text-[var(--fg)]")}>
             {TAB_LABEL[t]}
           </button>
         ))}
@@ -320,14 +320,14 @@ function ExamDetail({ it, now, user, perm, tab, setTab }: {
             {ex.resources && ex.resources.length > 0 && (
               <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
                 {ex.resources.map((r, i) => (
-                  <a key={i} href={r.url} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-xl border border-[var(--border)] p-3 text-sm font-semibold text-[var(--fg)] hover:bg-[var(--card-2)]"><Globe className="h-4 w-4 shrink-0 text-[#c6ff34]" /> <span className="truncate">{r.label || r.url}</span></a>
+                  <a key={i} href={r.url} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-xl border border-[var(--border)] p-3 text-sm font-semibold text-[var(--fg)] hover:bg-[var(--card-2)]"><Globe className="h-4 w-4 shrink-0 text-brand-400" /> <span className="truncate">{r.label || r.url}</span></a>
                 ))}
               </div>
             )}
             <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
-              <Link to="/practice" className="flex items-center gap-2 rounded-xl border border-[var(--border)] p-3 text-sm font-semibold text-[var(--fg)] hover:bg-[var(--card-2)]"><Dumbbell className="h-4 w-4 text-[#c6ff34]" /> Practice Tests</Link>
-              <Link to="/results" className="flex items-center gap-2 rounded-xl border border-[var(--border)] p-3 text-sm font-semibold text-[var(--fg)] hover:bg-[var(--card-2)]"><History className="h-4 w-4 text-[#c6ff34]" /> Past Results</Link>
-              <Link to="/announcements" className="flex items-center gap-2 rounded-xl border border-[var(--border)] p-3 text-sm font-semibold text-[var(--fg)] hover:bg-[var(--card-2)]"><BookOpen className="h-4 w-4 text-[#c6ff34]" /> Announcements</Link>
+              <Link to="/practice" className="flex items-center gap-2 rounded-xl border border-[var(--border)] p-3 text-sm font-semibold text-[var(--fg)] hover:bg-[var(--card-2)]"><Dumbbell className="h-4 w-4 text-brand-400" /> Practice Tests</Link>
+              <Link to="/results" className="flex items-center gap-2 rounded-xl border border-[var(--border)] p-3 text-sm font-semibold text-[var(--fg)] hover:bg-[var(--card-2)]"><History className="h-4 w-4 text-brand-400" /> Past Results</Link>
+              <Link to="/announcements" className="flex items-center gap-2 rounded-xl border border-[var(--border)] p-3 text-sm font-semibold text-[var(--fg)] hover:bg-[var(--card-2)]"><BookOpen className="h-4 w-4 text-brand-400" /> Announcements</Link>
             </div>
           </div>
         )}
@@ -339,7 +339,7 @@ function ExamDetail({ it, now, user, perm, tab, setTab }: {
 function Info({ icon: Icon, label, value, last }: { icon: typeof User; label: string; value: string; last?: boolean }) {
   return (
     <div className={clsx("flex items-center gap-3 py-2", !last && "border-b border-[var(--border)]")}>
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg" style={{ background: "rgba(198,255,52,0.14)", color: "#c6ff34" }}><Icon className="h-4 w-4" /></span>
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg" style={{ background: "color-mix(in oklch, var(--color-brand-500) 14%, transparent)", color: "var(--color-brand-500)" }}><Icon className="h-4 w-4" /></span>
       <div>
         <p className="text-[11px] uppercase tracking-wide text-[var(--muted)]">{label}</p>
         <p className="text-sm font-semibold text-[var(--fg)]">{value}</p>

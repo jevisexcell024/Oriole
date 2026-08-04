@@ -69,7 +69,7 @@ export function AdminReliabilityIncident() {
                 <div className="mt-3 space-y-3">
                   {incident.timeline.map((ev) => (
                     <div key={ev.id} className="flex gap-3">
-                      <div className="mt-0.5 h-2 w-2 shrink-0 rounded-full bg-[#c6ff34]" />
+                      <div className="mt-0.5 h-2 w-2 shrink-0 rounded-full bg-brand-500" />
                       <div className="min-w-0 flex-1 border-b border-[var(--border)] pb-3 last:border-0">
                         <p className="text-xs text-[var(--muted)]">{new Date(ev.at).toLocaleString()}</p>
                         <p className="text-sm">{ev.message}</p>

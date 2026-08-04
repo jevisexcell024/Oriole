@@ -78,8 +78,8 @@ export function Timetable() {
                         <button key={it.registration.id}
                           onClick={() => navigate(done && it.attempt ? `/attempts/${it.attempt.id}/result` : `/exams/${it.registration.id}/checkin`)}
                           className="flex w-full items-center gap-3 p-4 text-left transition hover:bg-[var(--card-2)]">
-                          <div className="flex h-11 w-11 shrink-0 flex-col items-center justify-center rounded-lg" style={{ background: "rgba(198,255,52,0.14)" }}>
-                            <Clock className="h-4 w-4" style={{ color: "#c6ff34" }} />
+                          <div className="flex h-11 w-11 shrink-0 flex-col items-center justify-center rounded-lg" style={{ background: "color-mix(in oklch, var(--color-brand-500) 14%, transparent)" }}>
+                            <Clock className="h-4 w-4" style={{ color: "var(--color-brand-500)" }} />
                           </div>
                           <div className="min-w-0 flex-1">
                             <p className="truncate text-sm font-bold text-[var(--fg)]">{it.exam.title}</p>

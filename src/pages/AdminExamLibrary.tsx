@@ -13,7 +13,7 @@ import { useT, type TFn } from "@/lib/i18n";
 import type { Exam, Question, QuestionType } from "@shared/types";
 import { clsx } from "clsx";
 
-const G = { btn: "#111110", accent: "#c6ff34" };
+const G = { btn: "#111110", accent: "var(--color-brand-500)" };
 const STATUS_KEY: Record<string, string> = { published: "aex.statusPublished", draft: "aex.statusDraft" };
 
 interface ExamRow {
@@ -200,7 +200,7 @@ function ExamsView({ data, onCreate, creating, onOpen, onDuplicate, onDelete }: 
             {STATUS_TABS.map((s) => (
               <button key={s.id} onClick={() => setStatus(s.id)}
                 className={clsx("rounded-full border px-3 py-1.5 text-xs font-semibold transition", status === s.id ? "border-transparent text-white" : "border-[var(--border)] text-[var(--muted)] hover:text-[var(--fg)]")}
-                style={status === s.id ? { background: G.accent, color: G.btn } : undefined}>
+                style={status === s.id ? { background: G.accent, color: "var(--brand-ink)" } : undefined}>
                 {t(s.labelKey)}
               </button>
             ))}
@@ -345,7 +345,7 @@ function QuestionsView() {
               const Icon = Q_TYPE_ICON[q.type];
               return (
                 <div key={q.id} className="flex items-start gap-4 px-5 py-4 hover:bg-[var(--card-2)]">
-                  <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg" style={{ background: "rgba(198,255,52,0.14)", color: G.accent }}>
+                  <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg" style={{ background: "color-mix(in oklch, var(--color-brand-500) 14%, transparent)", color: G.accent }}>
                     <Icon className="h-[18px] w-[18px]" />
                   </div>
                   <div className="min-w-0 flex-1">
@@ -390,10 +390,10 @@ function ExamCard({ e, onOpen, onDuplicate, onDelete }: { e: ExamRow; onOpen: ()
     <div className="group card flex flex-col overflow-hidden transition hover:-translate-y-0.5 hover:border-[var(--border-strong)] hover:shadow-lg">
       {e.coverImage
         ? <div className="relative h-28 w-full"><img src={e.coverImage} alt="" className="h-full w-full object-cover" /><span className="absolute right-2 top-2"><StatusPill status={e.status} /></span></div>
-        : <div className="flex h-28 w-full items-center justify-center" style={{ background: "rgba(198,255,52,0.12)" }}><BookOpen className="h-9 w-9" style={{ color: G.accent }} /></div>}
+        : <div className="flex h-28 w-full items-center justify-center" style={{ background: "color-mix(in oklch, var(--color-brand-500) 12%, transparent)" }}><BookOpen className="h-9 w-9" style={{ color: G.accent }} /></div>}
       <div className="flex flex-1 flex-col p-4">
         <div className="flex items-start justify-between gap-2">
-          <span className="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide" style={{ background: "rgba(198,255,52,0.14)", color: G.accent }}>{e.type}</span>
+          <span className="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide" style={{ background: "color-mix(in oklch, var(--color-brand-500) 14%, transparent)", color: G.accent }}>{e.type}</span>
           {!e.coverImage && <StatusPill status={e.status} />}
         </div>
         <h3 className="mt-2.5 font-semibold leading-snug">{e.title || t("aex.untitled")}</h3>
@@ -425,7 +425,7 @@ function ExamListRow({ e, onOpen, onDuplicate, onDelete }: { e: ExamRow; onOpen:
       <div className="flex min-w-0 items-center gap-3">
         {e.coverImage
           ? <img src={e.coverImage} alt="" className="h-10 w-10 shrink-0 rounded-lg object-cover" />
-          : <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg" style={{ background: "rgba(198,255,52,0.14)", color: G.accent }}><BookOpen className="h-5 w-5" /></span>}
+          : <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg" style={{ background: "color-mix(in oklch, var(--color-brand-500) 14%, transparent)", color: G.accent }}><BookOpen className="h-5 w-5" /></span>}
         <div className="min-w-0">
           <div className="flex items-center gap-2"><p className="truncate font-semibold">{e.title || t("aex.untitled")}</p><StatusPill status={e.status} /></div>
           <p className="truncate text-xs text-[var(--muted)]">{e.subject || e.code || t("acls.noCode")}{e.className ? ` · ${e.className}` : ""}</p>

@@ -129,6 +129,10 @@ export const maintenanceWindowCreateSchema = z.object({
   message: z.string().trim().max(500),
 }).refine((v) => new Date(v.endAt).getTime() > new Date(v.startAt).getTime(), { message: "End time must be after start time.", path: ["endAt"] });
 
+const hexColor = z.string().trim().regex(/^#([0-9a-fA-F]{6})$/, "Must be a 6-digit hex color like #c6ff34");
+export const brandingUpdateSchema = z.object({ defaultBrandColor: hexColor });
+export const tenantBrandColorSchema = z.object({ brandColor: hexColor.nullable() });
+
 // Two-factor: the verify/enable steps take a 6-digit TOTP or a backup code;
 // disable accepts either the current password or a current code.
 export const twoFaCodeSchema = z.object({

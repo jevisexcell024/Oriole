@@ -25,7 +25,7 @@ interface Member { id: string; name: string; email: string; role: string; custom
 const SYSTEM_ROLES = ["admin", "facilitator", "proctor"] as const;
 type SystemRole = (typeof SYSTEM_ROLES)[number];
 const SYSTEM_META: Record<SystemRole, { labelKey: string; icon: typeof ShieldCheck; pill: string }> = {
-  admin: { labelKey: "ateam.roleAdmin", icon: ShieldCheck, pill: "bg-[#c6ff34]/15 text-[#c6ff34]" },
+  admin: { labelKey: "ateam.roleAdmin", icon: ShieldCheck, pill: "bg-brand-500/15 text-brand-400" },
   facilitator: { labelKey: "ateam.roleFacilitator", icon: ClipboardCheck, pill: "bg-[#06B6D4]/15 text-[#06B6D4]" },
   proctor: { labelKey: "ateam.roleProctor", icon: Radio, pill: "bg-[#F59E0B]/15 text-[#F59E0B]" },
 };
@@ -337,7 +337,7 @@ function RoleFormModal({ role, permissions, categories, roles, inst, logs, resol
                   <div key={cat} className="rounded-xl border border-[var(--border)] p-3">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">{t(`arole.cat.${cat}`)}</span>
-                      <button type="button" onClick={() => setCategory(cat, !allOn)} className="text-[11px] font-medium text-[#c6ff34] hover:underline">
+                      <button type="button" onClick={() => setCategory(cat, !allOn)} className="text-[11px] font-medium text-brand-400 hover:underline">
                         {allOn ? t("arole.clearAll") : t("arole.selectAll")}
                       </button>
                     </div>
@@ -347,8 +347,8 @@ function RoleFormModal({ role, permissions, categories, roles, inst, logs, resol
                         const on = isInherited || selected.has(p.key);
                         return (
                           <label key={p.key} className={clsx("flex items-start gap-2 rounded-lg px-2 py-1.5", isInherited ? "cursor-not-allowed opacity-70" : "cursor-pointer hover:bg-white/[0.03]")}>
-                            <span className={clsx("mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border", on ? "border-[#c6ff34] bg-[#c6ff34]" : "border-[var(--border-strong)]")}>
-                              {on && <Check className="h-3 w-3 text-[#111110]" />}
+                            <span className={clsx("mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border", on ? "border-brand-500 bg-brand-500" : "border-[var(--border-strong)]")}>
+                              {on && <Check className="h-3 w-3 text-[var(--brand-ink)]" />}
                             </span>
                             <input type="checkbox" className="hidden" checked={on} disabled={isInherited} onChange={() => !isInherited && toggle(p.key)} />
                             <span className="min-w-0 flex-1">
@@ -501,7 +501,7 @@ function CompareModal({ options, permissions, categories, resolveInherited, syst
               const on = picked.includes(o.id);
               return (
                 <button key={o.id} onClick={() => setPicked((p) => on ? p.filter((x) => x !== o.id) : [...p, o.id])}
-                  className={clsx("rounded-full px-3 py-1 text-xs font-medium transition", on ? "bg-[#c6ff34] text-[#111110]" : "bg-[var(--card-2)] text-[var(--muted)] hover:text-[var(--fg)]")}>
+                  className={clsx("rounded-full px-3 py-1 text-xs font-medium transition", on ? "bg-brand-500 text-[var(--brand-ink)]" : "bg-[var(--card-2)] text-[var(--muted)] hover:text-[var(--fg)]")}>
                   {o.name}
                 </button>
               );
@@ -531,7 +531,7 @@ function CompareModal({ options, permissions, categories, resolveInherited, syst
                           <td className="py-1.5 pr-3 text-xs">{p.label}</td>
                           {pickedSets.map((s) => (
                             <td key={s.id} className="px-2 py-1.5 text-center">
-                              {s.perms.has(p.key) ? <Check className="mx-auto h-3.5 w-3.5 text-[#c6ff34]" /> : <span className="text-[var(--muted)]">—</span>}
+                              {s.perms.has(p.key) ? <Check className="mx-auto h-3.5 w-3.5 text-brand-400" /> : <span className="text-[var(--muted)]">—</span>}
                             </td>
                           ))}
                         </tr>

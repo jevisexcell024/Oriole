@@ -44,7 +44,7 @@ interface ClassFolder {
 // ── Palette ────────────────────────────────────────────────────────────────────
 const PALETTES = [
   { accent: "#fe3bed", bg: "rgba(254,59,237,0.1)",  border: "#fe3bed" },
-  { accent: "#c6ff34", bg: "rgba(198,255,52,0.1)",  border: "#c6ff34" },
+  { accent: "var(--color-brand-500)", bg: "color-mix(in oklch, var(--color-brand-500) 10%, transparent)", border: "var(--color-brand-500)" },
   { accent: "#ffffff", bg: "rgba(255,255,255,0.07)", border: "#ffffff" },
 ];
 const UNASSIGNED_PALETTE = { accent: "#6b7280", bg: "rgba(107,114,128,0.05)", border: "rgba(107,114,128,0.2)" };
@@ -239,7 +239,7 @@ function ClassExplorer({ folders, onNavigate }: {
       {/* Toolbar */}
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <h2 className="flex items-center gap-2 text-sm font-semibold">
-          <Users2 className="h-4 w-4" style={{ color: "#c6ff34" }} />
+          <Users2 className="h-4 w-4" style={{ color: "var(--color-brand-500)" }} />
           Classes
           <span className="rounded-full bg-[var(--card-2)] px-2 py-0.5 text-xs font-medium text-[var(--muted)]">
             {folders.filter((f) => f.id !== "__unassigned__").length}
@@ -580,7 +580,7 @@ function SortTh({ label, onClick, active, dir, right }: {
         right ? "text-right" : "text-left")}>
       <span className="inline-flex items-center gap-1">
         {label}
-        {active && <ArrowUpDown className="h-3 w-3" style={{ color: "#c6ff34" }} />}
+        {active && <ArrowUpDown className="h-3 w-3" style={{ color: "var(--color-brand-500)" }} />}
       </span>
     </th>
   );

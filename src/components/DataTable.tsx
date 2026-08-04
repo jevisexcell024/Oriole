@@ -143,7 +143,7 @@ export function DataTable<T>({
 
       {/* Bulk action bar */}
       {selectable && selectedRows.length > 0 && (
-        <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-[#c6ff34]/40 bg-[rgba(198,255,52,0.08)] px-3 py-2 text-sm">
+        <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-brand-500/40 bg-[color-mix(in oklch, var(--color-brand-500) 8%, transparent)] px-3 py-2 text-sm">
           <span className="font-semibold">{selectedRows.length} selected</span>
           <div className="ml-auto flex items-center gap-2">
             {bulkActions?.(selectedRows, clearSel)}
@@ -160,7 +160,7 @@ export function DataTable<T>({
               <tr className="border-b border-[var(--border)] bg-[var(--card-2)] text-left text-[11px] uppercase tracking-wide text-[var(--muted)]">
                 {selectable && (
                   <th className="w-10 px-4 py-2.5">
-                    <input type="checkbox" className="h-3.5 w-3.5 accent-[#c6ff34]" checked={allOnPageSelected} onChange={toggleAll} />
+                    <input type="checkbox" className="h-3.5 w-3.5 accent-brand-500" checked={allOnPageSelected} onChange={toggleAll} />
                   </th>
                 )}
                 {columns.map((c) => (
@@ -182,10 +182,10 @@ export function DataTable<T>({
                 const id = getId(r);
                 return (
                   <tr key={id} onClick={onRowClick ? () => onRowClick(r) : undefined}
-                    className={clsx("border-b border-[var(--border)] last:border-0 transition", onRowClick && "cursor-pointer", "hover:bg-[var(--card-2)]", sel.has(id) && "bg-[rgba(198,255,52,0.06)]")}>
+                    className={clsx("border-b border-[var(--border)] last:border-0 transition", onRowClick && "cursor-pointer", "hover:bg-[var(--card-2)]", sel.has(id) && "bg-[color-mix(in oklch, var(--color-brand-500) 6%, transparent)]")}>
                     {selectable && (
                       <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                        <input type="checkbox" className="h-3.5 w-3.5 accent-[#c6ff34]" checked={sel.has(id)} onChange={() => toggleOne(id)} />
+                        <input type="checkbox" className="h-3.5 w-3.5 accent-brand-500" checked={sel.has(id)} onChange={() => toggleOne(id)} />
                       </td>
                     )}
                     {columns.map((c) => <td key={c.key} className={clsx("px-4 py-3", c.td)}>{c.render(r)}</td>)}

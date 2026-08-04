@@ -64,7 +64,7 @@ export function AdminCalendar() {
       return [{
         id: exam.id, date: new Date(exam.availableFrom), title: exam.title,
         sub: `${t("acal.opens", { time: fmtTime(exam.availableFrom) })}${exam.code ? ` · ${exam.code}` : ""}`,
-        color: "#c6ff34",
+        color: "var(--color-brand-500)",
         onClick: () => navigate(`/admin/exams/${exam.id}`),
       }];
     });
@@ -82,7 +82,7 @@ export function AdminCalendar() {
           <>
             {unscheduled > 0 && (
               <p className="mt-4 rounded-lg border border-[var(--border)] bg-[var(--card)] px-4 py-2.5 text-xs text-[var(--muted)]">
-                {t("acal.unscheduled", { n: unscheduled })}<button onClick={() => navigate("/admin/scheduler")} className="font-semibold text-[#c6ff34] hover:underline">{t("acal.schedulerLink")}</button>.
+                {t("acal.unscheduled", { n: unscheduled })}<button onClick={() => navigate("/admin/scheduler")} className="font-semibold text-brand-400 hover:underline">{t("acal.schedulerLink")}</button>.
               </p>
             )}
             <div className="mt-4"><MonthCalendar events={events} empty={t("acal.noneOpenDay")} /></div>

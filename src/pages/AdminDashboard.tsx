@@ -18,7 +18,7 @@ import { initials as ini } from "@/lib/format";
      pink  #fe3bed → attention, alerts, flags, warnings
      white #ffffff → neutral secondary data                                   */
 const C = {
-  lime:  "#c6ff34",
+  lime:  "var(--color-brand-500)",
   pink:  "#fe3bed",
   white: "#ffffff",
 };
@@ -176,7 +176,7 @@ export function AdminDashboard() {
         {has("exams") && (
           <button onClick={() => navigate("/admin/exams")}
             className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition hover:brightness-95"
-            style={{ background: C.lime, color: "#111110", fontFamily: DISPLAY }}>
+            style={{ background: C.lime, color: "var(--brand-ink)", fontFamily: DISPLAY }}>
             <Plus className="h-4 w-4" />{t("adash.createExam")}
           </button>
         )}
@@ -257,7 +257,7 @@ export function AdminDashboard() {
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold" style={{ color: V.fg }}>{t("adash.upcomingExams")}</h2>
               <button onClick={() => navigate("/admin/scheduler")} className="rounded-lg px-3 py-1.5 text-xs font-medium transition hover:brightness-110"
-                style={{ background: `${C.lime}18`, color: C.lime, fontFamily: SANS }}>+ {t("adash.addExam")}</button>
+                style={{ background: "color-mix(in oklch, var(--color-brand-500) 9%, transparent)", color: C.lime, fontFamily: SANS }}>+ {t("adash.addExam")}</button>
             </div>
             {d.upcomingExams.length === 0 ? (
               <div className="flex flex-col items-center py-12">
@@ -266,7 +266,7 @@ export function AdminDashboard() {
                 </div>
                 <p className="mt-3 text-sm" style={{ color: V.mutedFg }}>{t("adash.noUpcoming")}</p>
                 <button onClick={() => navigate("/admin/scheduler")} className="mt-3 rounded-xl px-4 py-2 text-xs font-semibold"
-                  style={{ background: C.lime, color: "#111110", fontFamily: DISPLAY }}>{t("adash.scheduleExam")}</button>
+                  style={{ background: C.lime, color: "var(--brand-ink)", fontFamily: DISPLAY }}>{t("adash.scheduleExam")}</button>
               </div>
             ) : (
               <div className="mt-4">
@@ -443,7 +443,7 @@ export function AdminDashboard() {
         {has("monitor") && (
           <Card className="col-span-1">
             <h2 className="mb-3 inline-flex items-center gap-2 text-sm font-semibold" style={{ color: V.fg }}>
-              <span className="flex h-7 w-7 items-center justify-center rounded-lg" style={{ background: `${C.lime}22` }}>
+              <span className="flex h-7 w-7 items-center justify-center rounded-lg" style={{ background: "color-mix(in oklch, var(--color-brand-500) 13%, transparent)" }}>
                 <Brain className="h-4 w-4" style={{ color: C.lime }} />
               </span>
               {t("adash.aiProctoringTitle")}

@@ -106,7 +106,7 @@ const GROUPS: NavGroup[] = [
     { labelKey: "sanav.apiKeys", icon: Lock },
   ] },
   { key: "configuration", labelKey: "sanav.secConfiguration", items: [
-    { labelKey: "sanav.brandingDefaults", icon: Palette },
+    { labelKey: "sanav.brandingDefaults", icon: Palette, to: "/super-admin/branding" },
     { labelKey: "sanav.platformSettings", icon: Settings, to: "/super-admin/settings" },
     { labelKey: "sanav.featureFlags", icon: Flag },
     { labelKey: "sanav.emailTemplates", icon: FileText, to: "/super-admin/email-templates" },

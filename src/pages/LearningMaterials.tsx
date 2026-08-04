@@ -63,8 +63,8 @@ export function LearningMaterials() {
                         </p>
                       </div>
                       <Link to={`/exams/${it.registration.id}/checkin`}
-                        className="flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-bold text-[#111110] transition hover:opacity-90"
-                        style={{ background: "#c6ff34" }}>
+                        className="flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-bold text-[var(--brand-ink)] transition hover:opacity-90"
+                        style={{ background: "var(--color-brand-500)" }}>
                         Prepare <ChevronRight className="h-3.5 w-3.5" />
                       </Link>
                     </div>
@@ -75,7 +75,7 @@ export function LearningMaterials() {
                         {resources.map((r, i) => (
                           <a key={i} href={r.url} target="_blank" rel="noreferrer"
                             className="flex items-center gap-2 rounded-xl border border-[var(--border)] p-3 text-sm font-semibold text-[var(--fg)] transition hover:bg-[var(--card-2)]">
-                            <Globe className="h-4 w-4 shrink-0 text-[#c6ff34]" /> <span className="truncate">{r.label || r.url}</span>
+                            <Globe className="h-4 w-4 shrink-0 text-brand-400" /> <span className="truncate">{r.label || r.url}</span>
                           </a>
                         ))}
                       </div>

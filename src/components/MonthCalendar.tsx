@@ -63,10 +63,10 @@ export function MonthCalendar({ events, empty }: { events: CalEvent[]; empty?: R
           return (
             <button key={i} onClick={() => setSelected(date)}
               className={clsx("flex min-h-[78px] flex-col gap-1 rounded-lg border p-1.5 text-left transition",
-                isSel ? "border-[#c6ff34] bg-[var(--card-2)]" : "border-[var(--border)] hover:bg-[var(--card-2)]",
+                isSel ? "border-brand-500 bg-[var(--card-2)]" : "border-[var(--border)] hover:bg-[var(--card-2)]",
                 !inMonth && "opacity-40")}>
               <span className={clsx("flex h-5 w-5 items-center justify-center self-start rounded-full text-[11px] font-semibold",
-                isToday ? "bg-[#c6ff34] text-[#111110]" : "text-[var(--muted)]")}>{date.getDate()}</span>
+                isToday ? "bg-brand-500 text-[var(--brand-ink)]" : "text-[var(--muted)]")}>{date.getDate()}</span>
               <div className="space-y-0.5">
                 {dayEvents.slice(0, 2).map((e) => (
                   <span key={e.id} onClick={(ev) => { ev.stopPropagation(); e.onClick?.(); }}

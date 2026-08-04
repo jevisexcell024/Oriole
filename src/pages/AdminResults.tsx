@@ -48,7 +48,7 @@ interface CohortRow extends CohortRaw {
 // ── Palette & icons ───────────────────────────────────────────────────────────
 const PALETTES = [
   { accent: "#fe3bed", bg: "rgba(254,59,237,0.1)",   border: "#fe3bed" },
-  { accent: "#c6ff34", bg: "rgba(198,255,52,0.1)",   border: "#c6ff34" },
+  { accent: "var(--color-brand-500)", bg: "color-mix(in oklch, var(--color-brand-500) 10%, transparent)", border: "var(--color-brand-500)" },
   { accent: "#ffffff", bg: "rgba(255,255,255,0.07)",  border: "#ffffff" },
 ];
 const hashPalette = (id: string) =>
@@ -224,8 +224,8 @@ export function AdminResults() {
             <div className="mt-8 flex items-center justify-between gap-3">
               <h2 className="flex items-center gap-2 text-sm font-semibold">
                 {viewMode === "exam"
-                  ? <Folder className="h-4 w-4" style={{ color: "#c6ff34" }} />
-                  : <Users2 className="h-4 w-4" style={{ color: "#c6ff34" }} />}
+                  ? <Folder className="h-4 w-4" style={{ color: "var(--color-brand-500)" }} />
+                  : <Users2 className="h-4 w-4" style={{ color: "var(--color-brand-500)" }} />}
                 {viewMode === "exam" ? "Examinations" : "Cohorts"}
                 <span className="rounded-full bg-[var(--card-2)] px-2 py-0.5 text-xs font-medium text-[var(--muted)]">
                   {viewMode === "exam" ? folders.length : cohortFolders.length}
@@ -737,7 +737,7 @@ function FolderBody({ folder, attempts, onNavigate, palette }: {
         <p className="text-xs text-[var(--muted)]">A quick glance — question-level analysis, infographics and exports live in the full view.</p>
         <button
           onClick={() => onNavigate(`/admin/exams/${folder.examId}/analysis`)}
-          className="inline-flex shrink-0 items-center gap-1 text-xs font-semibold text-[#c6ff34] hover:underline"
+          className="inline-flex shrink-0 items-center gap-1 text-xs font-semibold text-brand-400 hover:underline"
         >
           View full analysis <ArrowRight className="h-3 w-3" />
         </button>
@@ -929,7 +929,7 @@ function SortTh({ label, onClick, active, dir, right }: {
         right ? "text-right" : "text-left")}>
       <span className="inline-flex items-center gap-1">
         {label}
-        {active && <ArrowUpDown className="h-3 w-3" style={{ color: "#c6ff34" }} />}
+        {active && <ArrowUpDown className="h-3 w-3" style={{ color: "var(--color-brand-500)" }} />}
       </span>
     </th>
   );

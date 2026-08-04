@@ -130,7 +130,7 @@ function ThreadModal({ ticket, onClose, onChanged }: { ticket: Ticket; onClose: 
       </div>
       <div className="mt-3 max-h-80 space-y-3 overflow-y-auto pr-1">
         {ticket.messages.map((m) => (
-          <div key={m.id} className={clsx("rounded-xl border p-3 text-sm", m.authorType === "superadmin" ? "border-[#c6ff34]/25 bg-[#c6ff34]/[0.06]" : "border-[var(--border)] bg-[var(--card-2)]")}>
+          <div key={m.id} className={clsx("rounded-xl border p-3 text-sm", m.authorType === "superadmin" ? "border-brand-500/25 bg-brand-500/[0.06]" : "border-[var(--border)] bg-[var(--card-2)]")}>
             <div className="mb-1 flex items-center justify-between text-xs text-[var(--muted)]">
               <span className="font-semibold text-[var(--fg)]">{m.authorType === "superadmin" ? t("asup.platformSupport") : m.authorName}</span>
               <span>{fmt(m.at)}</span>

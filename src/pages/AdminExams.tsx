@@ -12,7 +12,7 @@ import type { Exam } from "@shared/types";
 
 /* ── Brand palette — three solid colors ─────────────────────────────────────── */
 const C = {
-  lime:  "#c6ff34",   // positive / highlights / CTA
+  lime:  "var(--color-brand-500)",   // positive / highlights / CTA
   pink:  "#fe3bed",   // attention / alerts / warnings
   white: "#ffffff",   // neutral secondary data
 };
@@ -103,7 +103,7 @@ export function AdminExams() {
             </span>
             <button onClick={create} disabled={creating}
               className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition hover:brightness-95 disabled:opacity-60"
-              style={{ background: C.lime, color: DARK, fontFamily: DISPLAY }}>
+              style={{ background: C.lime, color: "var(--brand-ink)", fontFamily: DISPLAY }}>
               {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
               {t("aex.addNew")}
             </button>
@@ -158,7 +158,7 @@ export function AdminExams() {
                     <p className="mt-2 text-sm text-[var(--muted)]">{t("aex.noExams")}</p>
                     <button onClick={create} disabled={creating}
                       className="mx-auto mt-3 inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-semibold"
-                      style={{ background: C.lime, color: DARK, fontFamily: DISPLAY }}>
+                      style={{ background: C.lime, color: "var(--brand-ink)", fontFamily: DISPLAY }}>
                       <Plus className="h-4 w-4" /> {t("aex.addNew")}
                     </button>
                   </div>
@@ -345,7 +345,7 @@ function ExamCard({ exam: e, t, onDelete, onNavigate }: {
         <div className="mt-auto pt-4">
           <button onClick={() => onNavigate(`/admin/exams/${e.id}`)}
             className="inline-flex w-full items-center justify-center gap-2 rounded-xl py-2 text-sm font-semibold transition hover:brightness-95"
-            style={{ background: C.lime, color: DARK, fontFamily: DISPLAY }}>
+            style={{ background: C.lime, color: "var(--brand-ink)", fontFamily: DISPLAY }}>
             {t("aex.viewMore")} <ArrowUpRight className="h-4 w-4" />
           </button>
         </div>
