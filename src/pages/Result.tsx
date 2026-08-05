@@ -3,7 +3,7 @@ import { Link, useParams, useLocation } from "react-router-dom";
 import {
   ArrowLeft, XCircle, CheckCircle2, ShieldAlert, MessageSquare, Send, X, AlertTriangle, Clock, ChevronRight,
   Loader2, Award, Hourglass, Copy, Check, Circle, ShieldCheck, ClipboardList, LayoutGrid, Info, Lock,
-  BellRing, ArrowRight,
+  BellRing, ArrowRight, Printer, Share2,
 } from "lucide-react";
 import { Shell } from "@/components/Shell";
 import { api } from "@/lib/api";
@@ -23,6 +23,15 @@ const INNER = "var(--card-2)";
 const DIM = "var(--muted)";
 const BG = "var(--bg)";
 const INK = "var(--brand-ink)";
+// Fluent-style system font stack (Segoe UI Variable → Segoe UI → platform
+// sans) — no new font dependency, this is just the OS-native stack Microsoft's
+// own web apps use.
+const FLUENT_FONT = "'Segoe UI Variable Text', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif";
+// Fluent's low-elevation card shadow ("shadow4"), plus its tighter 8px card
+// radius and 1px neutral border — flatter and crisper than the rest of the
+// app's deep rounded/gradient cards, deliberately, for this Microsoft-style page.
+const FLUENT_SHADOW = "0 1.6px 3.6px rgba(0,0,0,0.11), 0 0.3px 0.9px rgba(0,0,0,0.07)";
+const FLUENT_CARD = { background: CARD, border: "1px solid var(--border)", borderRadius: 8, boxShadow: FLUENT_SHADOW } as const;
 
 interface ReviewItem {
   questionId: string; prompt: string; type: string; yourAnswer: string; correctAnswer: string;
@@ -62,11 +71,13 @@ export function Result() {
   const held = data.held ?? false;
   const pending = gradingStatus === "pending_review" || held;
 
+  const resolved = !showConfirmation && !pending;
+
   return (
     <Shell>
-      <div className="print:hidden" style={{ minHeight: "100vh", backgroundColor: BG, fontFamily: "Inter, sans-serif", scrollbarWidth: "none" }}>
+      <div className="print:hidden" style={{ minHeight: "100vh", backgroundColor: BG, fontFamily: resolved ? FLUENT_FONT : "Inter, sans-serif", scrollbarWidth: "none" }}>
         <div style={{ maxWidth: 860, margin: "0 auto", paddingBottom: 48 }}>
-          <Breadcrumb examTitle={exam.title} />
+          {resolved ? <FluentCommandBar t={t} examTitle={exam.title} /> : <Breadcrumb examTitle={exam.title} />}
           {showConfirmation ? (
             <SubmissionConfirmation t={t} data={data} pending={pending} onContinue={() => setShowConfirmation(false)} />
           ) : pending ? (
@@ -77,6 +88,37 @@ export function Result() {
         </div>
       </div>
     </Shell>
+  );
+}
+
+// ── Fluent-style command bar — replaces the plain breadcrumb only on the
+// resolved/graded view: a "Result / {exam}" path on the left, icon+text
+// actions on the right (print uses the browser's native print, which the
+// print:hidden class elsewhere in this file already keeps chrome out of). ──
+function FluentCommandBar({ t, examTitle }: { t: TFn; examTitle: string }) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3" style={{ padding: "14px 24px", borderBottom: "1px solid var(--border)" }}>
+      <div className="flex min-w-0 items-center" style={{ gap: 6, fontFamily: FLUENT_FONT }}>
+        <Link to="/exams" className="flex items-center gap-1.5 transition hover:opacity-70" style={{ color: DIM }}>
+          <ArrowLeft className="h-[13px] w-[13px]" /> <span style={{ fontSize: 13 }}>{t("result.back")}</span>
+        </Link>
+        <ChevronRight className="h-3 w-3 shrink-0" style={{ color: "var(--muted)" }} />
+        <span className="truncate" style={{ fontSize: 13, color: "var(--fg)", fontWeight: 600 }}>{examTitle}</span>
+      </div>
+      <div className="flex items-center" style={{ gap: 4 }}>
+        <CommandBarBtn icon={Printer} label={t("result.print")} onClick={() => window.print()} />
+        <CommandBarBtn icon={Share2} label={t("result.copyLink")} onClick={() => navigator.clipboard?.writeText(window.location.href)} />
+      </div>
+    </div>
+  );
+}
+
+function CommandBarBtn({ icon: Icon, label, onClick }: { icon: typeof Printer; label: string; onClick: () => void }) {
+  return (
+    <button onClick={onClick} className="flex items-center gap-1.5 rounded transition hover:bg-[var(--card-2)]"
+      style={{ padding: "6px 10px", fontSize: 12.5, fontWeight: 500, color: "var(--fg)", fontFamily: FLUENT_FONT }}>
+      <Icon className="h-[14px] w-[14px]" style={{ color: DIM }} /> {label}
+    </button>
   );
 }
 
@@ -317,7 +359,7 @@ function ResolvedView({ t, data, attemptId }: { t: TFn; data: ResultResp; attemp
         durationMin={durationMin} fmtDate={fmtDate} correctCountAll={correctCount} incorrectCount={incorrectCount}
         blankCount={blankCount} earnedPts={earnedPts} totalPts={totalPts} total={review.length} />
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 2, margin: "16px 24px 0" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, margin: "16px 24px 0" }}>
         {exam.proctored && <ProctoringPanel t={t} events={proctorEvents} />}
         <ResultReviewPanel t={t} data={data} attemptId={attemptId} spanFull={!exam.proctored} />
       </div>
@@ -327,7 +369,7 @@ function ResolvedView({ t, data, attemptId }: { t: TFn; data: ResultResp; attemp
       {passed && exam.proctored && data.certificate && (
         <div className="mx-6 mt-4">
           <Link to="/certificates" className="inline-flex items-center gap-2 transition hover:opacity-80"
-            style={{ background: LIME, color: INK, fontSize: 12, fontWeight: 600, padding: "10px 16px", borderRadius: 8 }}>
+            style={{ background: LIME, color: INK, fontSize: 12, fontWeight: 600, padding: "9px 15px", borderRadius: 4, fontFamily: FLUENT_FONT }}>
             <Award className="h-4 w-4" /> {t("result.viewCertificate")}
           </Link>
         </div>
@@ -336,16 +378,16 @@ function ResolvedView({ t, data, attemptId }: { t: TFn; data: ResultResp; attemp
   );
 }
 
+// Flat Fluent "summary card" — a thin colored left accent bar carries the
+// pass/fail signal (no gradient glow), a slim ring, and a plain key/value
+// facts list, matching the Microsoft Forms quiz-result convention.
 function HeroCard({ t, exam, attempt, accent, passed, studentName, durationMin, fmtDate, correctCountAll, incorrectCount, blankCount, earnedPts, totalPts, total }: {
   t: TFn; exam: Exam; attempt: Attempt; accent: string; passed: boolean; studentName: string; durationMin: number;
   fmtDate: (iso: string | null) => string; correctCountAll: number; incorrectCount: number; blankCount: number; earnedPts: number; totalPts: number; total: number;
 }) {
   const score = attempt.score ?? 0;
-  const circumference = 2 * Math.PI * 52;
+  const r = 46, circumference = 2 * Math.PI * r;
   const offset = circumference - (score / 100) * circumference;
-  const gradient = passed
-    ? "linear-gradient(145deg, color-mix(in oklch, #22c55e 14%, var(--card)) 0%, color-mix(in oklch, #22c55e 7%, var(--card)) 60%, var(--card) 100%)"
-    : "linear-gradient(145deg, color-mix(in oklch, #ef4444 14%, var(--card)) 0%, color-mix(in oklch, #ef4444 7%, var(--card)) 60%, var(--card) 100%)";
 
   const breakdown = [
     { label: t("result.correctLabel"), value: correctCountAll, color: LIME },
@@ -355,54 +397,54 @@ function HeroCard({ t, exam, attempt, accent, passed, studentName, durationMin, 
   ];
 
   return (
-    <div className="mx-6 overflow-hidden" style={{ borderRadius: 16, background: gradient, border: `1px solid color-mix(in oklch, ${accent} 12%, transparent)` }}>
-      <div className="flex items-center justify-between" style={{ padding: "20px 24px 0" }}>
+    <div className="mx-6 overflow-hidden" style={{ ...FLUENT_CARD, borderLeft: `4px solid ${accent}`, fontFamily: FLUENT_FONT }}>
+      <div className="flex items-center justify-between" style={{ padding: "16px 22px 0" }}>
         <div>
-          <p style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.12em", color: `color-mix(in oklch, ${accent} 60%, transparent)` }}>{t("result.examResultLabel")}</p>
-          <p className="mt-1" style={{ fontSize: 13, fontWeight: 600, color: "var(--fg)" }}>{exam.title}</p>
+          <p style={{ fontSize: 11, letterSpacing: "0.04em", color: DIM }}>{t("result.examResultLabel")}</p>
+          <p className="mt-0.5" style={{ fontSize: 14, fontWeight: 600, color: "var(--fg)" }}>{exam.title}</p>
         </div>
-        <span style={{ padding: "4px 12px", borderRadius: 999, background: `color-mix(in oklch, ${accent} 12%, transparent)`, color: accent, border: `1px solid color-mix(in oklch, ${accent} 20%, transparent)`, fontSize: 11, fontWeight: 600 }}>
+        <span style={{ padding: "3px 11px", borderRadius: 3, background: `color-mix(in oklch, ${accent} 12%, transparent)`, color: accent, fontSize: 11.5, fontWeight: 600 }}>
           {passed ? t("common.pass") : t("common.fail")}
         </span>
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-6" style={{ padding: "32px" }}>
-        <div className="flex items-center" style={{ gap: 32 }}>
-          <div className="relative shrink-0" style={{ width: 120, height: 120 }}>
-            <svg width={120} height={120} viewBox="0 0 120 120" style={{ transform: "rotate(-90deg)" }}>
-              <circle cx={60} cy={60} r={52} fill="none" stroke={`color-mix(in oklch, ${accent} 10%, transparent)`} strokeWidth={6} />
-              <circle cx={60} cy={60} r={52} fill="none" stroke={accent} strokeWidth={6} strokeLinecap="round"
+      <div className="flex flex-wrap items-center justify-between gap-6" style={{ padding: "24px 22px" }}>
+        <div className="flex items-center" style={{ gap: 28 }}>
+          <div className="relative shrink-0" style={{ width: 104, height: 104 }}>
+            <svg width={104} height={104} viewBox="0 0 104 104" style={{ transform: "rotate(-90deg)" }}>
+              <circle cx={52} cy={52} r={r} fill="none" stroke="var(--border)" strokeWidth={5} />
+              <circle cx={52} cy={52} r={r} fill="none" stroke={accent} strokeWidth={5} strokeLinecap="butt"
                 strokeDasharray={circumference} strokeDashoffset={offset} style={{ transition: "stroke-dashoffset 0.6s ease" }} />
             </svg>
             <div className="absolute inset-0 flex flex-col items-center justify-center">
-              <span style={{ fontSize: 28, fontWeight: 700, color: accent, letterSpacing: "-1px" }}>{score}%</span>
-              <span style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: DIM }}>score</span>
+              <span style={{ fontSize: 24, fontWeight: 600, color: "var(--fg)", letterSpacing: "-0.5px" }}>{score}%</span>
+              <span style={{ fontSize: 9, color: DIM }}>{t("result.scoreLabel")}</span>
             </div>
           </div>
 
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
               {passed ? <CheckCircle2 className="h-4 w-4" style={{ color: LIME }} /> : <XCircle className="h-4 w-4" style={{ color: RED }} />}
-              <span style={{ fontSize: 16, fontWeight: 700, color: "var(--fg)" }}>{passed ? t("result.passed") : t("result.failed")}</span>
+              <span style={{ fontSize: 15, fontWeight: 600, color: "var(--fg)" }}>{passed ? t("result.passed") : t("result.failed")}</span>
             </div>
-            <p className="mt-1" style={{ fontSize: 13, color: DIM }}>
+            <p className="mt-1" style={{ fontSize: 12.5, color: DIM }}>
               {studentName && <>{studentName} · </>}{correctCountAll}/{total} {t("result.correctLabel").toLowerCase()} · {t("result.passMarkLabel")} {exam.passingScore}%
             </p>
           </div>
         </div>
 
-        <div className="flex shrink-0 flex-col text-right" style={{ gap: 12 }}>
-          <MetaItem label={t("result.submittedLabel")} value={fmtDate(attempt.submittedAt)} />
-          <MetaItem label={t("result.durationLabel")} value={`${durationMin} min`} />
-          <MetaItem label={t("result.passMarkLabel")} value={`${exam.passingScore}%`} />
+        <div className="flex shrink-0 flex-col" style={{ gap: 7 }}>
+          <FactRow label={t("result.submittedLabel")} value={fmtDate(attempt.submittedAt)} />
+          <FactRow label={t("result.durationLabel")} value={`${durationMin} min`} />
+          <FactRow label={t("result.passMarkLabel")} value={`${exam.passingScore}%`} />
         </div>
       </div>
 
-      <div className="flex" style={{ borderTop: `1px solid color-mix(in oklch, ${accent} 8%, transparent)` }}>
+      <div className="flex" style={{ borderTop: "1px solid var(--border)" }}>
         {breakdown.map((b, i) => (
-          <div key={b.label} className="flex flex-1 flex-col items-center" style={{ padding: "16px 0", borderRight: i < breakdown.length - 1 ? `1px solid color-mix(in oklch, ${accent} 8%, transparent)` : undefined }}>
-            <span style={{ fontSize: 20, fontWeight: 700, color: b.color }}>{b.value}</span>
-            <span className="mt-0.5" style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em", color: DIM }}>{b.label}</span>
+          <div key={b.label} className="flex flex-1 flex-col items-center" style={{ padding: "13px 0", borderRight: i < breakdown.length - 1 ? "1px solid var(--border)" : undefined }}>
+            <span style={{ fontSize: 17, fontWeight: 600, color: b.color }}>{b.value}</span>
+            <span className="mt-0.5" style={{ fontSize: 10.5, color: DIM }}>{b.label}</span>
           </div>
         ))}
       </div>
@@ -410,40 +452,38 @@ function HeroCard({ t, exam, attempt, accent, passed, studentName, durationMin, 
   );
 }
 
-function MetaItem({ label, value }: { label: string; value: string }) {
+function FactRow({ label, value }: { label: string; value: string }) {
   return (
-    <div>
-      <p style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em", color: DIM }}>{label}</p>
-      <p style={{ fontSize: 13, fontWeight: 600, color: "var(--fg)" }}>{value}</p>
+    <div className="flex items-baseline justify-end" style={{ gap: 10 }}>
+      <span style={{ fontSize: 11.5, color: DIM }}>{label}</span>
+      <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg)", minWidth: 76, textAlign: "right" }}>{value}</span>
     </div>
   );
 }
 
 function ProctoringPanel({ t, events }: { t: TFn; events: ProctorEvent[] }) {
   return (
-    <div style={{ borderRadius: 16, padding: 20, backgroundColor: CARD, border: "1px solid var(--border)" }}>
-      <div className="mb-4 flex items-center gap-2">
-        <span className="flex h-7 w-7 items-center justify-center rounded-lg" style={{ background: "rgba(251,146,60,0.12)" }}>
-          <ShieldAlert className="h-[14px] w-[14px]" style={{ color: ORANGE }} />
-        </span>
+    <div style={{ ...FLUENT_CARD, padding: 18, fontFamily: FLUENT_FONT }}>
+      <div className="mb-3.5 flex items-center gap-2 pb-3" style={{ borderBottom: "1px solid var(--border)" }}>
+        <ShieldAlert className="h-4 w-4" style={{ color: ORANGE }} />
         <h2 style={{ fontSize: 13, fontWeight: 600, color: "var(--fg)" }}>{t("result.proctoringSummary")}</h2>
       </div>
 
       {events.length === 0 ? (
         <p style={{ fontSize: 12, color: LIME }}>{t("result.cleanSession")}</p>
       ) : (
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col" style={{ gap: 1 }}>
           {events.map((e) => {
             const sev = SEVERITY_META[e.severity] ?? SEVERITY_META.info;
             return (
-              <div key={e.id} className="flex items-start justify-between gap-3" style={{ padding: 12, borderRadius: 8, backgroundColor: INNER }}>
+              <div key={e.id} className="flex items-start justify-between gap-3 transition hover:bg-[var(--card-2)]" style={{ padding: "9px 6px", borderRadius: 4 }}>
                 <div className="flex items-start gap-2">
                   <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" style={{ color: ORANGE }} />
                   <span className="leading-relaxed" style={{ fontSize: 12, color: "var(--fg)" }}>
                     <span className="capitalize">{e.type.replace(/_/g, " ")}</span> — {e.message}
                   </span>
                 </div>
-                <span className="shrink-0 rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide" style={{ color: sev.color, backgroundColor: sev.bg }}>
+                <span className="shrink-0 rounded px-2 py-0.5 text-[10px] font-semibold" style={{ color: sev.color, backgroundColor: sev.bg }}>
                   {t(sev.labelKey)}
                 </span>
               </div>
@@ -451,7 +491,7 @@ function ProctoringPanel({ t, events }: { t: TFn; events: ProctorEvent[] }) {
           })}
         </div>
       )}
-      <p className="mt-3" style={{ fontSize: 11, color: DIM }}>{t("result.integrityEventsFooter", { n: events.length })}</p>
+      <p className="mt-3 pt-3" style={{ fontSize: 11, color: DIM, borderTop: events.length > 0 ? "1px solid var(--border)" : undefined }}>{t("result.integrityEventsFooter", { n: events.length })}</p>
     </div>
   );
 }
@@ -476,44 +516,42 @@ function ResultReviewPanel({ t, data, attemptId, spanFull }: { t: TFn; data: Res
   const canRequest = data.canAppeal && !data.regrade;
 
   return (
-    <div style={{ borderRadius: 16, padding: 20, backgroundColor: CARD, border: "1px solid var(--border)", gridColumn: spanFull ? "1 / -1" : undefined }}>
-      <div className="mb-3 flex items-center gap-2">
-        <span className="flex h-7 w-7 items-center justify-center rounded-lg" style={{ background: "color-mix(in oklch, var(--color-brand-500) 10%, transparent)" }}>
-          <MessageSquare className="h-[14px] w-[14px]" style={{ color: LIME }} />
-        </span>
+    <div style={{ ...FLUENT_CARD, padding: 18, fontFamily: FLUENT_FONT, gridColumn: spanFull ? "1 / -1" : undefined }}>
+      <div className="mb-3.5 flex items-center gap-2 pb-3" style={{ borderBottom: "1px solid var(--border)" }}>
+        <MessageSquare className="h-4 w-4" style={{ color: LIME }} />
         <h2 style={{ fontSize: 13, fontWeight: 600, color: "var(--fg)" }}>{t("result.resultReview")}</h2>
       </div>
 
-      <p className="mb-5 leading-relaxed" style={{ fontSize: 12, color: DIM }}>{t("result.reviewPrompt")}</p>
+      <p className="mb-4 leading-relaxed" style={{ fontSize: 12, color: DIM }}>{t("result.reviewPrompt")}</p>
 
       {reviewSent ? (
-        <div className="flex items-center gap-2" style={{ padding: 12, borderRadius: 8, backgroundColor: "color-mix(in oklch, var(--color-brand-500) 8%, transparent)", border: "1px solid color-mix(in oklch, var(--color-brand-500) 15%, transparent)" }}>
+        <div className="flex items-center gap-2" style={{ padding: 11, borderRadius: 4, backgroundColor: "color-mix(in oklch, var(--color-brand-500) 8%, transparent)", border: "1px solid color-mix(in oklch, var(--color-brand-500) 15%, transparent)" }}>
           <CheckCircle2 className="h-[14px] w-[14px]" style={{ color: LIME }} />
           <span style={{ fontSize: 12, fontWeight: 500, color: LIME }}>{t("result.reviewSubmitted")}</span>
         </div>
       ) : !canRequest ? null : open ? (
         <div>
           <textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder={t("result.reasonPlaceholder")}
-            className="w-full resize-y outline-none" style={{ minHeight: 80, background: INNER, border: "1px solid var(--border)", borderRadius: 8, padding: 10, fontSize: 12, color: "var(--fg)" }} />
+            className="w-full resize-y outline-none" style={{ minHeight: 80, background: INNER, border: "1px solid var(--border)", borderRadius: 4, padding: 10, fontSize: 12, color: "var(--fg)" }} />
           {err && <p className="mt-1.5" style={{ fontSize: 11, color: RED }}>{err}</p>}
           <div className="mt-2 flex items-center gap-2">
             <button onClick={submit} disabled={busy} className="flex items-center gap-2 transition hover:opacity-80 disabled:opacity-60"
-              style={{ backgroundColor: LIME, color: INK, fontSize: 12, fontWeight: 600, padding: "10px 16px", borderRadius: 8 }}>
+              style={{ backgroundColor: LIME, color: INK, fontSize: 12, fontWeight: 600, padding: "9px 15px", borderRadius: 4 }}>
               {busy ? <Loader2 className="h-[13px] w-[13px] animate-spin" /> : <Send size={13} />} {t("result.submitRequest")}
             </button>
-            <button onClick={() => { setOpen(false); setErr(null); }} className="transition hover:opacity-70" style={{ fontSize: 12, color: DIM, padding: "10px 12px" }}>
+            <button onClick={() => { setOpen(false); setErr(null); }} className="transition hover:opacity-70" style={{ fontSize: 12, color: DIM, padding: "9px 12px" }}>
               <X size={13} />
             </button>
           </div>
         </div>
       ) : (
         <button onClick={() => setOpen(true)} className="flex items-center gap-2 transition hover:opacity-80"
-          style={{ backgroundColor: LIME, color: INK, fontSize: 12, fontWeight: 600, padding: "10px 16px", borderRadius: 8 }}>
+          style={{ backgroundColor: LIME, color: INK, fontSize: 12, fontWeight: 600, padding: "9px 15px", borderRadius: 4 }}>
           <Send size={13} /> {t("result.requestReview")}
         </button>
       )}
 
-      <div className="mt-4 flex items-center gap-2" style={{ padding: 12, borderRadius: 8, backgroundColor: INNER }}>
+      <div className="mt-4 flex items-center gap-2" style={{ padding: 11, borderRadius: 4, backgroundColor: INNER }}>
         <Clock className="h-3 w-3" style={{ color: DIM }} />
         <span style={{ fontSize: 11, color: DIM }}>{t("result.responseTimeNotice")}</span>
       </div>
@@ -524,59 +562,57 @@ function ResultReviewPanel({ t, data, attemptId, spanFull }: { t: TFn; data: Res
 function AnswerReviewSection({ t, review, correctCount, passed, accent }: { t: TFn; review: ReviewItem[]; correctCount: number; passed: boolean; accent: string }) {
   const pct = review.length ? Math.round((correctCount / review.length) * 100) : 0;
   return (
-    <div className="mx-6 mt-8">
-      <div className="mb-4 flex items-center justify-between">
+    <div className="mx-6 mt-6" style={{ fontFamily: FLUENT_FONT }}>
+      <div className="mb-3 flex items-center justify-between">
         <div>
-          <h2 style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>{t("result.answerReview")}</h2>
+          <h2 style={{ fontSize: 15, fontWeight: 600, color: "var(--fg)" }}>{t("result.answerReview")}</h2>
           <p style={{ fontSize: 12, color: DIM }}>{t("result.answeredCorrectly", { correct: correctCount, total: review.length })}</p>
         </div>
         <div className="flex items-center gap-2">
-          <div style={{ width: 128, height: 6, borderRadius: 9999, backgroundColor: "var(--border)" }}>
-            <div style={{ height: "100%", borderRadius: 9999, backgroundColor: LIME, width: `${pct}%` }} />
+          <div style={{ width: 120, height: 4, borderRadius: 2, backgroundColor: "var(--border)" }}>
+            <div style={{ height: "100%", borderRadius: 2, backgroundColor: LIME, width: `${pct}%` }} />
           </div>
           <span className="tabular-nums" style={{ fontSize: 11, fontWeight: 600, color: accent }}>{pct}%</span>
         </div>
       </div>
 
-      <div className="flex flex-col" style={{ gap: 12 }}>
-        {review.map((r, i) => <AnswerCard key={r.questionId} t={t} q={r} index={i} />)}
+      {/* A single bordered list, each question a row with a colored left
+          accent bar — the Microsoft Forms quiz-review convention — rather
+          than separate floating cards per question. */}
+      <div style={{ ...FLUENT_CARD, padding: 0, overflow: "hidden" }}>
+        {review.map((r, i) => <AnswerRow key={r.questionId} t={t} q={r} index={i} last={i === review.length - 1} />)}
       </div>
     </div>
   );
 }
 
-function AnswerCard({ t, q, index }: { t: TFn; q: ReviewItem; index: number }) {
+function AnswerRow({ t, q, index, last }: { t: TFn; q: ReviewItem; index: number; last: boolean }) {
   const passed = !!q.correct;
+  const accent = passed ? LIME : RED;
   return (
-    <div style={{ borderRadius: 12, overflow: "hidden", backgroundColor: CARD, border: `1px solid ${passed ? "color-mix(in oklch, var(--color-brand-500) 10%, transparent)" : "rgba(239,68,68,0.10)"}` }}>
-      <div className="flex items-start gap-3" style={{ padding: "20px 20px 16px" }}>
-        {passed ? <CheckCircle2 className="mt-0.5 h-[18px] w-[18px] shrink-0" style={{ color: LIME }} /> : <XCircle className="mt-0.5 h-[18px] w-[18px] shrink-0" style={{ color: RED }} />}
+    <div style={{ borderLeft: `3px solid ${accent}`, borderBottom: last ? undefined : "1px solid var(--border)" }}>
+      <div className="flex items-start gap-3" style={{ padding: "16px 18px 14px" }}>
+        {passed ? <CheckCircle2 className="mt-0.5 h-[16px] w-[16px] shrink-0" style={{ color: LIME }} /> : <XCircle className="mt-0.5 h-[16px] w-[16px] shrink-0" style={{ color: RED }} />}
         <div className="min-w-0 flex-1">
-          <div className="mb-2 flex items-center justify-between gap-4">
-            <span style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: DIM }}>{t("result.questionLabel", { n: index + 1 })}</span>
+          <div className="mb-1.5 flex items-center justify-between gap-4">
+            <span style={{ fontSize: 11, fontWeight: 600, color: DIM }}>{t("result.questionLabel", { n: index + 1 })}</span>
             <span className="tabular-nums" style={{ fontSize: 11, fontWeight: 600, color: passed ? LIME : RED }}>{q.awardedPoints ?? 0}/{q.points} {t("result.pts")}</span>
           </div>
           <p className="leading-relaxed" style={{ fontSize: 13, fontWeight: 500, color: "var(--fg)" }}><MathText>{q.prompt}</MathText></p>
-        </div>
-      </div>
 
-      <div className="mx-5 mb-5 overflow-hidden" style={{ borderRadius: 8, backgroundColor: INNER }}>
-        <div className="flex items-start gap-2.5" style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)" }}>
-          <X className="mt-0.5 h-[13px] w-[13px] shrink-0" style={{ color: RED }} />
-          <div>
-            <p style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600, color: DIM }}>{t("result.yourAnswerLabel")}</p>
-            <p className="italic" style={{ fontSize: 12, color: "rgba(239,68,68,0.75)" }}>{q.yourAnswer && q.yourAnswer.trim() ? q.yourAnswer : t("result.blank")}</p>
+          <div className="mt-3 flex flex-col gap-1.5">
+            <div className="flex items-baseline gap-2">
+              <span style={{ fontSize: 11, fontWeight: 600, color: DIM, minWidth: 90 }}>{t("result.yourAnswerLabel")}</span>
+              <span style={{ fontSize: 12.5, color: passed ? "var(--fg)" : RED }}>{q.yourAnswer && q.yourAnswer.trim() ? q.yourAnswer : t("result.blank")}</span>
+            </div>
+            {!passed && q.correctAnswer && (
+              <div className="flex items-baseline gap-2">
+                <span style={{ fontSize: 11, fontWeight: 600, color: DIM, minWidth: 90 }}>{t("result.correctAnswerLabel")}</span>
+                <span className="font-mono" style={{ fontSize: 12.5, color: LIME }}>{q.correctAnswer}</span>
+              </div>
+            )}
           </div>
         </div>
-        {!passed && q.correctAnswer && (
-          <div className="flex items-start gap-2.5" style={{ padding: "12px 16px" }}>
-            <CheckCircle2 className="mt-0.5 h-[13px] w-[13px] shrink-0" style={{ color: LIME }} />
-            <div>
-              <p style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600, color: DIM }}>{t("result.correctAnswerLabel")}</p>
-              <p className="font-mono" style={{ fontSize: 12, color: LIME }}>{q.correctAnswer}</p>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );

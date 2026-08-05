@@ -13,6 +13,13 @@ import { clsx } from "clsx";
 
 const SEV_KEY: Record<string, string> = { high: "common.high", warning: "common.warning", low: "aar.sevLow", info: "aar.sevInfo" };
 
+// Same Fluent/Microsoft-style tokens as the candidate-facing Result page
+// (src/pages/Result.tsx) — applied here too since this is the admin's view of
+// the exact same attempt/result data, just with grading controls added.
+const FLUENT_FONT = "'Segoe UI Variable Text', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif";
+const FLUENT_SHADOW = "0 1.6px 3.6px rgba(0,0,0,0.11), 0 0.3px 0.9px rgba(0,0,0,0.07)";
+const FLUENT_CARD = { background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, boxShadow: FLUENT_SHADOW } as const;
+
 interface ReviewItem {
   answerId: string | null;
   questionId: string;
@@ -104,23 +111,24 @@ export function AdminAttemptReview() {
     finally { setSaving(null); }
   }
 
+  const accentColor = pending ? "#fb923c" : attempt.passed ? "var(--color-brand-500)" : "#ef4444";
+
   return (
     <AdminShell wide>
-      <div className="fade-in max-w-3xl">
+      <div className="fade-in max-w-3xl" style={{ fontFamily: FLUENT_FONT }}>
         <Breadcrumbs current={anonymous ? undefined : candidate.name} />
         <Link to="/admin/grading" className="inline-flex items-center gap-1.5 text-sm text-[var(--muted)] hover:text-[var(--fg)]">
           <ArrowLeft className="h-4 w-4" /> {t("aar.gradingQueue")}
         </Link>
 
-        <div className="card mt-4 overflow-hidden">
-          <div className={clsx("flex items-center justify-between gap-4 p-6",
-            pending ? "bg-amber-500/15" : attempt.passed ? "bg-emerald-500/15" : "bg-rose-500/15")}>
+        <div className="mt-4 overflow-hidden" style={{ ...FLUENT_CARD, borderLeft: `4px solid ${accentColor}` }}>
+          <div className="flex items-center justify-between gap-4 p-6">
             <div>
               <div className="flex items-center gap-2">
                 {pending
                   ? <ClipboardPending />
                   : attempt.passed ? <CheckCircle2 className="h-6 w-6 text-emerald-400" /> : <XCircle className="h-6 w-6 text-rose-400" />}
-                <h1 className="text-3xl font-extrabold tabular-nums">{attempt.score}%</h1>
+                <h1 className="text-2xl font-semibold tabular-nums">{attempt.score}%</h1>
                 <GradingBadge t={t} status={gradingStatus} />
               </div>
               <p className={clsx("mt-1 text-sm font-semibold",
@@ -174,7 +182,7 @@ export function AdminAttemptReview() {
         )}
 
         {!anonymous && idDocumentPhoto && (
-          <div className="card mt-4 p-5">
+          <div className="mt-4" style={{ ...FLUENT_CARD, padding: 18 }}>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2 text-sm font-semibold"><User className="h-4 w-4 text-brand-400" /> {t("aar.identityVerification")}</div>
               {idVerified
@@ -203,7 +211,7 @@ export function AdminAttemptReview() {
         )}
 
         {!anonymous && roomScanPhotos.length > 0 && (
-          <div className="card mt-4 p-5">
+          <div className="mt-4" style={{ ...FLUENT_CARD, padding: 18 }}>
             <div className="flex items-center gap-2 text-sm font-semibold"><Film className="h-4 w-4 text-brand-400" /> {t("aar.roomScan")}
               <span className="text-xs font-normal text-[var(--muted)]">{t("aar.roomScanFrames", { n: roomScanPhotos.length })}</span>
             </div>
@@ -216,7 +224,7 @@ export function AdminAttemptReview() {
         )}
 
         {exam.proctored && (verificationPhoto || snapshots.length > 0) && (
-          <div className="card mt-4 p-5">
+          <div className="mt-4" style={{ ...FLUENT_CARD, padding: 18 }}>
             <div className="flex items-center gap-2 text-sm font-semibold"><Film className="h-4 w-4 text-brand-400" /> {t("aar.webcamTimeline")}
               <span className="text-xs font-normal text-[var(--muted)]">{t("aar.framesCount", { n: snapshots.length })}</span>
             </div>
@@ -242,7 +250,7 @@ export function AdminAttemptReview() {
         )}
 
         {(exam.proctored || proctorEvents.length > 0) && (
-          <div className="card mt-4 p-5">
+          <div className="mt-4" style={{ ...FLUENT_CARD, padding: 18 }}>
             <div className="flex items-center gap-2 text-sm font-semibold"><ShieldAlert className="h-4 w-4 text-brand-400" /> {t("aar.eventTimeline")}</div>
             {proctorEvents.length === 0 ? (
               <p className="mt-2 text-sm text-emerald-400">{t("aar.noFlags")}</p>
@@ -287,7 +295,7 @@ function IntegrityCard({ t, integrity, breakdown, eventCount }: {
   const toneText = tone === "emerald" ? "text-emerald-400" : tone === "amber" ? "text-amber-400" : "text-rose-400";
   const toneBar = tone === "emerald" ? "bg-emerald-500" : tone === "amber" ? "bg-amber-500" : "bg-rose-500";
   return (
-    <div className="card mt-4 p-5">
+    <div className="mt-4" style={{ ...FLUENT_CARD, padding: 18 }}>
       <div className="flex items-center gap-2 text-sm font-semibold"><Gauge className="h-4 w-4 text-brand-400" /> {t("aar.integrityBreakdown")}</div>
       <div className="mt-3 flex items-center gap-4">
         <div className="text-center">
@@ -354,7 +362,7 @@ function SecondMarkerPanel({ t, firstScore, secondMark, saving, onRecord }: {
   const diff = secondMark ? Math.abs(firstScore - secondMark.score) : 0;
   const flagged = diff >= 10; // ≥10-point gap → reconcile
   return (
-    <div className="card mt-4 p-5">
+    <div className="mt-4" style={{ ...FLUENT_CARD, padding: 18 }}>
       <div className="flex items-center gap-2 text-sm font-semibold"><Scale className="h-4 w-4 text-brand-400" /> {t("aar.secondMarker")}</div>
       <p className="mt-0.5 text-xs text-[var(--muted)]">{t("aar.secondMarkerHint")}</p>
       {secondMark ? (
@@ -397,8 +405,10 @@ function AnswerCard({ t, index, item, saving, onGrade }: {
       ? <span className="mt-0.5 h-5 w-5 shrink-0 rounded-full bg-amber-400" />
       : <XCircle className="mt-0.5 h-5 w-5 shrink-0 text-rose-500" />;
 
+  const rowAccent = item.correct === true ? "var(--color-brand-500)" : item.needsReview ? "#fbbf24" : "#ef4444";
+
   return (
-    <div className={clsx("card p-4", item.needsReview && "ring-1 ring-amber-300")}>
+    <div style={{ ...FLUENT_CARD, padding: 16, borderLeft: `3px solid ${rowAccent}` }}>
       <div className="flex items-start gap-3">
         {icon}
         <div className="flex-1">
