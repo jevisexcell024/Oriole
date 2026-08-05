@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Clock, Loader2, CheckCircle2, XCircle, ShieldCheck, MonitorCheck, Play,
-  CalendarClock, Filter, Hourglass, ListChecks, Eye, BookOpen, Dumbbell, History, Award,
+  CalendarClock, Filter, Hourglass, ListChecks, Eye, BookOpen, History, Award,
   User, Camera, Mic, Wifi, Globe, BadgeCheck,
 } from "lucide-react";
 import { Shell } from "@/components/Shell";
@@ -324,8 +324,7 @@ function ExamDetail({ it, now, user, perm, tab, setTab }: {
                 ))}
               </div>
             )}
-            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
-              <Link to="/practice" className="flex items-center gap-2 rounded-xl border border-[var(--border)] p-3 text-sm font-semibold text-[var(--fg)] hover:bg-[var(--card-2)]"><Dumbbell className="h-4 w-4 text-brand-400" /> Practice Tests</Link>
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
               <Link to="/results" className="flex items-center gap-2 rounded-xl border border-[var(--border)] p-3 text-sm font-semibold text-[var(--fg)] hover:bg-[var(--card-2)]"><History className="h-4 w-4 text-brand-400" /> Past Results</Link>
               <Link to="/announcements" className="flex items-center gap-2 rounded-xl border border-[var(--border)] p-3 text-sm font-semibold text-[var(--fg)] hover:bg-[var(--card-2)]"><BookOpen className="h-4 w-4 text-brand-400" /> Announcements</Link>
             </div>

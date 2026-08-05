@@ -1298,10 +1298,14 @@ app.get("/api/super-admin/licenses", requireSuperAdmin, (_req, res) => {
   const licenses = db.data!.tenants
     .map((t) => {
       const plan = t.planId ? db.data!.plans.find((p) => p.id === t.planId) ?? null : null;
+      // The redeemed key that put this tenant on its current plan, if it was
+      // activated that way rather than assigned directly by an operator.
+      const redeemedKey = db.data!.licenseKeys.find((k) => k.redeemedByTenantIds.includes(t.id));
       return {
-        tenantId: t.id, tenantName: t.name, tenantStatus: t.status,
-        planId: t.planId ?? null, planName: plan?.name ?? null,
+        tenantId: t.id, tenantName: t.name, tenantStatus: t.status, tenantCreatedAt: t.createdAt,
+        planId: t.planId ?? null, planName: plan?.name ?? null, planCode: plan?.code ?? null,
         licenseStatus: t.licenseStatus ?? null, licenseExpiresAt: t.licenseExpiresAt ?? null,
+        redeemedKeyCode: redeemedKey?.code ?? null,
         limits: plan?.limits ?? null, usage: tenantUsage(t.id),
       };
     })
@@ -2809,6 +2813,7 @@ app.get("/api/attempts/:id/result", requireAuth, async (req, res) => {
   const myRegrade = db.data!.regradeRequests.find((r) => r.attemptId === attempt.id) ?? null;
   res.json({
     attempt: safeAttempt, exam, review, certificate, proctorEvents: events,
+    tenantName: db.data!.tenants.find((x) => x.id === user.tenantId)?.name ?? null,
     gradingStatus: attempt.gradingStatus ?? "auto_graded",
     held, releaseAt: held ? releaseAt : null,
     letter: hide ? null : letterFor(attempt.score ?? 0, exam.gradeBands),
@@ -5540,7 +5545,8 @@ app.get("/api/my/score-trend", requireAuth, (req, res) => {
 app.get("/api/practice", requireAuth, async (req, res) => {
   const user = currentUser(req)!;
   const practiceExams = db.data!.exams.filter((e) => e.status === "published" && e.practice && e.tenantId === user.tenantId);
-  const items: Array<{ exam: { id: string; title: string; code: string; description: string; durationMinutes: number; questionCount: number }; registrationId: string; lastScore: number | null }> = [];
+  const items: Array<{ exam: { id: string; title: string; code: string; description: string; subject: string | null; durationMinutes: number; questionCount: number }; registrationId: string; lastScore: number | null; inProgress: boolean; inProgressPct: number | null }> = [];
+  const registrationIds: string[] = [];
   for (const exam of practiceExams) {
     let reg = db.data!.registrations.find((r) => r.candidateId === user.id && r.examId === exam.id);
     if (!reg) {
@@ -5548,14 +5554,39 @@ app.get("/api/practice", requireAuth, async (req, res) => {
       db.data!.registrations.push(reg);
       await db.upsert("registrations", reg);
     }
+    registrationIds.push(reg.id);
     const attempt = db.data!.attempts.filter((a) => a.registrationId === reg!.id).sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0] ?? null;
+    const questionCount = db.data!.questions.filter((q) => q.examId === exam.id).length;
+    const inProgress = attempt?.status === "in_progress";
+    // Real "how far in" for the Continue card's progress bar — how many of this
+    // attempt's own answers are filled in, not a guessed/animated number.
+    let inProgressPct: number | null = null;
+    if (inProgress && attempt) {
+      const answered = (await answerStore.forAttempt(attempt.id)).filter((a) => a.value && a.value.trim()).length;
+      inProgressPct = questionCount ? Math.round((answered / questionCount) * 100) : 0;
+    }
     items.push({
-      exam: { id: exam.id, title: exam.title, code: exam.code, description: exam.description, durationMinutes: exam.durationMinutes, questionCount: db.data!.questions.filter((q) => q.examId === exam.id).length },
+      exam: { id: exam.id, title: exam.title, code: exam.code, description: exam.description, subject: exam.subject ?? null, durationMinutes: exam.durationMinutes, questionCount },
       registrationId: reg.id,
       lastScore: attempt?.status === "submitted" ? (attempt.score ?? null) : null,
+      inProgress,
+      inProgressPct,
     });
   }
-  res.json({ items });
+  // Real recent-attempt history across all practice exams — used to render a genuine
+  // "Recent History" list rather than fabricating session data.
+  const history = db.data!.attempts
+    .filter((a) => registrationIds.includes(a.registrationId) && a.status === "submitted" && a.submittedAt)
+    .sort((a, b) => b.submittedAt!.localeCompare(a.submittedAt!))
+    .slice(0, 8)
+    .map((a) => {
+      const reg = db.data!.registrations.find((r) => r.id === a.registrationId)!;
+      const exam = db.data!.exams.find((e) => e.id === reg.examId);
+      return { id: a.id, examTitle: exam?.title ?? "—", score: a.score ?? null, passed: a.passed, submittedAt: a.submittedAt!, durationMinutes: a.durationMinutes };
+    });
+  // Same account-level study streak shown on the Dashboard — real, not practice-specific.
+  const streak = displayStreak(user.lastActiveDay, user.streak, Date.now());
+  res.json({ items, history, streak });
 });
 
 // Candidate-facing: in-app announcements visible to the logged-in user's audience.

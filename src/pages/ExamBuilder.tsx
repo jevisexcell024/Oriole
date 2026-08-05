@@ -844,7 +844,17 @@ function SettingsPanel({
               </span>
             </button>
           </Field>
+          <Field label={t("eb.practiceExam")}>
+            <button onClick={() => patchExam({ practice: !exam.practice })}
+              className={clsx("flex h-9 items-center justify-between rounded-lg border px-3 text-sm font-medium", exam.practice ? "border-brand-500/40 bg-[color-mix(in oklch, var(--color-brand-500) 10%, transparent)] text-brand-400" : "border-[var(--border)] text-[var(--muted)]")}>
+              {exam.practice ? t("eb.on") : t("eb.off")}
+              <span className={clsx("ml-2 inline-flex h-4 w-7 items-center rounded-full p-0.5 transition", exam.practice ? "bg-brand-500" : "bg-[var(--border)]")}>
+                <span className={clsx("h-3 w-3 rounded-full bg-white transition", exam.practice && "translate-x-3")} />
+              </span>
+            </button>
+          </Field>
         </div>
+        <p className="mt-3 text-xs text-[var(--muted)]">{t("eb.practiceExamHint")}</p>
         <CoverImageField exam={exam} patch={patchExam} />
       </div>
 

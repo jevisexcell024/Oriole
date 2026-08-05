@@ -134,7 +134,7 @@ export function Session() {
       await sync.flushNow();
       await api.post(`/attempts/${attemptId}/submit`);
       if (document.fullscreenElement) await document.exitFullscreen().catch(() => {});
-      navigate(`/attempts/${attemptId}/result`, { replace: true, state: { auto } });
+      navigate(`/attempts/${attemptId}/result`, { replace: true, state: { auto, justSubmitted: true } });
     } catch (e) {
       submittedRef.current = false;
       setError(e instanceof Error ? e.message : "Could not submit.");

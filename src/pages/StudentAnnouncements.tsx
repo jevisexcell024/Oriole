@@ -23,16 +23,17 @@ interface Ann {
 type Filter = "all" | "unread" | "urgent";
 type TFn = ReturnType<typeof useT>;
 
-// Visual language matches the admin Library Dashboard tab, per the redesign spec.
-const CARD = "#141414";
-const LIME = "#c8f000";
-const BORDER = "rgba(255,255,255,0.08)";
+// Theme-aware — these track the app's light/dark CSS variables (src/index.css)
+// instead of a fixed dark palette, matching Dashboard.tsx's convention.
+const CARD = "var(--card)";
+const LIME = "var(--color-brand-500)";
+const BORDER = "var(--border)";
 const BARLOW = "'Barlow Condensed', sans-serif";
 const MONO = "'DM Mono', monospace";
 
 const PRIORITY_META: Record<Ann["priority"], { color: string; bg: string; icon: typeof AlertTriangle; labelKey: string }> = {
   urgent: { color: "#ef4444", bg: "rgba(239,68,68,0.14)", icon: AlertTriangle, labelKey: "ann.urgent" },
-  normal: { color: LIME, bg: "rgba(200,240,0,0.14)", icon: Megaphone, labelKey: "ann.normal" },
+  normal: { color: LIME, bg: "color-mix(in oklch, var(--color-brand-500) 14%, transparent)", icon: Megaphone, labelKey: "ann.normal" },
   high: { color: "#3b82f6", bg: "rgba(59,130,246,0.14)", icon: Info, labelKey: "ann.high" },
 };
 
@@ -132,7 +133,7 @@ export function StudentAnnouncements() {
                   <button
                     onClick={markAllRead}
                     disabled={markAllBusy}
-                    className="rounded-full px-3 py-1.5 text-xs font-semibold text-[#08090a] disabled:opacity-60"
+                    className="rounded-full px-3 py-1.5 text-xs font-semibold text-[var(--brand-ink)] disabled:opacity-60"
                     style={{ background: LIME }}
                   >
                     {t("ann.markAllRead")}
@@ -233,14 +234,14 @@ function AnnCard({ a, t, expanded, onToggle, onMarkRead }: { a: Ann; t: TFn; exp
   const long = a.message.length > 180 || a.message.split("\n").length > 3;
 
   return (
-    <div className="relative rounded-xl border p-5 transition" style={{ background: a.read ? CARD : "#171d09", borderColor: a.read ? BORDER : "rgba(200,240,0,0.28)" }}>
+    <div className="relative rounded-xl border p-5 transition" style={{ background: a.read ? CARD : "color-mix(in oklch, var(--color-brand-500) 10%, var(--card))", borderColor: a.read ? BORDER : "color-mix(in oklch, var(--color-brand-500) 28%, transparent)" }}>
       {!a.read && <span className="absolute right-4 top-4 h-2 w-2 rounded-full" style={{ background: LIME }} />}
       <div className="flex items-start gap-2.5 pr-6">
         <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full" style={{ background: meta.bg, color: meta.color }}>
           <Icon className="h-3.5 w-3.5" />
         </span>
         <div className="min-w-0">
-          <p className="text-base font-semibold text-white" style={{ fontFamily: BARLOW, letterSpacing: "0.01em" }}>
+          <p className="text-base font-semibold text-[var(--fg)]" style={{ fontFamily: BARLOW, letterSpacing: "0.01em" }}>
             {a.title}
           </p>
           <span className="mt-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide" style={{ background: meta.bg, color: meta.color }}>
@@ -270,7 +271,7 @@ function AnnCard({ a, t, expanded, onToggle, onMarkRead }: { a: Ann; t: TFn; exp
               <Check className="h-3 w-3" /> {t("ann.markAsRead")}
             </span>
           ) : (
-            <button onClick={onMarkRead} className="inline-flex items-center gap-1 transition hover:text-white" style={{ color: LIME }}>
+            <button onClick={onMarkRead} className="inline-flex items-center gap-1 transition hover:text-[var(--fg)]" style={{ color: LIME }}>
               <Check className="h-3 w-3" /> {t("ann.markAsRead")}
             </button>
           )}

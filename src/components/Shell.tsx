@@ -2,7 +2,7 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   LogOut, LayoutDashboard, BookOpen, BarChart3, CalendarDays, CalendarCheck, Megaphone, User, Menu, X, ChevronsLeft, ChevronDown, LayoutGrid, Bell,
-  MessageCircle, Library, GraduationCap, Clock, LockKeyhole,
+  MessageCircle, Library, GraduationCap, Clock, LockKeyhole, Dumbbell,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { NotificationsBell } from "@/components/Announcements";
@@ -17,13 +17,14 @@ function greetingKeyFor(d: Date) {
   return h < 12 ? "greeting.morning" : h < 18 ? "greeting.afternoon" : "greeting.evening";
 }
 
-// Student portal navigation, grouped into sections. (Certificates and Practice
-// Tests are reached via in-page links rather than the sidebar.)
+// Student portal navigation, grouped into sections. (Certificates are reached
+// via an in-page link rather than the sidebar.)
 type NavSection = { key?: string; titleKey?: string; items: { to: string; labelKey: string; icon: typeof LayoutDashboard; lockable?: boolean; disabled?: boolean }[] };
 const NAV_SECTIONS: NavSection[] = [
   { items: [
     { to: "/dashboard", labelKey: "nav.dashboard", icon: LayoutDashboard },
     { to: "/exams", labelKey: "nav.myExams", icon: BookOpen },
+    { to: "/practice", labelKey: "nav.practiceTests", icon: Dumbbell },
     { to: "/calendar", labelKey: "nav.calendar", icon: CalendarDays },
     { to: "/results", labelKey: "nav.myResults", icon: BarChart3 },
     { to: "/attendance", labelKey: "nav.attendance", icon: CalendarCheck },
@@ -73,9 +74,6 @@ export function Shell({ children }: { children: ReactNode }) {
   const toggleSection = (key: string) => setExpanded((e) => ({ ...e, [key]: !isSectionExpanded(key) }));
 
   const examLocked = useExamLock();
-  // The Dashboard page renders its own large time-based greeting in the hero —
-  // showing this header greeting too would just duplicate it.
-  const showGreeting = loc.pathname !== "/dashboard";
 
   // Close the mobile drawer + apps menu whenever the route changes.
   useEffect(() => { setMobileOpen(false); setApps(false); }, [loc.pathname]);
@@ -215,12 +213,10 @@ export function Shell({ children }: { children: ReactNode }) {
             <button onClick={() => setMobileOpen(true)} aria-label="Open menu" className="rounded-lg p-1.5 text-[#C7D6DA] hover:bg-white/10 hover:text-white lg:hidden">
               <Menu className="h-5 w-5" />
             </button>
-            {showGreeting && (
-              <div className="min-w-0">
-                <h1 className="truncate text-lg font-bold tracking-tight text-white sm:text-xl">{t(greetingKeyFor(today))}, {user?.name}</h1>
-                <p className="text-xs text-[#C7D6DA]">{today.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}</p>
-              </div>
-            )}
+            <div className="min-w-0">
+              <h1 className="truncate text-lg font-bold tracking-tight text-white sm:text-xl">{t(greetingKeyFor(today))}, {user?.name?.split(" ")[0]}</h1>
+              <p className="text-xs text-[#C7D6DA]">{today.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}</p>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <LanguageSwitcher className="hidden sm:inline-flex" />

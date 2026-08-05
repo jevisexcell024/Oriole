@@ -88,7 +88,7 @@ export function Library() {
   if (examLocked) {
     return (
       <Shell>
-        <div className="fade-in" style={{ background: "#08090a", margin: "-1.5rem", padding: "1.5rem", minHeight: "calc(100vh - 69px)" }}>
+        <div className="fade-in" style={{ background: "var(--bg)", margin: "-1.5rem", padding: "1.5rem", minHeight: "calc(100vh - 69px)" }}>
           <EmptyState className="mt-6" icon={X} title="Unavailable right now"
             hint="The library is disabled while you have an exam in progress. It'll be back once you submit." />
         </div>
@@ -98,7 +98,7 @@ export function Library() {
 
   return (
     <Shell>
-      <div className="fade-in -m-4 sm:-m-6" style={{ background: "#08090a", minHeight: "calc(100vh - 69px)" }}>
+      <div className="fade-in -m-4 sm:-m-6" style={{ background: "var(--bg)", minHeight: "calc(100vh - 69px)" }}>
         {error && <ErrorBanner className="m-6">{error}</ErrorBanner>}
 
         {!items && !error && (
@@ -115,23 +115,23 @@ export function Library() {
           <>
             {/* Section 1 — Continue reading */}
             {continueReading.length > 0 && (
-              <div style={{ background: "linear-gradient(180deg, #111213, #0c0d0e)", padding: "24px 32px" }}>
+              <div style={{ background: "var(--card-2)", padding: "24px 32px" }}>
                 <div className="flex items-center justify-between">
-                  <h2 className="text-base font-bold text-white">Continue reading</h2>
+                  <h2 className="text-base font-bold text-[var(--fg)]">Continue reading</h2>
                 </div>
                 <div className="mt-4 flex items-stretch gap-3 overflow-x-auto pb-1">
                   {continueReading.map((it) => (
                     <button key={it.book.id} onClick={() => setActive(it)}
-                      className="flex shrink-0 items-center gap-3 rounded-xl p-3 text-left transition hover:border-white/[0.12]"
-                      style={{ width: 210, height: 88, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)" }}>
+                      className="flex shrink-0 items-center gap-3 rounded-xl p-3 text-left transition hover:border-[var(--border-strong)]"
+                      style={{ width: 210, height: 88, background: "var(--card-2)", border: "1px solid var(--border)" }}>
                       <BookCover variant="mini" title={it.book.title} coverImage={it.book.coverImage} />
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-xs font-semibold text-white">{it.book.title}</p>
-                        <p className="truncate text-xs text-white/45">{it.book.author}</p>
-                        <div className="mt-1.5 h-[2px] w-full rounded-full" style={{ background: "rgba(255,255,255,0.08)" }}>
+                        <p className="truncate text-xs font-semibold text-[var(--fg)]">{it.book.title}</p>
+                        <p className="truncate text-xs text-[var(--muted)]">{it.book.author}</p>
+                        <div className="mt-1.5 h-[2px] w-full rounded-full" style={{ background: "var(--border)" }}>
                           <div className="h-full rounded-full" style={{ width: `${pct(it.book, it.progress)}%`, background: LIME_TINT }} />
                         </div>
-                        <p className="mt-1 text-[10px] text-white/40">{pct(it.book, it.progress)}% · {pagesLeft(it.book, it.progress)} pages left</p>
+                        <p className="mt-1 text-[10px] text-[var(--muted)]">{pct(it.book, it.progress)}% · {pagesLeft(it.book, it.progress)} pages left</p>
                       </div>
                     </button>
                   ))}
@@ -142,15 +142,15 @@ export function Library() {
             {/* Section 2 — Library */}
             <div style={{ padding: "24px 32px" }}>
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: 20, fontWeight: 600 }} className="text-white">Library</h2>
+                <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: 20, fontWeight: 600 }} className="text-[var(--fg)]">Library</h2>
                 <div className="flex items-center gap-2">
-                  <div className="flex items-center gap-1.5 rounded-full px-3 py-1.5" style={{ background: "rgba(255,255,255,0.05)" }}>
-                    <Search className="h-3.5 w-3.5 text-white/50" />
+                  <div className="flex items-center gap-1.5 rounded-full px-3 py-1.5" style={{ background: "var(--card-2)" }}>
+                    <Search className="h-3.5 w-3.5 text-[var(--muted)]" />
                     <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search title, author, course, tags…"
-                      className="w-48 bg-transparent text-xs text-white outline-none placeholder:text-white/35" />
+                      className="w-48 bg-transparent text-xs text-[var(--fg)] outline-none placeholder:text-[var(--muted)]" />
                   </div>
                   <select value={sort} onChange={(e) => setSort(e.target.value as typeof sort)}
-                    className="rounded-full border-none px-3 py-1.5 text-xs font-medium text-white/70 outline-none" style={{ background: "rgba(255,255,255,0.05)" }}>
+                    className="rounded-full border-none px-3 py-1.5 text-xs font-medium text-[var(--muted)] outline-none" style={{ background: "var(--card-2)" }}>
                     <option value="newest">Newest</option>
                     <option value="popular">Most popular</option>
                     <option value="downloads">Most downloaded</option>
@@ -168,8 +168,8 @@ export function Library() {
                       className="flex shrink-0 items-center gap-1 rounded-full text-xs font-medium transition"
                       style={{
                         padding: "6px 14px",
-                        background: isActive ? LIME_TINT : "rgba(255,255,255,0.04)",
-                        color: isActive ? LIME : "rgba(255,255,255,0.55)",
+                        background: isActive ? LIME_TINT : "var(--card-2)",
+                        color: isActive ? LIME : "var(--muted)",
                         border: isActive ? `1px solid ${LIME}` : "1px solid transparent",
                       }}>
                       {rt}
@@ -229,22 +229,22 @@ function ResourceCard({ item, onOpen, onChanged }: { item: Item; onOpen: () => v
           {isUpdated(book) && <span className="rounded-full bg-cyan-400 px-1.5 py-0.5 text-[9px] font-bold text-[var(--brand-ink)]">UPDATED</span>}
         </div>
         <button onClick={toggleBookmark} disabled={busy}
-          className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-black/60 text-white/80 opacity-0 transition group-hover:opacity-100 hover:text-white">
+          className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-black/60 text-[var(--muted)] opacity-0 transition group-hover:opacity-100 hover:text-[var(--fg)]">
           {bookmarked ? <BookmarkCheck className="h-3.5 w-3.5" style={{ color: LIME }} /> : <Bookmark className="h-3.5 w-3.5" />}
         </button>
       </div>
       <div className="mt-2 flex items-center gap-1">
-        <Icon className="h-3 w-3 shrink-0 text-white/40" />
-        <p className="truncate text-xs font-semibold text-white">{book.title}</p>
+        <Icon className="h-3 w-3 shrink-0 text-[var(--muted)]" />
+        <p className="truncate text-xs font-semibold text-[var(--fg)]">{book.title}</p>
       </div>
-      <p className="truncate text-[11px] text-white/45">{book.course || book.instructor || book.author}</p>
-      <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-white/35">
+      <p className="truncate text-[11px] text-[var(--muted)]">{book.course || book.instructor || book.author}</p>
+      <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-[var(--muted)]">
         {book.totalPages > 0 && <span>{book.totalPages}p</span>}
         {fmtBytes(book.fileSize) && <span>{fmtBytes(book.fileSize)}</span>}
         <span className="inline-flex items-center gap-0.5"><Eye className="h-2.5 w-2.5" /> {book.viewCount}</span>
         <span className="inline-flex items-center gap-0.5"><Download className="h-2.5 w-2.5" /> {book.downloadCount}</span>
         {item.ratingCount > 0 && <span className="inline-flex items-center gap-0.5"><Star className="h-2.5 w-2.5 fill-current" style={{ color: LIME }} /> {item.avgRating}</span>}
-        <button onClick={share} className="ml-auto text-white/30 hover:text-white/60"><Share2 className="h-2.5 w-2.5" /></button>
+        <button onClick={share} className="ml-auto text-[var(--muted)] hover:text-[var(--muted)]"><Share2 className="h-2.5 w-2.5" /></button>
       </div>
     </div>
   );
@@ -335,26 +335,26 @@ function ResourceDetailModal({ item, onClose, onChanged }: { item: Item; onClose
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/60 p-4" onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} className="w-full max-w-lg rounded-2xl p-6" style={{ background: "#111213", border: "1px solid rgba(255,255,255,0.08)" }}>
+      <div onClick={(e) => e.stopPropagation()} className="w-full max-w-lg rounded-2xl p-6" style={{ background: "var(--card)", border: "1px solid var(--border)" }}>
         <div className="flex items-start justify-between">
           <div className="flex items-start gap-4">
             <div className="w-20 shrink-0"><BookCover title={book.title} coverImage={book.coverImage} /></div>
             <div className="min-w-0 flex-1">
-              <h3 className="text-sm font-bold text-white">{book.title}</h3>
-              <p className="text-xs text-white/50">{book.author} · {book.resourceType}</p>
-              {book.instructor && <p className="mt-0.5 text-xs text-white/40">Instructor: {book.instructor}</p>}
-              {(book.course || book.departmentName) && <p className="text-xs text-white/40">{[book.courseCode, book.course, book.departmentName].filter(Boolean).join(" · ")}</p>}
-              <div className="mt-1.5 flex items-center gap-3 text-[11px] text-white/40">
+              <h3 className="text-sm font-bold text-[var(--fg)]">{book.title}</h3>
+              <p className="text-xs text-[var(--muted)]">{book.author} · {book.resourceType}</p>
+              {book.instructor && <p className="mt-0.5 text-xs text-[var(--muted)]">Instructor: {book.instructor}</p>}
+              {(book.course || book.departmentName) && <p className="text-xs text-[var(--muted)]">{[book.courseCode, book.course, book.departmentName].filter(Boolean).join(" · ")}</p>}
+              <div className="mt-1.5 flex items-center gap-3 text-[11px] text-[var(--muted)]">
                 <span className="inline-flex items-center gap-1"><Eye className="h-3 w-3" /> {book.viewCount}</span>
                 <span className="inline-flex items-center gap-1"><Download className="h-3 w-3" /> {book.downloadCount}</span>
                 <span>v{book.version}</span>
               </div>
             </div>
           </div>
-          <button onClick={onClose} className="text-white/50 hover:text-white"><X className="h-4 w-4" /></button>
+          <button onClick={onClose} className="text-[var(--muted)] hover:text-[var(--fg)]"><X className="h-4 w-4" /></button>
         </div>
 
-        {book.description && <p className="mt-3 text-xs leading-relaxed text-white/55">{book.description}</p>}
+        {book.description && <p className="mt-3 text-xs leading-relaxed text-[var(--muted)]">{book.description}</p>}
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {kind && canPreview && (
@@ -363,19 +363,19 @@ function ResourceDetailModal({ item, onClose, onChanged }: { item: Item; onClose
             </button>
           )}
           {book.fileName && canDownload && (
-            <button onClick={downloadResource} disabled={downloading} className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-white/70 disabled:opacity-60" style={{ background: "rgba(255,255,255,0.06)" }}>
+            <button onClick={downloadResource} disabled={downloading} className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-[var(--muted)] disabled:opacity-60" style={{ background: "var(--card-2)" }}>
               {downloading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />} Download
             </button>
           )}
           {book.externalUrl && (
-            <a href={book.externalUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-white/70" style={{ background: "rgba(255,255,255,0.06)" }}>
+            <a href={book.externalUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-[var(--muted)]" style={{ background: "var(--card-2)" }}>
               External link
             </a>
           )}
-          <button onClick={toggleBookmark} className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-white/70" style={{ background: "rgba(255,255,255,0.06)" }}>
+          <button onClick={toggleBookmark} className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-[var(--muted)]" style={{ background: "var(--card-2)" }}>
             {detail?.bookmarked ? <BookmarkCheck className="h-3.5 w-3.5" style={{ color: LIME }} /> : <Bookmark className="h-3.5 w-3.5" />} {detail?.bookmarkCount ?? item.bookmarkCount}
           </button>
-          <button onClick={toggleVersions} className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-white/70" style={{ background: "rgba(255,255,255,0.06)" }}>
+          <button onClick={toggleVersions} className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-[var(--muted)]" style={{ background: "var(--card-2)" }}>
             <History className="h-3.5 w-3.5" /> v{book.version}
           </button>
         </div>
@@ -383,22 +383,22 @@ function ResourceDetailModal({ item, onClose, onChanged }: { item: Item; onClose
         {downloadErr && <p className="mt-2 text-xs text-rose-400">{downloadErr}</p>}
 
         {showVersions && (
-          <div className="mt-2 rounded-lg border border-white/10 p-2">
-            {versions === null ? <p className="text-[11px] text-white/40">Loading…</p>
-              : versions.length === 0 ? <p className="text-[11px] text-white/40">No prior versions.</p>
-              : versions.map((v) => <p key={v.id} className="py-0.5 text-[11px] text-white/40">v{v.version} · {new Date(v.createdAt).toLocaleDateString()}</p>)}
+          <div className="mt-2 rounded-lg border border-[var(--border)] p-2">
+            {versions === null ? <p className="text-[11px] text-[var(--muted)]">Loading…</p>
+              : versions.length === 0 ? <p className="text-[11px] text-[var(--muted)]">No prior versions.</p>
+              : versions.map((v) => <p key={v.id} className="py-0.5 text-[11px] text-[var(--muted)]">v{v.version} · {new Date(v.createdAt).toLocaleDateString()}</p>)}
           </div>
         )}
 
         {book.totalPages > 0 && (
           <div className="mt-4">
-            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-white/45">
+            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">
               Current page (of {book.totalPages})
             </label>
             <div className="flex items-center gap-2">
               <input type="number" min={0} max={book.totalPages} value={page}
                 onChange={(e) => setPage(Math.max(0, Math.min(book.totalPages, Number(e.target.value))))}
-                className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-[oklch(0.86_0.18_112)]" />
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--card-2)] px-3 py-2 text-sm text-[var(--fg)] outline-none focus:border-[oklch(0.86_0.18_112)]" />
               <button onClick={saveProgress} disabled={busy} className="shrink-0 rounded-lg px-3.5 py-2 text-xs font-bold text-[var(--brand-ink)] disabled:opacity-60" style={{ background: LIME }}>
                 {busy ? "Saving…" : "Save"}
               </button>
@@ -408,20 +408,20 @@ function ResourceDetailModal({ item, onClose, onChanged }: { item: Item; onClose
         )}
 
         <div className="mt-4">
-          <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-white/45">Rate this resource</p>
+          <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">Rate this resource</p>
           <div className="flex items-center gap-1">
             {[1, 2, 3, 4, 5].map((n) => (
               <button key={n} onClick={() => rate(n)}>
-                <Star className={clsx("h-4 w-4", n <= myScore ? "fill-current" : "text-white/20")} style={n <= myScore ? { color: LIME } : undefined} />
+                <Star className={clsx("h-4 w-4", n <= myScore ? "fill-current" : "text-[var(--muted)]")} style={n <= myScore ? { color: LIME } : undefined} />
               </button>
             ))}
-            {detail && detail.ratingCount > 0 && <span className="ml-2 text-[11px] text-white/40">{detail.avgRating} avg · {detail.ratingCount} rating{detail.ratingCount === 1 ? "" : "s"}</span>}
+            {detail && detail.ratingCount > 0 && <span className="ml-2 text-[11px] text-[var(--muted)]">{detail.avgRating} avg · {detail.ratingCount} rating{detail.ratingCount === 1 ? "" : "s"}</span>}
           </div>
         </div>
 
         {detail && detail.relatedResources.length > 0 && (
           <div className="mt-4">
-            <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-white/45">Related resources</p>
+            <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">Related resources</p>
             <div className="flex gap-2 overflow-x-auto pb-1">
               {detail.relatedResources.map((r) => (
                 <div key={r.id} className="w-16 shrink-0"><BookCover title={r.title} coverImage={r.coverImage} /></div>
@@ -466,10 +466,10 @@ function ResourceReaderOverlay({ book, kind, onClose }: { book: Book; kind: Read
   }, [kind, readUrl]);
 
   return (
-    <div className="fixed inset-0 z-[60] flex flex-col bg-[#08090a]">
-      <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-4 py-3">
-        <p className="truncate text-sm font-semibold text-white">{book.title}</p>
-        <button onClick={onClose} className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-white/70 hover:bg-white/5">
+    <div className="fixed inset-0 z-[60] flex flex-col bg-[var(--bg)]">
+      <div className="flex shrink-0 items-center justify-between border-b border-[var(--border)] px-4 py-3">
+        <p className="truncate text-sm font-semibold text-[var(--fg)]">{book.title}</p>
+        <button onClick={onClose} className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-[var(--muted)] hover:bg-[var(--card-2)]">
           <X className="h-3.5 w-3.5" /> Close
         </button>
       </div>
@@ -495,18 +495,18 @@ function ResourceReaderOverlay({ book, kind, onClose }: { book: Book; kind: Read
             {docxError ? (
               <p className="text-sm text-rose-400">{docxError}</p>
             ) : docxHtml === null ? (
-              <div className="flex items-center gap-2 text-sm text-white/50"><Loader2 className="h-4 w-4 animate-spin" /> Loading document…</div>
+              <div className="flex items-center gap-2 text-sm text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> Loading document…</div>
             ) : (
               <>
                 <style>{`
-                  .docx-reader { font-size: 14px; line-height: 1.7; color: rgba(255,255,255,0.85); }
-                  .docx-reader h1, .docx-reader h2, .docx-reader h3 { font-weight: 700; color: #fff; margin: 1.2em 0 0.5em; }
+                  .docx-reader { font-size: 14px; line-height: 1.7; color: var(--fg); }
+                  .docx-reader h1, .docx-reader h2, .docx-reader h3 { font-weight: 700; color: var(--fg); margin: 1.2em 0 0.5em; }
                   .docx-reader h1 { font-size: 1.5em; } .docx-reader h2 { font-size: 1.3em; } .docx-reader h3 { font-size: 1.1em; }
                   .docx-reader p { margin: 0.75em 0; }
                   .docx-reader ul, .docx-reader ol { margin: 0.75em 0; padding-left: 1.5em; }
                   .docx-reader ul { list-style: disc; } .docx-reader ol { list-style: decimal; }
                   .docx-reader table { border-collapse: collapse; margin: 1em 0; }
-                  .docx-reader td, .docx-reader th { border: 1px solid rgba(255,255,255,0.15); padding: 6px 10px; }
+                  .docx-reader td, .docx-reader th { border: 1px solid var(--border); padding: 6px 10px; }
                   .docx-reader img { max-width: 100%; }
                 `}</style>
                 <div className="docx-reader" dangerouslySetInnerHTML={{ __html: docxHtml }} />

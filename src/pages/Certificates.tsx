@@ -41,11 +41,11 @@ export function Certificates() {
         <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
           {certs?.map((c) => (
             <div key={c.id} className="card overflow-hidden">
-              <div className="flex items-center gap-3 bg-[#111110] p-5 text-white">
+              <div className="flex items-center gap-3 p-5" style={{ background: "var(--color-brand-500)", color: "var(--brand-ink)" }}>
                 <Award className="h-8 w-8" />
                 <div>
                   <p className="text-sm font-semibold leading-tight">{c.exam?.title ?? "Examination"}</p>
-                  <p className="text-xs text-white/70">Score {c.score}%</p>
+                  <p className="text-xs opacity-70">Score {c.score}%</p>
                 </div>
               </div>
               <div className="flex items-center justify-between p-4">
