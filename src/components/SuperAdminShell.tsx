@@ -45,9 +45,15 @@ const GROUPS: NavGroup[] = [
   ] },
   { key: "tenants", labelKey: "sanav.secTenants", items: [
     { labelKey: "sanav.institutions", icon: Building2, to: "/super-admin/institutions" },
-    { labelKey: "sanav.tenantRequests", icon: ClipboardList },
-    { labelKey: "sanav.tenantSuspension", icon: PauseCircle },
-    { labelKey: "sanav.tenantArchive", icon: Archive },
+    // Real now: the public "Request Access" form (src/pages/RequestAccess.tsx)
+    // feeds a queue an Owner reviews here — approve creates the tenant via the
+    // same path as "Create Organization", or reject with a reason.
+    { labelKey: "sanav.tenantRequests", icon: ClipboardList, to: "/super-admin/tenant-requests" },
+    // Suspend/reactivate is a real action already on Institutions — same page.
+    { labelKey: "sanav.tenantSuspension", icon: PauseCircle, to: "/super-admin/institutions" },
+    // Export + cascading delete (the real "archive/offboard" flow) also live
+    // on Institutions — same page, not a separate build.
+    { labelKey: "sanav.tenantArchive", icon: Archive, to: "/super-admin/institutions" },
   ] },
   { key: "licensing", labelKey: "sanav.secLicensing", items: [
     { labelKey: "sanav.subscriptionPlans", icon: CreditCard, to: "/super-admin/plans" },
@@ -84,6 +90,12 @@ const GROUPS: NavGroup[] = [
     { labelKey: "sanav.maintenanceHistory", icon: History, to: "/super-admin/maintenance" },
     { labelKey: "sanav.maintenanceQueue", icon: ClipboardList, to: "/super-admin/maintenance" },
   ] },
+  // None of these 5 have real backing data: there's no per-service health/
+  // latency collector, no platform-wide storage metric (only one feature's
+  // file-size sum), no cache layer, no job queue, and no email-provider
+  // dashboard — building any of these would mean fabricating numbers or
+  // standing up new instrumentation first, not just wiring a nav item.
+  // Left disabled until one of them becomes a real, concrete need.
   { key: "infrastructure", labelKey: "sanav.secInfrastructure", items: [
     { labelKey: "sanav.database", icon: Database },
     { labelKey: "sanav.storage", icon: HardDrive },
@@ -108,23 +120,40 @@ const GROUPS: NavGroup[] = [
   { key: "configuration", labelKey: "sanav.secConfiguration", items: [
     { labelKey: "sanav.brandingDefaults", icon: Palette, to: "/super-admin/branding" },
     { labelKey: "sanav.platformSettings", icon: Settings, to: "/super-admin/settings" },
+    // No backing infrastructure or concrete flag exists yet — deliberately
+    // left disabled rather than shipping placeholder scaffolding (see the
+    // v1.6.0 panel plan's own note on this).
     { labelKey: "sanav.featureFlags", icon: Flag },
     { labelKey: "sanav.emailTemplates", icon: FileText, to: "/super-admin/email-templates" },
+    // No separate in-app/push notification system exists — Email Templates
+    // is the only templated-message feature on the platform.
     { labelKey: "sanav.notificationTemplates", icon: Bell },
   ] },
   { key: "support", labelKey: "sanav.secSupport", items: [
     { labelKey: "sanav.tickets", icon: LifeBuoy, to: "/super-admin/tickets" },
-    { labelKey: "sanav.feedback", icon: MessageSquare },
-    { labelKey: "sanav.contactMessages", icon: MessageCircle },
+    // Feedback and contact messages are the same inbound-message concept as
+    // Support Tickets — one real page, not three separate inboxes.
+    { labelKey: "sanav.feedback", icon: MessageSquare, to: "/super-admin/tickets" },
+    { labelKey: "sanav.contactMessages", icon: MessageCircle, to: "/super-admin/tickets" },
   ] },
   { key: "reports", labelKey: "sanav.secReports", items: [
-    { labelKey: "sanav.revenue", icon: DollarSign },
-    { labelKey: "sanav.growth", icon: TrendingUp },
-    { labelKey: "sanav.usage", icon: PieChart },
-    { labelKey: "sanav.exports", icon: Download },
+    // Real MRR/ARR already live on the Dashboard and Subscription Plans pages.
+    { labelKey: "sanav.revenue", icon: DollarSign, to: "/super-admin/plans" },
+    // The real new-schools/new-exams trend already lives on Platform Analytics.
+    { labelKey: "sanav.growth", icon: TrendingUp, to: "/super-admin/analytics" },
+    // Usage-vs-plan-limit is exactly what Active Licenses already shows.
+    { labelKey: "sanav.usage", icon: PieChart, to: "/super-admin/licenses" },
+    // Active Licenses has a real CSV export button; nothing else on the
+    // platform exports a broader report, so this points there rather than
+    // a separate (and currently nonexistent) exports hub.
+    { labelKey: "sanav.exports", icon: Download, to: "/super-admin/licenses" },
   ] },
   { key: "developer", labelKey: "sanav.secDeveloper", items: [
-    { labelKey: "sanav.environment", icon: Code2 },
+    // System Information already covers this exactly (Node version, OS,
+    // memory, CPU, load average) — same page.
+    { labelKey: "sanav.environment", icon: Code2, to: "/super-admin/system-info" },
+    // No OpenAPI/Swagger spec exists to explore — would need real API
+    // documentation infrastructure first, not just a UI shell.
     { labelKey: "sanav.apiExplorer", icon: Braces },
     { labelKey: "sanav.systemInformation", icon: Info, to: "/super-admin/system-info" },
   ] },

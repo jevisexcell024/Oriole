@@ -13,6 +13,7 @@ import { SuperAdminMaintenance } from "@/pages/SuperAdminMaintenance";
 import { SuperAdminEmailTemplates } from "@/pages/SuperAdminEmailTemplates";
 import { SuperAdminTickets } from "@/pages/SuperAdminTickets";
 import { SuperAdminInstitutions } from "@/pages/SuperAdminInstitutions";
+import { SuperAdminTenantRequests } from "@/pages/SuperAdminTenantRequests";
 import { SuperAdminTenantDetail } from "@/pages/SuperAdminTenantDetail";
 import { SuperAdminMonitoring } from "@/pages/SuperAdminMonitoring";
 import { SuperAdminBranding } from "@/pages/SuperAdminBranding";
@@ -50,6 +51,7 @@ function SuperAdminRoutes() {
       <Route path="email-templates" element={<SuperAdminProtected><SuperAdminEmailTemplates /></SuperAdminProtected>} />
       <Route path="tickets" element={<SuperAdminProtected><SuperAdminTickets /></SuperAdminProtected>} />
       <Route path="institutions" element={<SuperAdminProtected><SuperAdminInstitutions /></SuperAdminProtected>} />
+      <Route path="tenant-requests" element={<SuperAdminProtected><SuperAdminTenantRequests /></SuperAdminProtected>} />
       <Route path="institutions/:id" element={<SuperAdminProtected><SuperAdminTenantDetail /></SuperAdminProtected>} />
       <Route path="monitoring" element={<SuperAdminProtected><SuperAdminMonitoring /></SuperAdminProtected>} />
       <Route path="branding" element={<SuperAdminProtected><SuperAdminBranding /></SuperAdminProtected>} />

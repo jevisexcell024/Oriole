@@ -195,10 +195,14 @@ export function Login() {
                     >
                       {busy ? <><Loader2 className="h-4 w-4 animate-spin" /> {t("auth.signingIn")}</> : <>{t("auth.signIn")} <ArrowRight className="h-4 w-4" /></>}
                     </button>
-                    <div className="text-center">
+                    <div className="flex items-center justify-center gap-3 text-center">
                       <button type="button" onClick={() => setForgot(true)} className="text-sm text-[var(--muted)] underline-offset-2 transition hover:text-[var(--fg)] hover:underline">
                         {t("auth.forgot")}
                       </button>
+                      <span className="text-[var(--muted)]">·</span>
+                      <a href="/request-access" className="text-sm text-[var(--muted)] underline-offset-2 transition hover:text-[var(--fg)] hover:underline">
+                        New school? Request access
+                      </a>
                     </div>
                   </form>
                 </>

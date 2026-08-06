@@ -11,6 +11,7 @@ import { IdleLogout } from "@/components/IdleLogout";
 import { useMaintenanceMessage } from "@/lib/maintenance";
 import { MaintenancePage } from "@/pages/MaintenancePage";
 import { Login } from "@/pages/Login";
+import { RequestAccess } from "@/pages/RequestAccess";
 import { Dashboard } from "@/pages/Dashboard";
 import { Exams } from "@/pages/Exams";
 import { MyResults } from "@/pages/MyResults";
@@ -108,7 +109,7 @@ function App() {
   const maintenanceMessage = useMaintenanceMessage();
   // Super Admin and the public status page stay reachable during maintenance
   // — both server-side (isMaintenanceExempt, server/security.ts) and here.
-  const exempt = location.pathname.startsWith("/super-admin") || location.pathname.startsWith("/status");
+  const exempt = location.pathname.startsWith("/super-admin") || location.pathname.startsWith("/status") || location.pathname.startsWith("/request-access");
   if (maintenanceMessage && !exempt) {
     return <MaintenancePage message={maintenanceMessage} />;
   }
@@ -118,6 +119,7 @@ function App() {
       <Suspense fallback={<div className="flex min-h-screen items-center justify-center text-[var(--muted)]">Loading…</div>}>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/request-access" element={<RequestAccess />} />
         <Route path="/force-password-change" element={<ForcePasswordChange />} />
         <Route path="/setup-password" element={<SetupPassword />} />
         <Route path="/super-admin/*" element={<SuperAdminApp />} />

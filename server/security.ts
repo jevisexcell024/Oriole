@@ -111,6 +111,19 @@ export const superAdminAuthLimiter = rateLimit({
   },
 });
 
+// Public, unauthenticated "Request Access" form (new-tenant signup intake) —
+// a much tighter per-IP budget than the general apiLimiter above, since this
+// endpoint has no session to key by and writes a new row on every call.
+export const tenantRequestLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: Number(process.env.TENANT_REQUEST_RATE_LIMIT ?? 5),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests. Please wait a while and try again, or email us directly." },
+  validate: false,
+  keyGenerator: (req) => `tenant-request-ip:${(req as { ip?: string }).ip ?? "unknown"}`,
+});
+
 // Strict limiter for the 2FA code step. TOTP exposes only ~3 valid codes per window
 // and backup codes are bcrypt-checked, so this endpoint must resist online brute
 // force. Keyed by the short-lived pending-2FA cookie (per login attempt), else IP.
@@ -140,7 +153,7 @@ function isUnderPrefix(path: string, prefix: string): boolean {
   return path === prefix || path.startsWith(prefix + "/");
 }
 export function isMaintenanceExempt(path: string): boolean {
-  return isUnderPrefix(path, "/api/super-admin") || isUnderPrefix(path, "/api/status");
+  return isUnderPrefix(path, "/api/super-admin") || isUnderPrefix(path, "/api/status") || isUnderPrefix(path, "/api/tenant-requests");
 }
 
 // ── SSRF guard for outbound webhook URLs ────────────────────────────────────

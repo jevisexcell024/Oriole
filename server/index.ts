@@ -27,7 +27,7 @@ import { generateSecret, verifyTotp, verifyTotpStep, otpauthUrl, generateBackupC
 import { microsoftEnabled, authorizeUrl, exchangeCode } from "./sso.ts";
 import { tryEvalExpr } from "../shared/expr.ts";
 import { env, assertProductionEnv, BCRYPT_COST } from "./env.ts";
-import { securityHeaders, permissionsPolicy, authLimiter, apiLimiter, twoFaLimiter, superAdminAuthLimiter, assertSafeWebhookUrl, isMaintenanceExempt } from "./security.ts";
+import { securityHeaders, permissionsPolicy, authLimiter, apiLimiter, twoFaLimiter, superAdminAuthLimiter, tenantRequestLimiter, assertSafeWebhookUrl, isMaintenanceExempt } from "./security.ts";
 import { logger, httpLogger } from "./logger.ts";
 import { encryptString, decryptString, encryptionEnabled } from "./crypto.ts";
 import { scheduleRetention, stopRetention } from "./retention.ts";
@@ -42,6 +42,7 @@ import {
   loginSchema, teamCreateSchema, passwordChangeSchema, passwordResetSchema, twoFaCodeSchema, twoFaDisableSchema,
   customRoleCreateSchema, customRoleUpdateSchema, roleAssignSchema, passwordSetupSchema, superAdminCreateSchema, tenantCreateSchema,
   planCreateSchema, planUpdateSchema, licenseKeyCreateSchema, licenseKeyRedeemSchema, maintenanceWindowCreateSchema, brandingUpdateSchema,
+  tenantRequestCreateSchema, tenantRequestApproveSchema, tenantRequestRejectSchema,
 } from "./schemas.ts";
 import { verifySeb } from "./seb.ts";
 import { nextStreak, displayStreak } from "./streak.ts";
@@ -62,7 +63,7 @@ import type {
   Answer, Attempt, Certificate, Exam, ExamListItem, ProctorEvent, PublicQuestion, Question, Registration, RubricCriterion, RegradeRequest, WebhookEvent,
   Book, BookGenre, ReadingProgress, ResourceType, ResourceDifficulty, ResourceVersion, ResourceBookmark, ResourceRating, ResourceDownloadLog, User,
   LearningStructureMode, AnnouncementRead, CustomRole, ReliabilitySubsystemKey, ReliabilityIncident, MediaAsset,
-  SuperAdminSummary, SuperAdmin, SupportTicket, Tenant, OrgSettings, Plan, LicenseKey, MaintenanceWindow,
+  SuperAdminSummary, SuperAdmin, SupportTicket, Tenant, OrgSettings, Plan, LicenseKey, MaintenanceWindow, TenantRequest,
 } from "../shared/types.ts";
 import { PERMISSIONS, PERMISSION_KEYS, isPermissionKey, SYSTEM_ROLE_PERMISSIONS, systemParentId, parseSystemParentId, type PermissionKey } from "../shared/permissions.ts";
 import {
@@ -581,6 +582,11 @@ app.get("/api/super-admin/dashboard", requireSuperAdmin, (_req, res) => {
   const examsToday = db.data!.attempts.filter((a) => new Date(a.startedAt).getTime() >= startOfToday.getTime()).length;
   const liveSessions = db.data!.attempts.filter((a) => a.status === "in_progress").length;
   const tenants = db.data!.tenants;
+  // Real, platform-wide MFA adoption among staff accounts (admin/facilitator/
+  // proctor) — candidates aren't counted since 2FA is a staff-security
+  // concern, not something we prompt students to enable.
+  const staff = users.filter((u) => u.role === "admin" || u.role === "facilitator" || u.role === "proctor");
+  const mfaAdoptionPct = staff.length ? Math.round((staff.filter((u) => u.twoFactorEnabled).length / staff.length) * 100) : 0;
   res.json({
     institutions: {
       total: tenants.length,
@@ -591,6 +597,7 @@ app.get("/api/super-admin/dashboard", requireSuperAdmin, (_req, res) => {
     exams: { active: activeExams, today: examsToday },
     liveSessions,
     platformUptimeSeconds: process.uptime(),
+    mfaAdoptionPct,
   });
 });
 
@@ -1016,17 +1023,23 @@ app.get("/api/super-admin/tenants", requireSuperAdmin, (_req, res) => {
   res.json({ tenants });
 });
 
-app.post("/api/super-admin/tenants", requireSuperAdminOwner, validate(tenantCreateSchema), async (req, res) => {
-  const { tenantName, adminName, adminEmail, licenseKeyCode } = req.body as { tenantName: string; adminName: string; adminEmail: string; licenseKeyCode?: string };
+/** Shared by the direct "Create Organization" route and the "approve a
+ *  Tenant Request" route below — both ultimately do the exact same thing
+ *  (new Tenant + its OrgSettings row + its first admin account, optionally
+ *  licensed in the same step). Returns an `{ error, status }` shape instead
+ *  of throwing so both call sites can respond with their own JSON contract. */
+async function createTenantWithAdmin(params: { tenantName: string; adminName: string; adminEmail: string; licenseKeyCode?: string }):
+  Promise<{ tenant: Tenant; admin: User; oneTimePassword: string; licenseResult: { key: LicenseKey; plan: Plan } | null } | { error: string; status: number }> {
+  const { tenantName, adminName, adminEmail, licenseKeyCode } = params;
   if (db.data!.users.some((u) => u.email.toLowerCase() === adminEmail.toLowerCase())) {
-    return res.status(409).json({ error: "An account with that email already exists." });
+    return { error: "An account with that email already exists.", status: 409 };
   }
   // Validate the code (if given) before creating anything — a bad code must
   // never leave behind an orphan tenant with no license.
   let licenseResult: { key: LicenseKey; plan: Plan } | null = null;
   if (licenseKeyCode) {
     const result = findRedeemableLicenseKey(licenseKeyCode);
-    if ("error" in result) return res.status(400).json(result);
+    if ("error" in result) return { error: result.error, status: 400 };
     licenseResult = result;
   }
 
@@ -1062,8 +1075,84 @@ app.post("/api/super-admin/tenants", requireSuperAdminOwner, validate(tenantCrea
   db.data!.users.push(admin);
   await db.upsert("users", admin);
 
+  return { tenant, admin, oneTimePassword, licenseResult };
+}
+
+app.post("/api/super-admin/tenants", requireSuperAdminOwner, validate(tenantCreateSchema), async (req, res) => {
+  const result = await createTenantWithAdmin(req.body as { tenantName: string; adminName: string; adminEmail: string; licenseKeyCode?: string });
+  if ("error" in result) return res.status(result.status).json({ error: result.error });
+  const { tenant, admin, oneTimePassword, licenseResult } = result;
   await recordSuperAdminAudit(req, "superadmin.tenant.created", `${tenant.name} (admin: ${admin.email})${licenseResult ? `, licensed via ${licenseResult.key.code} → ${licenseResult.plan.name}` : ""}`);
   res.status(201).json({ tenant, admin: { id: admin.id, name: admin.name, email: admin.email }, oneTimePassword });
+});
+
+// ---------------------------------------------------------------- TENANT REQUESTS
+// The "Request Access" intake — a prospective school submits interest through
+// a public, unauthenticated form; a Super Admin Owner reviews and either
+// approves (creating the real tenant via createTenantWithAdmin, same as a
+// direct create) or rejects with a reason. This is the only path to a new
+// tenant besides a Super Admin creating one directly — there is no other
+// self-service signup anywhere on the platform.
+app.post("/api/tenant-requests", tenantRequestLimiter, validate(tenantRequestCreateSchema), async (req, res) => {
+  const { schoolName, contactName, contactEmail, contactPhone, message } = req.body as {
+    schoolName: string; contactName: string; contactEmail: string; contactPhone?: string; message?: string;
+  };
+  const reqRow: TenantRequest = {
+    id: nanoid(10), schoolName, contactName, contactEmail: contactEmail.toLowerCase(),
+    contactPhone, message, status: "pending", createdAt: now(),
+  };
+  db.data!.tenantRequests.push(reqRow);
+  await db.upsert("tenantRequests", reqRow);
+  res.status(201).json({ ok: true });
+});
+
+app.get("/api/super-admin/tenant-requests", requireSuperAdmin, (_req, res) => {
+  const requests = [...db.data!.tenantRequests].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  res.json({ requests });
+});
+
+app.post("/api/super-admin/tenant-requests/:id/approve", requireSuperAdminOwner, validate(tenantRequestApproveSchema), async (req, res) => {
+  const reqRow = db.data!.tenantRequests.find((r) => r.id === req.params.id);
+  if (!reqRow) return res.status(404).json({ error: "Not found." });
+  if (reqRow.status !== "pending") return res.status(409).json({ error: `This request was already ${reqRow.status}.` });
+
+  const body = req.body as { tenantName?: string; adminName?: string; adminEmail?: string; licenseKeyCode?: string };
+  const result = await createTenantWithAdmin({
+    tenantName: body.tenantName || reqRow.schoolName,
+    adminName: body.adminName || reqRow.contactName,
+    adminEmail: body.adminEmail || reqRow.contactEmail,
+    licenseKeyCode: body.licenseKeyCode,
+  });
+  if ("error" in result) return res.status(result.status).json({ error: result.error });
+  const { tenant, admin, oneTimePassword, licenseResult } = result;
+
+  const superAdmin = currentSuperAdmin(req);
+  reqRow.status = "approved";
+  reqRow.reviewedAt = now();
+  reqRow.reviewedBySuperAdminId = superAdmin?.id ?? null;
+  reqRow.reviewedBySuperAdminName = superAdmin?.name ?? null;
+  reqRow.approvedTenantId = tenant.id;
+  await db.upsert("tenantRequests", reqRow);
+
+  await recordSuperAdminAudit(req, "superadmin.tenant_request.approved", `${reqRow.schoolName} → ${tenant.name} (admin: ${admin.email})${licenseResult ? `, licensed via ${licenseResult.key.code} → ${licenseResult.plan.name}` : ""}`);
+  res.status(201).json({ tenant, admin: { id: admin.id, name: admin.name, email: admin.email }, oneTimePassword, request: reqRow });
+});
+
+app.post("/api/super-admin/tenant-requests/:id/reject", requireSuperAdminOwner, validate(tenantRequestRejectSchema), async (req, res) => {
+  const reqRow = db.data!.tenantRequests.find((r) => r.id === req.params.id);
+  if (!reqRow) return res.status(404).json({ error: "Not found." });
+  if (reqRow.status !== "pending") return res.status(409).json({ error: `This request was already ${reqRow.status}.` });
+
+  const superAdmin = currentSuperAdmin(req);
+  reqRow.status = "rejected";
+  reqRow.reviewedAt = now();
+  reqRow.reviewedBySuperAdminId = superAdmin?.id ?? null;
+  reqRow.reviewedBySuperAdminName = superAdmin?.name ?? null;
+  reqRow.rejectionReason = (req.body as { reason: string }).reason;
+  await db.upsert("tenantRequests", reqRow);
+
+  await recordSuperAdminAudit(req, "superadmin.tenant_request.rejected", `${reqRow.schoolName} (${reqRow.rejectionReason})`);
+  res.json({ request: reqRow });
 });
 
 // Tenant detail — everything about one school in one call: the flat

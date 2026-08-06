@@ -90,6 +90,31 @@ export const tenantCreateSchema = z.object({
   licenseKeyCode: z.string().trim().min(1).max(64).optional(),
 });
 
+// Public "Request Access" form submission — no password, no auth. Kept
+// intentionally light (a prospective school, not an existing account).
+export const tenantRequestCreateSchema = z.object({
+  schoolName: z.string().trim().min(1).max(160),
+  contactName: z.string().trim().min(1).max(120),
+  contactEmail: z.string().trim().email().max(254),
+  contactPhone: z.string().trim().max(40).optional(),
+  message: z.string().trim().max(2000).optional(),
+});
+
+// Approving a request creates the real tenant + admin — same shape as
+// tenantCreateSchema below, with the tenant/admin fields defaulted from the
+// request itself but overridable (a Super Admin may want to correct a typo
+// in the school name, or use a different admin email, before creating it).
+export const tenantRequestApproveSchema = z.object({
+  tenantName: z.string().trim().min(1).max(160).optional(),
+  adminName: z.string().trim().min(1).max(120).optional(),
+  adminEmail: z.string().trim().email().max(254).optional(),
+  licenseKeyCode: z.string().trim().min(1).max(64).optional(),
+});
+
+export const tenantRequestRejectSchema = z.object({
+  reason: z.string().trim().min(1).max(1000),
+});
+
 // Licensing — Subscription Plans. A limit field of null means "unlimited";
 // a limit of 0 is rejected below since "allow zero students" isn't a usable
 // plan, it's a misconfiguration.

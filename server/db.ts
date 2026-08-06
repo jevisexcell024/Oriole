@@ -14,7 +14,7 @@ import type {
   Faculty, Department, Program, Campus, AcademicYear, ClassGroup, RegradeRequest, Book, ReadingProgress,
   ResourceVersion, ResourceBookmark, ResourceRating, ResourceDownloadLog, GeofenceLog, CustomRole,
   ReliabilityIncident, ReliabilitySample, ReliabilityDailyRollup, ReliabilitySubsystemKey, MediaAsset, SuperAdmin,
-  PlatformMaintenance, EmailTemplate, SupportTicket, Tenant, Plan, LicenseKey, MaintenanceWindow, PlatformBranding,
+  PlatformMaintenance, EmailTemplate, SupportTicket, Tenant, Plan, LicenseKey, MaintenanceWindow, PlatformBranding, TenantRequest,
 } from "../shared/types.ts";
 import { DEFAULT_LOCKDOWN, DEFAULT_LEARNING_STRUCTURE } from "../shared/types.ts";
 
@@ -40,6 +40,7 @@ export interface Schema {
   // plain mirrored tables like everything else here rather than off-mirror.
   plans: Plan[];
   licenseKeys: LicenseKey[];
+  tenantRequests: TenantRequest[];
   maintenanceWindows: MaintenanceWindow[];
   branding: PlatformBranding[];
   exams: Exam[];
@@ -85,7 +86,7 @@ const gunzipAsync = promisify(gunzip);
 
 const defaultData: Schema = {
   tenants: [],
-  users: [], superAdmins: [], maintenance: [], emailTemplates: [], supportTickets: [], plans: [], licenseKeys: [], maintenanceWindows: [], branding: [], exams: [], questions: [], registrations: [],
+  users: [], superAdmins: [], maintenance: [], emailTemplates: [], supportTickets: [], plans: [], licenseKeys: [], tenantRequests: [], maintenanceWindows: [], branding: [], exams: [], questions: [], registrations: [],
   attempts: [], certificates: [], announcements: [],
   settings: [],
   faculties: [], departments: [], programs: [], campuses: [], academicYears: [], classes: [], regradeRequests: [],
@@ -108,6 +109,7 @@ const TABLES: { key: keyof Schema; table: string; idField: string }[] = [
   { key: "supportTickets", table: "support_tickets", idField: "id" },
   { key: "plans", table: "plans", idField: "id" },
   { key: "licenseKeys", table: "license_keys", idField: "id" },
+  { key: "tenantRequests", table: "tenant_requests", idField: "id" },
   { key: "maintenanceWindows", table: "maintenance_windows", idField: "id" },
   { key: "branding", table: "branding", idField: "id" },
   { key: "exams", table: "exams", idField: "id" },

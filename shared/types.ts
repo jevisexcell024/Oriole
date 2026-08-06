@@ -89,6 +89,31 @@ export interface LicenseKey {
   revokedAt?: string | null;
 }
 
+/** A prospective school's inbound signup request, submitted through the
+ *  public "Request Access" form (no auth) — the only path to a new tenant
+ *  besides a Super Admin creating one directly. Reviewed by a Super Admin
+ *  Owner, who either approves it (which creates the real Tenant + first
+ *  admin account, same as the direct-create flow) or rejects it with a
+ *  reason. Platform-global, not tenant-scoped — there is no tenant yet. */
+export interface TenantRequest {
+  id: string;
+  schoolName: string;
+  contactName: string;
+  contactEmail: string;
+  contactPhone?: string;
+  /** Free-text context the requester supplied — expected student count,
+   *  current tooling, timeline, etc. Not required. */
+  message?: string;
+  status: "pending" | "approved" | "rejected";
+  createdAt: string;
+  reviewedAt?: string | null;
+  reviewedBySuperAdminId?: string | null;
+  reviewedBySuperAdminName?: string | null;
+  rejectionReason?: string | null;
+  /** Set once approved — the real Tenant this request became. */
+  approvedTenantId?: string | null;
+}
+
 export interface User {
   id: string;
   /** The school/organization this account belongs to. Every account is
