@@ -21,6 +21,7 @@ import { SuperAdminPlans } from "@/pages/SuperAdminPlans";
 import { SuperAdminLicenses } from "@/pages/SuperAdminLicenses";
 import { SuperAdminLicenseKeys } from "@/pages/SuperAdminLicenseKeys";
 import { SuperAdminAnalytics } from "@/pages/SuperAdminAnalytics";
+import { SuperAdminInfrastructure } from "@/pages/SuperAdminInfrastructure";
 
 /** Entire Super Admin subtree in one file, lazy-loaded as a single unit from
  *  main.tsx (one route: <Route path="/super-admin/*" element={<SuperAdminApp/>}/>).
@@ -59,6 +60,7 @@ function SuperAdminRoutes() {
       <Route path="licenses" element={<SuperAdminProtected><SuperAdminLicenses /></SuperAdminProtected>} />
       <Route path="license-keys" element={<SuperAdminProtected><SuperAdminLicenseKeys /></SuperAdminProtected>} />
       <Route path="analytics" element={<SuperAdminProtected><SuperAdminAnalytics /></SuperAdminProtected>} />
+      <Route path="infrastructure" element={<SuperAdminProtected><SuperAdminInfrastructure /></SuperAdminProtected>} />
       <Route path="*" element={<Navigate to="dashboard" replace />} />
     </Routes>
   );

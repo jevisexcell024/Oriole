@@ -4,6 +4,30 @@ A running record of what shipped in each version. Newest first.
 
 ---
 
+## v2.15.0 — Practice Center rebuild, Result redesign, Super Admin console completion
+
+**A wide-ranging pass covering the candidate practice/results experience and the remaining gaps in the Super Admin console.** Every number shown anywhere below is real — no fabricated streaks, leaderboards, "system health" latencies, or revenue trends; where a spec/reference asked for something with no real backing data, it was either dropped or rebuilt against the closest real equivalent, and that substitution is called out explicitly in each item below.
+
+**Practice Center rebuilt on real data.** Hero card with a real average-score ring and completion progress bar, a "Continue Practice" card whose progress bar reflects the *actual* fraction of questions answered so far on the in-progress attempt (new `inProgressPct` field on `GET /api/practice`), real subject-category cards, a real score-trend chart from actual submitted attempts, and a real streak (reusing the same account-level streak the Dashboard already tracks). Dropped from the original ask: streaks-as-a-feature, achievements, leaderboards, bookmarks, an AI assistant — none have any backing data or feature in this app.
+
+**New post-submission confirmation screen** (`Result.tsx`) shown once, immediately after clicking Submit, before the score/pending view: a real timeline (Started → Completed → Submitted → Awaiting Review → Published), real answered/skipped/time-used stats, and — for proctored exams — a real integrity summary from actual tracked proctor events (fullscreen exits, tab switches, copy/paste attempts). Institution name added to the result API to support this.
+
+**Microsoft Fluent-style redesign of the graded result view**, both the candidate's own page and the admin's grading view of the same attempt (`AdminAttemptReview.tsx`) — flat cards, a colored left-accent bar for pass/fail instead of a gradient hero, Segoe UI system font stack, a command bar with Print/Copy-link actions. Styling only; every grading control (rubric scoring, second-marker, ID verification, release) works exactly as before.
+
+**Super Admin Licensing rebuilt into an enterprise console** — KPI row, filters, sortable/paginated table, a details panel that becomes a slide-over drawer below 1280px, CSV export — on top of the existing real Plan/LicenseKey/Tenant data. Added a **"Practice exam" toggle** to the Exam Builder so admins can flag an exam as practice without a raw API call.
+
+**Super Admin Dashboard rebuilt** with real platform-wide KPIs (institutions, users by role, active exams/sessions), real MRR/ARR (from `planBilling`), a real 30-day activity trend and plan-allocation breakdown (reusing the same `/analytics` data the Platform Analytics page already computes), a security snapshot (real staff MFA adoption %, real suspended-school count, real failed-console-login count), and a recent-activity feed from the real platform audit log. Dropped: fabricated "Platform Health" per-service latencies and a "Deployment Timeline" — neither has any real instrumentation behind it anywhere in this app.
+
+**Tenant Requests — a real, end-to-end signup flow**, closing the last genuine gap from the v1.6.0 Super Admin plan. A public, rate-limited `/request-access` form (linked from the login page) feeds a Super Admin review queue; **Approve** reuses the exact same tenant-creation path as "Create Organization" (extracted into a shared `createTenantWithAdmin()` helper so there's one code path, not two), **Reject** requires a reason. New `TenantRequest` collection, three new endpoints, exempted from maintenance-mode gating so a prospective school can still reach the form during planned downtime.
+
+**Super Admin Infrastructure page** — the last "Soon"-disabled nav group with no real page behind it. Surfaces things this app already tracks but never showed together: real table row counts (Database), real library-resource storage usage (Storage), real email delivery stats including actual recent SMTP failures (Email Services), and the real scheduled-background-job run history — backup, retention, geofence sweep, exam reminders, admin digest, scheduled reports, maintenance windows (Queues, the closest real equivalent to a message queue this app has). **Cache** stays honestly disabled: there is no cache layer anywhere in this application, so a "Cache" page would have nothing real to show.
+
+**Rewired the remaining dead sidebar items** to the real pages that already cover them, instead of leaving them as permanent "Soon" placeholders: Tenant Suspension/Archive → Institutions, Feedback/Contact Messages → Support Tickets, Revenue/Growth/Usage/Exports → Plans/Analytics/Licenses, Environment → System Information. Left disabled, with the reason now documented inline: System Health and API Keys (both deliberate architecture decisions — see their own comments), Feature Flags (no backing infrastructure), Tenant Requests' sibling "Infrastructure: Cache" (no cache layer), and API Explorer (no OpenAPI spec to explore).
+
+**Duplication cleanup**: the "icon + label + value" stat-tile pattern had been independently reimplemented — down to the exact `bg-[#c6ff34]/10` tint — across `SuperAdminLicenseKeys`, `SuperAdminPlans`, `SuperAdminTenantRequests`, and `SuperAdminMonitoring`. Consolidated into one shared `SuperAdminStatCard` (`src/components/ui.tsx`). Left the visually-distinct stat-card variants alone (`AdminDashboard`'s live-pulse hero stat, `AdminAnalytics`'s delta-trend stat, `SuperAdminLicenses`'s colored-ring KPI card, the candidate-side light-theme cards) — each serves a genuinely different design, not an accidental copy.
+
+---
+
 ## v2.14.0 — Architecture/UX audit: duplication and navigation fixes
 
 **Ran the app end-to-end as a real user, comparing it against the actual codebase, looking specifically for duplication and confusing navigation** — not a feature request, a correction pass. Seven concrete findings, all fixed:

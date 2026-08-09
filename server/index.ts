@@ -352,6 +352,14 @@ app.post("/api/auth/login", validate(loginSchema), async (req, res) => {
     await recordAuthAudit(req, "auth.login_blocked_suspended", String(email));
     return res.status(403).json({ error: "This school's account has been suspended. Contact your platform administrator." });
   }
+  // Same shape as the suspension gate above, checked in the same place —
+  // a trial school that never converted to a paid plan loses access once
+  // its 7-day window closes, same real enforcement as a suspended school.
+  const loginTenant = user.tenantId ? db.data!.tenants.find((t) => t.id === user.tenantId) : null;
+  if (loginTenant?.licenseStatus === "trial" && loginTenant.licenseExpiresAt && new Date(loginTenant.licenseExpiresAt).getTime() < Date.now()) {
+    await recordAuthAudit(req, "auth.login_blocked_trial_expired", String(email));
+    return res.status(403).json({ error: "Your 7-day trial has ended. Contact your platform administrator to upgrade to a paid plan." });
+  }
   // Fire-and-forget: don't add hashing latency to this response, especially
   // under a login-storm where speed matters most.
   rehashIfNeeded(user, String(password)).catch(() => { /* best-effort */ });
@@ -666,6 +674,38 @@ app.get("/api/super-admin/monitoring", requireSuperAdmin, (_req, res) => {
     sessions,
     activeUserCount: new Set(inProgress.map((a) => a.candidateId)).size,
     activeExamCount: new Set(inProgress.map((a) => a.examId)).size,
+  });
+});
+
+// Infrastructure — real, already-tracked platform internals surfaced in one
+// place: row counts per collection (Database), library resource file sizes
+// (Storage — the only stored-file size the schema tracks; webcam/ID photos
+// aren't sized so aren't counted), delivery stats from the real email log
+// (Email Services), and the real scheduled-job run history (Queues — this
+// app has no message queue, but "background jobs that run on a schedule" is
+// the closest real equivalent). No Cache section: there is no cache layer
+// anywhere in this app, so the frontend shows that honestly rather than a
+// fabricated hit-rate.
+app.get("/api/super-admin/infrastructure", requireSuperAdmin, async (_req, res) => {
+  const tables = Object.entries(db.data!)
+    .map(([name, rows]) => ({ name, rows: Array.isArray(rows) ? rows.length : 0 }))
+    .sort((a, b) => b.rows - a.rows);
+  const totalRows = tables.reduce((s, t) => s + t.rows, 0);
+
+  const storageBytes = db.data!.books.reduce((s, b) => s + (b.fileSize ?? 0), 0);
+
+  const recentEmails = await emailStore.recent(200);
+  const sent = recentEmails.filter((e) => e.delivery === "sent").length;
+  const failed = recentEmails.filter((e) => e.delivery === "failed").length;
+  const logged = recentEmails.filter((e) => e.delivery === "logged" || !e.delivery).length;
+  const recentFailures = recentEmails.filter((e) => e.delivery === "failed").slice(0, 10)
+    .map((e) => ({ to: e.to, subject: e.subject, error: e.error ?? null, sentAt: e.sentAt, provider: e.provider ?? null }));
+
+  res.json({
+    database: { tables, totalRows },
+    storage: { bytes: storageBytes, resourceCount: db.data!.books.length },
+    email: { total: recentEmails.length, sent, failed, logged, provider: recentEmails[0]?.provider ?? null, recentFailures },
+    queues: { jobs: jobStatuses() },
   });
 });
 
@@ -1028,6 +1068,30 @@ app.get("/api/super-admin/tenants", requireSuperAdmin, (_req, res) => {
  *  (new Tenant + its OrgSettings row + its first admin account, optionally
  *  licensed in the same step). Returns an `{ error, status }` shape instead
  *  of throwing so both call sites can respond with their own JSON contract. */
+const TRIAL_PLAN_CODE = "TRIAL";
+const TRIAL_DAYS = 7;
+
+/** The plan every school starts on unless a real license key is redeemed at
+ *  creation time — a real, visible, editable Plan row (an Owner can adjust
+ *  its limits from Subscription Plans like any other), not a hidden special
+ *  case. Self-heals on first use rather than needing a seed script, matching
+ *  this file's existing "backfill on read" convention (see the `code`
+ *  backfill in GET /api/super-admin/plans just above). */
+async function getOrCreateTrialPlan(): Promise<Plan> {
+  const existing = db.data!.plans.find((p) => p.code === TRIAL_PLAN_CODE);
+  if (existing) return existing;
+  const plan: Plan = {
+    id: nanoid(10), name: "Trial", code: TRIAL_PLAN_CODE,
+    description: `Automatic ${TRIAL_DAYS}-day trial for schools that haven't redeemed a paid license yet.`,
+    limits: { maxStudents: 25, maxStaff: 3, maxActiveExams: 3 },
+    features: [`${TRIAL_DAYS}-day trial`, "Up to 25 students", "Up to 3 staff accounts", "Up to 3 active exams"],
+    priceMonthly: 0, priceYearly: 0, currency: "USD", archived: false, createdAt: now(),
+  };
+  db.data!.plans.push(plan);
+  await db.upsert("plans", plan);
+  return plan;
+}
+
 async function createTenantWithAdmin(params: { tenantName: string; adminName: string; adminEmail: string; licenseKeyCode?: string }):
   Promise<{ tenant: Tenant; admin: User; oneTimePassword: string; licenseResult: { key: LicenseKey; plan: Plan } | null } | { error: string; status: number }> {
   const { tenantName, adminName, adminEmail, licenseKeyCode } = params;
@@ -1048,6 +1112,14 @@ async function createTenantWithAdmin(params: { tenantName: string; adminName: st
     applyLicenseKeyRedemption(licenseResult.key, tenant.id);
     tenant.planId = licenseResult.plan.id;
     tenant.licenseStatus = "active";
+  } else {
+    // No paid license at creation time — real 7-day trial, not unlimited
+    // free access forever. A Super Admin can still assign a real plan (or
+    // redeem a key) at any point from Active Licenses, which clears this.
+    const trialPlan = await getOrCreateTrialPlan();
+    tenant.planId = trialPlan.id;
+    tenant.licenseStatus = "trial";
+    tenant.licenseExpiresAt = new Date(Date.now() + TRIAL_DAYS * 24 * 3600_000).toISOString();
   }
   db.data!.tenants.push(tenant);
   await db.upsert("tenants", tenant);
@@ -1087,23 +1159,37 @@ app.post("/api/super-admin/tenants", requireSuperAdminOwner, validate(tenantCrea
 });
 
 // ---------------------------------------------------------------- TENANT REQUESTS
-// The "Request Access" intake — a prospective school submits interest through
-// a public, unauthenticated form; a Super Admin Owner reviews and either
-// approves (creating the real tenant via createTenantWithAdmin, same as a
-// direct create) or rejects with a reason. This is the only path to a new
-// tenant besides a Super Admin creating one directly — there is no other
-// self-service signup anywhere on the platform.
+// The "Request Access" intake — a prospective school submits through a
+// public, unauthenticated, rate-limited form and gets a real trial school +
+// admin account immediately (self-serve, like a normal SaaS "start free
+// trial" flow) — no human review gate. The TenantRequest row is still kept
+// as a real audit record of every self-serve signup (who, when, which
+// tenant it became), not a queue to work through; the manual approve/reject
+// endpoints below stay in place for any request that predates this change
+// (still genuinely "pending" in the data) and as a manual escape hatch, but
+// nothing new lands in that state going forward. Abuse defense is
+// deliberately just the existing per-IP rate limit for now — no extra
+// heuristics until real spam shows up to justify them (see
+// project_production_readiness_roadmap memory).
 app.post("/api/tenant-requests", tenantRequestLimiter, validate(tenantRequestCreateSchema), async (req, res) => {
   const { schoolName, contactName, contactEmail, contactPhone, message } = req.body as {
     schoolName: string; contactName: string; contactEmail: string; contactPhone?: string; message?: string;
   };
+  const result = await createTenantWithAdmin({ tenantName: schoolName, adminName: contactName, adminEmail: contactEmail });
+  if ("error" in result) return res.status(result.status).json({ error: result.error });
+  const { tenant, admin, oneTimePassword } = result;
+
   const reqRow: TenantRequest = {
     id: nanoid(10), schoolName, contactName, contactEmail: contactEmail.toLowerCase(),
-    contactPhone, message, status: "pending", createdAt: now(),
+    contactPhone, message, status: "approved", createdAt: now(),
+    reviewedAt: now(), reviewedBySuperAdminId: null, reviewedBySuperAdminName: "Automatic (self-serve)",
+    approvedTenantId: tenant.id,
   };
   db.data!.tenantRequests.push(reqRow);
   await db.upsert("tenantRequests", reqRow);
-  res.status(201).json({ ok: true });
+
+  await recordSuperAdminAudit(req, "superadmin.tenant_request.auto_approved", `${schoolName} → ${tenant.name} (admin: ${admin.email}), self-serve trial`);
+  res.status(201).json({ tenant: { id: tenant.id, name: tenant.name }, admin: { name: admin.name, email: admin.email }, oneTimePassword });
 });
 
 app.get("/api/super-admin/tenant-requests", requireSuperAdmin, (_req, res) => {
@@ -5584,6 +5670,19 @@ app.get("/api/my/attendance", requireAuth, (req, res) => {
     .filter(Boolean)
     .sort((a, b) => (b!.scheduled ?? "").localeCompare(a!.scheduled ?? ""));
   res.json({ attendance: rows });
+});
+
+// Real license/trial status for the signed-in user's own school — powers the
+// trial banner in AdminShell. Deliberately requireAuth (not staff-only): the
+// data itself (plan name, trial days left) isn't sensitive, and only the
+// admin UI actually calls it.
+app.get("/api/my/license-status", requireAuth, (req, res) => {
+  const user = currentUser(req)!;
+  const tenant = user.tenantId ? db.data!.tenants.find((t) => t.id === user.tenantId) : null;
+  if (!tenant) return res.json({ licenseStatus: null, planName: null, daysLeft: null });
+  const plan = tenant.planId ? db.data!.plans.find((p) => p.id === tenant.planId) : null;
+  const daysLeft = tenant.licenseExpiresAt ? Math.ceil((new Date(tenant.licenseExpiresAt).getTime() - Date.now()) / 86_400_000) : null;
+  res.json({ licenseStatus: tenant.licenseStatus ?? null, planName: plan?.name ?? null, daysLeft });
 });
 
 app.get("/api/my/summary", requireAuth, async (req, res) => {

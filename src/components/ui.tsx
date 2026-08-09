@@ -2,6 +2,27 @@ import { type ComponentType, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { clsx } from "clsx";
 
+/** The Super Admin console's stat-tile — icon in a tinted rounded box, a big
+ *  number, a muted label, and an optional note line. Was independently
+ *  reimplemented (byte-for-byte, down to the exact bg-[#c6ff34]/10 tint)
+ *  across SuperAdminLicenseKeys/Plans/TenantRequests/Monitoring — one shared
+ *  component here instead. Not used outside the Super Admin console: the
+ *  candidate/tenant-admin pages have their own distinct stat-tile styles
+ *  (different theme, different visual language) that stay separate on
+ *  purpose rather than being forced into this shape. */
+export function SuperAdminStatCard({ icon: Icon, label, value, note }: { icon: ComponentType<{ className?: string }>; label: string; value: string | number; note?: string }) {
+  return (
+    <div className="card flex items-center gap-3 p-4">
+      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#c6ff34]/10 text-[#c6ff34]"><Icon className="h-5 w-5" /></div>
+      <div className="min-w-0">
+        <p className="truncate text-xl font-bold tabular-nums">{value}</p>
+        <p className="text-xs text-[var(--muted)]">{label}</p>
+        {note && <p className="mt-0.5 text-[11px] text-[var(--muted)]">{note}</p>}
+      </div>
+    </div>
+  );
+}
+
 /** A single shimmering placeholder block. Compose these to mirror real layout. */
 export function Skeleton({ className }: { className?: string }) {
   return <div className={clsx("animate-pulse rounded-md bg-white/[0.06]", className)} />;

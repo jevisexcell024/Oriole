@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Loader2, Check, Copy, CheckCircle2, X, Inbox, Clock, ShieldCheck, ShieldX, Mail, Phone, MessageSquare } from "lucide-react";
 import { SuperAdminShell } from "@/components/SuperAdminShell";
 import { PageHeader } from "@/components/PageHeader";
-import { TableSkeleton, Modal, ErrorBanner } from "@/components/ui";
+import { TableSkeleton, Modal, ErrorBanner, SuperAdminStatCard } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useSuperAdminAuth } from "@/lib/superAdminAuth";
 import type { TenantRequest } from "@shared/types";
@@ -15,18 +15,6 @@ const STATUS_META: Record<TenantRequest["status"], { label: string; className: s
   approved: { label: "Approved", className: "bg-emerald-500/15 text-emerald-400" },
   rejected: { label: "Rejected", className: "bg-rose-500/15 text-rose-400" },
 };
-
-function StatCard({ icon: Icon, label, value }: { icon: typeof Inbox; label: string; value: string }) {
-  return (
-    <div className="card flex items-center gap-3 p-4">
-      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#c6ff34]/10 text-[#c6ff34]"><Icon className="h-5 w-5" /></div>
-      <div>
-        <p className="text-xl font-bold tabular-nums">{value}</p>
-        <p className="text-xs text-[var(--muted)]">{label}</p>
-      </div>
-    </div>
-  );
-}
 
 function fmtDate(iso: string): string {
   return new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
@@ -50,16 +38,16 @@ export function SuperAdminTenantRequests() {
   return (
     <SuperAdminShell>
       <div className="fade-in max-w-5xl">
-        <PageHeader eyebrow="Tenants" title="Tenant Requests" subtitle="Signup requests submitted through the public Request Access form — approve to create the real school and its first admin, or reject with a reason." />
+        <PageHeader eyebrow="Tenants" title="Tenant Requests" subtitle="Every self-serve signup from the public Request Access form — schools are created automatically on a trial the instant someone submits, no approval needed. This is the real record of who signed up and when." />
 
         {error && <ErrorBanner className="mt-4">{error}</ErrorBanner>}
 
         {requests && (
           <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <StatCard icon={Inbox} label="Total requests" value={String(requests.length)} />
-            <StatCard icon={Clock} label="Pending" value={String(counts.pending ?? 0)} />
-            <StatCard icon={ShieldCheck} label="Approved" value={String(counts.approved ?? 0)} />
-            <StatCard icon={ShieldX} label="Rejected" value={String(counts.rejected ?? 0)} />
+            <SuperAdminStatCard icon={Inbox} label="Total requests" value={String(requests.length)} />
+            <SuperAdminStatCard icon={Clock} label="Pending" value={String(counts.pending ?? 0)} />
+            <SuperAdminStatCard icon={ShieldCheck} label="Approved" value={String(counts.approved ?? 0)} />
+            <SuperAdminStatCard icon={ShieldX} label="Rejected" value={String(counts.rejected ?? 0)} />
           </div>
         )}
 
@@ -179,7 +167,10 @@ function ReviewModal({ request, isOwner, onClose, onDone }: { request: TenantReq
           <Field label="School name"><input className="input h-10" value={tenantName} onChange={(e) => setTenantName(e.target.value)} /></Field>
           <Field label="Admin name"><input className="input h-10" value={adminName} onChange={(e) => setAdminName(e.target.value)} /></Field>
           <Field label="Admin email"><input className="input h-10" value={adminEmail} onChange={(e) => setAdminEmail(e.target.value)} /></Field>
-          <Field label="License key (optional)"><input className="input h-10" value={licenseKeyCode} onChange={(e) => setLicenseKeyCode(e.target.value)} placeholder="ORCL-XXXX-XXXX-XXXX" /></Field>
+          <Field label="License key (optional)">
+            <input className="input h-10" value={licenseKeyCode} onChange={(e) => setLicenseKeyCode(e.target.value)} placeholder="ORCL-XXXX-XXXX-XXXX" />
+            <p className="mt-1 text-xs text-[var(--muted)]">{licenseKeyCode.trim() ? "This key's plan is applied immediately." : "Leave blank to start this school on the automatic 7-day trial."}</p>
+          </Field>
           {err && <p className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-400">{err}</p>}
           <div className="flex justify-end gap-2 pt-1">
             <button onClick={onClose} className="rounded-lg px-3 py-2 text-sm font-medium text-[var(--muted)] hover:text-[var(--fg)]">Cancel</button>

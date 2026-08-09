@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Plus, Loader2, Check, Copy, CheckCircle2, Ban, KeyRound, ShieldCheck, Users, ShieldOff } from "lucide-react";
 import { SuperAdminShell } from "@/components/SuperAdminShell";
 import { PageHeader } from "@/components/PageHeader";
-import { TableSkeleton, Modal, ErrorBanner } from "@/components/ui";
+import { TableSkeleton, Modal, ErrorBanner, SuperAdminStatCard } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useSuperAdminAuth } from "@/lib/superAdminAuth";
 import type { Plan, LicenseKey } from "@shared/types";
@@ -16,18 +16,6 @@ function statusOf(key: LicenseKey): { status: KeyStatus; label: string; classNam
   if (key.expiresAt && key.expiresAt < new Date().toISOString()) return { status: "expired", label: "Expired", className: "bg-white/10 text-[var(--muted)]" };
   if (key.redeemedByTenantIds.length >= key.maxRedemptions) return { status: "redeemed", label: "Fully redeemed", className: "bg-white/10 text-[var(--muted)]" };
   return { status: "active", label: "Active", className: "bg-emerald-500/15 text-emerald-400" };
-}
-
-function StatCard({ icon: Icon, label, value }: { icon: typeof KeyRound; label: string; value: string }) {
-  return (
-    <div className="card flex items-center gap-3 p-4">
-      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#c6ff34]/10 text-[#c6ff34]"><Icon className="h-5 w-5" /></div>
-      <div>
-        <p className="text-xl font-bold tabular-nums">{value}</p>
-        <p className="text-xs text-[var(--muted)]">{label}</p>
-      </div>
-    </div>
-  );
 }
 
 export function SuperAdminLicenseKeys() {
@@ -82,11 +70,11 @@ export function SuperAdminLicenseKeys() {
 
         {keys && (
           <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-5">
-            <StatCard icon={KeyRound} label="Total keys" value={String(keys.length)} />
-            <StatCard icon={ShieldCheck} label="Active" value={String(statusCounts.active ?? 0)} />
-            <StatCard icon={Users} label="Redemptions" value={String(totalRedemptions)} />
-            <StatCard icon={ShieldOff} label="Revoked" value={String(statusCounts.revoked ?? 0)} />
-            <StatCard icon={Ban} label="Expired" value={String(statusCounts.expired ?? 0)} />
+            <SuperAdminStatCard icon={KeyRound} label="Total keys" value={String(keys.length)} />
+            <SuperAdminStatCard icon={ShieldCheck} label="Active" value={String(statusCounts.active ?? 0)} />
+            <SuperAdminStatCard icon={Users} label="Redemptions" value={String(totalRedemptions)} />
+            <SuperAdminStatCard icon={ShieldOff} label="Revoked" value={String(statusCounts.revoked ?? 0)} />
+            <SuperAdminStatCard icon={Ban} label="Expired" value={String(statusCounts.expired ?? 0)} />
           </div>
         )}
 

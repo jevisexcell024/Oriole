@@ -25,7 +25,7 @@ interface LicenseRow {
   usage: { students: number; staff: number; activeExams: number };
 }
 
-type DerivedStatus = "active" | "expiring" | "expired" | "unlicensed";
+type DerivedStatus = "active" | "trial" | "expiring" | "expired" | "unlicensed";
 
 function daysLeft(iso: string | null): number | null {
   if (!iso) return null;
@@ -36,6 +36,10 @@ function derivedStatus(r: LicenseRow): DerivedStatus {
   if (!r.planId) return "unlicensed";
   const d = daysLeft(r.licenseExpiresAt);
   if (d !== null && d < 0) return "expired";
+  // A trial that's still running gets its own badge — distinct from a paid
+  // plan's "Expiring", since the real remedy is different (convert to a
+  // paid plan, not just renew).
+  if (r.licenseStatus === "trial") return "trial";
   if (d !== null && d <= 30) return "expiring";
   return "active";
 }
@@ -52,6 +56,7 @@ function fmtDate(iso: string | null): string {
 
 const STATUS_META: Record<DerivedStatus, { label: string; bg: string; text: string }> = {
   active: { label: "Active", bg: "rgba(22,163,74,0.15)", text: "#4ade80" },
+  trial: { label: "Trial", bg: "rgba(96,165,250,0.15)", text: "#60a5fa" },
   expiring: { label: "Expiring", bg: "rgba(217,119,6,0.15)", text: "#fbbf24" },
   expired: { label: "Expired", bg: "rgba(220,38,38,0.15)", text: "#f87171" },
   unlicensed: { label: "No Plan", bg: "rgba(148,163,184,0.15)", text: "#94a3b8" },
@@ -138,11 +143,12 @@ export function SuperAdminLicenses() {
     const list = rows ?? [];
     const total = list.length;
     const active = list.filter((r) => derivedStatus(r) === "active").length;
+    const trial = list.filter((r) => derivedStatus(r) === "trial").length;
     const expiring = list.filter((r) => derivedStatus(r) === "expiring").length;
     const expired = list.filter((r) => derivedStatus(r) === "expired").length;
     const seatsLicensed = list.reduce((s, r) => s + (r.limits?.maxStudents ?? 0), 0);
     const seatsUsed = list.reduce((s, r) => s + r.usage.students, 0);
-    return { total, active, expiring, expired, seatsLicensed, seatsUsed };
+    return { total, active, trial, expiring, expired, seatsLicensed, seatsUsed };
   }, [rows]);
 
   const filtered = useMemo(() => {
@@ -219,9 +225,10 @@ export function SuperAdminLicenses() {
         {error && <ErrorBanner className="mt-4">{error}</ErrorBanner>}
 
         {/* KPI row — 6 real cards */}
-        <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-6">
+        <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-7">
           <KpiCard icon={Building2} label="Total Licenses" value={String(kpis.total)} description="Schools on the platform" color={LIME} />
           <KpiCard icon={ShieldCheck} label="Active Licenses" value={String(kpis.active)} description="Plan in good standing" color="#4ade80" />
+          <KpiCard icon={Clock} label="On Trial" value={String(kpis.trial)} description="7-day trial running" color="#60a5fa" />
           <KpiCard icon={Clock} label="Expiring Soon" value={String(kpis.expiring)} description="Within 30 days" color="#fbbf24" />
           <KpiCard icon={ShieldOff} label="Expired Licenses" value={String(kpis.expired)} description="Past their expiry" color="#f87171" />
           <KpiCard icon={Layers} label="Total Seats Licensed" value={String(kpis.seatsLicensed)} description="Across capped plans" color="#60a5fa" />
@@ -237,6 +244,7 @@ export function SuperAdminLicenses() {
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as StatusFilter)} className="input text-sm" style={{ width: 140, height: 52, borderRadius: 12 }}>
             <option value="all">All statuses</option>
             <option value="active">Active</option>
+            <option value="trial">Trial</option>
             <option value="expiring">Expiring</option>
             <option value="expired">Expired</option>
             <option value="unlicensed">No plan</option>

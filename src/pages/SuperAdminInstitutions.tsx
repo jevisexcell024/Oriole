@@ -295,6 +295,7 @@ function CreateModal({ onClose, onDone }: { onClose: () => void; onDone: () => v
         <p className="text-xs text-[var(--muted)]">{t("sad.instPasswordHint")}</p>
         <Field label="License key (optional)">
           <input className="input h-10" value={licenseKeyCode} onChange={(e) => setLicenseKeyCode(e.target.value)} placeholder="ORCL-XXXX-XXXX-XXXX" />
+          <p className="mt-1 text-xs text-[var(--muted)]">{licenseKeyCode.trim() ? "This key's plan is applied immediately." : "Leave blank to start this school on the automatic 7-day trial — assign a real plan any time from Active Licenses."}</p>
         </Field>
         {err && <p className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-400">{err}</p>}
       </div>

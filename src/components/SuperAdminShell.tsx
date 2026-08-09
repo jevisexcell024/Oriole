@@ -90,18 +90,17 @@ const GROUPS: NavGroup[] = [
     { labelKey: "sanav.maintenanceHistory", icon: History, to: "/super-admin/maintenance" },
     { labelKey: "sanav.maintenanceQueue", icon: ClipboardList, to: "/super-admin/maintenance" },
   ] },
-  // None of these 5 have real backing data: there's no per-service health/
-  // latency collector, no platform-wide storage metric (only one feature's
-  // file-size sum), no cache layer, no job queue, and no email-provider
-  // dashboard — building any of these would mean fabricating numbers or
-  // standing up new instrumentation first, not just wiring a nav item.
-  // Left disabled until one of them becomes a real, concrete need.
+  // Real now: Infrastructure surfaces actual table row counts, library
+  // resource storage, real email delivery stats, and the real scheduled-job
+  // run history — all things this app already tracks, just never surfaced
+  // together. Cache stays disabled: there genuinely is no cache layer
+  // anywhere in this app, so a "Cache" page would have nothing real to show.
   { key: "infrastructure", labelKey: "sanav.secInfrastructure", items: [
-    { labelKey: "sanav.database", icon: Database },
-    { labelKey: "sanav.storage", icon: HardDrive },
+    { labelKey: "sanav.database", icon: Database, to: "/super-admin/infrastructure" },
+    { labelKey: "sanav.storage", icon: HardDrive, to: "/super-admin/infrastructure" },
     { labelKey: "sanav.cache", icon: Zap },
-    { labelKey: "sanav.queues", icon: ClipboardList },
-    { labelKey: "sanav.emailServices", icon: Mail },
+    { labelKey: "sanav.queues", icon: ClipboardList, to: "/super-admin/infrastructure" },
+    { labelKey: "sanav.emailServices", icon: Mail, to: "/super-admin/infrastructure" },
   ] },
   { key: "security", labelKey: "sanav.secSecurity", items: [
     { labelKey: "sanav.securityCenter", icon: FileSearch, to: "/super-admin/security" },
@@ -173,7 +172,17 @@ export function SuperAdminShell({ children }: { children: ReactNode }) {
 
   useEffect(() => { setMobileOpen(false); }, [loc.pathname]);
 
-  const isActive = (to: string) => loc.pathname === to || loc.pathname.startsWith(to + "/");
+  // Several nav labels deliberately point at the same real page (see the
+  // GROUPS comments above — "same page, not a duplicate build"). That means
+  // a plain per-item `pathname === item.to` check would light up every label
+  // sharing that destination at once. Instead, pick exactly one canonical
+  // winner per route — the first matching item in nav order — so exactly one
+  // sidebar item is ever highlighted, no matter how many labels lead there.
+  const allNavItems = [TOP_ITEM, ...GROUPS.flatMap((g) => g.items)];
+  const canonicalActiveLabelKey = allNavItems.find(
+    (item) => item.to && (loc.pathname === item.to || loc.pathname.startsWith(item.to + "/")),
+  )?.labelKey ?? null;
+  const isActive = (item: NavItem) => !!item.to && item.labelKey === canonicalActiveLabelKey;
 
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
     try { return JSON.parse(localStorage.getItem("orcalis-superadmin-nav-expanded") || "{}"); } catch { return {}; }
@@ -204,7 +213,7 @@ export function SuperAdminShell({ children }: { children: ReactNode }) {
     if (item.external) {
       return (
         <a
-          key={item.to}
+          key={item.labelKey}
           href={item.to}
           target="_blank"
           rel="noopener noreferrer"
@@ -219,10 +228,10 @@ export function SuperAdminShell({ children }: { children: ReactNode }) {
         </a>
       );
     }
-    const active = isActive(item.to);
+    const active = isActive(item);
     return (
       <Link
-        key={item.to}
+        key={item.labelKey}
         to={item.to}
         title={collapsed ? t(item.labelKey) : undefined}
         className={clsx(

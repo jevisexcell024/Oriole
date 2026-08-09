@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Plus, Loader2, Check, Archive, ArchiveRestore, Pencil, Building2, Layers, DollarSign, TrendingUp, X } from "lucide-react";
 import { SuperAdminShell } from "@/components/SuperAdminShell";
 import { PageHeader } from "@/components/PageHeader";
-import { TableSkeleton, Modal, ErrorBanner } from "@/components/ui";
+import { TableSkeleton, Modal, ErrorBanner, SuperAdminStatCard } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useSuperAdminAuth } from "@/lib/superAdminAuth";
 import type { Plan } from "@shared/types";
@@ -17,19 +17,6 @@ function limitText(n: number | null | undefined): string {
 function money(n: number, currency = "USD"): string {
   try { return new Intl.NumberFormat(undefined, { style: "currency", currency, maximumFractionDigits: 2 }).format(n); }
   catch { return `${currency} ${n.toFixed(2)}`; }
-}
-
-function StatCard({ icon: Icon, label, value, note }: { icon: typeof Building2; label: string; value: string; note?: string }) {
-  return (
-    <div className="card flex items-center gap-3 p-4">
-      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#c6ff34]/10 text-[#c6ff34]"><Icon className="h-5 w-5" /></div>
-      <div className="min-w-0">
-        <p className="truncate text-xl font-bold tabular-nums">{value}</p>
-        <p className="text-xs text-[var(--muted)]">{label}</p>
-        {note && <p className="mt-0.5 text-[11px] text-[var(--muted)]">{note}</p>}
-      </div>
-    </div>
-  );
 }
 
 export function SuperAdminPlans() {
@@ -71,11 +58,11 @@ export function SuperAdminPlans() {
 
         {summary && (
           <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-            <StatCard icon={Layers} label="Total plans" value={String(summary.totalPlans)} />
-            <StatCard icon={Check} label="Active plans" value={String(summary.activePlans)} />
-            <StatCard icon={Building2} label="Institutions" value={String(summary.totalInstitutions)} note="Across all plans" />
-            <StatCard icon={DollarSign} label="Monthly recurring" value={money(summary.mrr)} />
-            <StatCard icon={TrendingUp} label="Annual recurring" value={money(summary.arr)} />
+            <SuperAdminStatCard icon={Layers} label="Total plans" value={String(summary.totalPlans)} />
+            <SuperAdminStatCard icon={Check} label="Active plans" value={String(summary.activePlans)} />
+            <SuperAdminStatCard icon={Building2} label="Institutions" value={String(summary.totalInstitutions)} note="Across all plans" />
+            <SuperAdminStatCard icon={DollarSign} label="Monthly recurring" value={money(summary.mrr)} />
+            <SuperAdminStatCard icon={TrendingUp} label="Annual recurring" value={money(summary.arr)} />
           </div>
         )}
 

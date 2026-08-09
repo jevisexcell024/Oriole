@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Radio, Users, BookOpen, Clock, Building2, AlarmClock, Search } from "lucide-react";
 import { SuperAdminShell } from "@/components/SuperAdminShell";
 import { PageHeader } from "@/components/PageHeader";
-import { TableSkeleton, ErrorBanner } from "@/components/ui";
+import { TableSkeleton, ErrorBanner, SuperAdminStatCard } from "@/components/ui";
 import { api } from "@/lib/api";
 import { clsx } from "clsx";
 
@@ -19,18 +19,6 @@ function fmtRemaining(deadlineIso: string): string {
   if (mins <= 0) return "overdue";
   const h = Math.floor(mins / 60), m = Math.floor(mins % 60);
   return h > 0 ? `${h}h ${m}m left` : `${m}m left`;
-}
-
-function StatTile({ icon: Icon, label, value }: { icon: typeof Radio; label: string; value: number }) {
-  return (
-    <div className="card flex items-center gap-3 p-4">
-      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#c6ff34]/10 text-[#c6ff34]"><Icon className="h-5 w-5" /></div>
-      <div>
-        <p className="text-2xl font-bold tabular-nums">{value}</p>
-        <p className="text-xs text-[var(--muted)]">{label}</p>
-      </div>
-    </div>
-  );
 }
 
 type SessionFilter = "all" | "ending-soon";
@@ -69,11 +57,11 @@ export function SuperAdminMonitoring() {
         ) : (
           <>
             <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-5">
-              <StatTile icon={Radio} label="Live sessions" value={data.sessions.length} />
-              <StatTile icon={Users} label="Active students" value={data.activeUserCount} />
-              <StatTile icon={BookOpen} label="Active exams" value={data.activeExamCount} />
-              <StatTile icon={Building2} label="Schools active" value={schoolsActive} />
-              <StatTile icon={AlarmClock} label="Ending in 15 min" value={endingSoonCount} />
+              <SuperAdminStatCard icon={Radio} label="Live sessions" value={data.sessions.length} />
+              <SuperAdminStatCard icon={Users} label="Active students" value={data.activeUserCount} />
+              <SuperAdminStatCard icon={BookOpen} label="Active exams" value={data.activeExamCount} />
+              <SuperAdminStatCard icon={Building2} label="Schools active" value={schoolsActive} />
+              <SuperAdminStatCard icon={AlarmClock} label="Ending in 15 min" value={endingSoonCount} />
             </div>
 
             <div className="mt-6 flex flex-wrap items-center justify-between gap-3">

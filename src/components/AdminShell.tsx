@@ -1,11 +1,12 @@
 import { type ReactNode, useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { LogOut, BookOpen, BarChart3, Radio, CalendarClock, CalendarDays, LineChart, Award, Users, ClipboardCheck, GraduationCap, CalendarCheck, Bell, ShieldAlert, AlertTriangle, FileText, HeartPulse, Building2, ScrollText, Settings, LayoutDashboard, Users2, Menu, X, ChevronsLeft, ChevronDown, MessageSquareWarning, Webhook, Library, ShieldCheck, Gauge, UserCog, Megaphone, Layers, LifeBuoy, VenetianMask } from "lucide-react";
+import { LogOut, BookOpen, BarChart3, Radio, CalendarClock, CalendarDays, LineChart, Award, Users, ClipboardCheck, GraduationCap, CalendarCheck, Bell, ShieldAlert, AlertTriangle, FileText, HeartPulse, Building2, ScrollText, Settings, LayoutDashboard, Users2, Menu, X, ChevronsLeft, ChevronDown, MessageSquareWarning, Webhook, Library, ShieldCheck, Gauge, UserCog, Megaphone, Layers, LifeBuoy, VenetianMask, Clock } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { useT } from "@/lib/i18n";
 import { can, type Cap } from "@/lib/roles";
 import { BrandMark } from "@/components/BrandMark";
 import { ThemeToggle } from "@/lib/theme";
+import { api } from "@/lib/api";
 import { clsx } from "clsx";
 
 type NavItem = { to: string; labelKey: string; icon: typeof BookOpen; cap: Cap; badge?: boolean };
@@ -98,6 +99,10 @@ export function AdminShell({ children }: { children: ReactNode; wide?: boolean }
   const { user, logout, endImpersonation } = useAuth();
   const navigate = useNavigate();
   const [endingImp, setEndingImp] = useState(false);
+  // Real trial status for this school — powers the trial banner below.
+  // Fetched once per shell mount; null while loading or for a non-trial school.
+  const [license, setLicense] = useState<{ licenseStatus: string | null; planName: string | null; daysLeft: number | null } | null>(null);
+  useEffect(() => { api.get<{ licenseStatus: string | null; planName: string | null; daysLeft: number | null }>("/my/license-status").then(setLicense).catch(() => {}); }, []);
   const loc = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   // Desktop collapse — icon-only rail, persisted across sessions.
@@ -261,6 +266,19 @@ export function AdminShell({ children }: { children: ReactNode; wide?: boolean }
             >
               {t("anav.endImpersonation")}
             </button>
+          </div>
+        )}
+        {license?.licenseStatus === "trial" && license.daysLeft !== null && (
+          <div className={clsx(
+            "sticky top-14 z-20 flex flex-wrap items-center justify-between gap-2 border-b px-4 py-2 text-sm print:hidden lg:top-0",
+            license.daysLeft <= 2 ? "border-rose-500/30 bg-rose-500/15 text-rose-300" : "border-brand-500/30 bg-brand-500/10 text-brand-400",
+          )}>
+            <span className="inline-flex items-center gap-1.5">
+              <Clock className="h-4 w-4 shrink-0" />
+              {license.daysLeft > 0
+                ? `${license.daysLeft} day${license.daysLeft === 1 ? "" : "s"} left in your free trial${license.planName ? ` (${license.planName})` : ""} — upgrade to keep full access.`
+                : "Your free trial has ended — contact your platform administrator to upgrade."}
+            </span>
           </div>
         )}
         <main className="max-w-[1560px] px-4 py-5 [--app-header-h:56px] print:max-w-none print:p-0 sm:px-6 sm:py-6 lg:[--app-header-h:0px]">{children}</main>
