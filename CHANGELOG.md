@@ -4,6 +4,18 @@ A running record of what shipped in each version. Newest first.
 
 ---
 
+## v2.16.0 — Off the embedded database, dependency security patches
+
+**Production and local dev both moved off the embedded PGlite file onto real PostgreSQL** — the single biggest reliability fix in this app's history. The embedded database had been hitting its own "corrupted → auto-recover from latest backup" path on nearly every restart, in both dev and (once, for real) production; a bare restart could silently lose anything written since the last backup. The code already supported a real `DATABASE_URL` (`server/db.ts`), it just wasn't configured anywhere. Production now runs on a dedicated PostgreSQL database via cPanel's PostgreSQL Databases feature, migrated across with a (already-existing but previously unused) `scripts/restore-backup.mjs` restore path; local dev runs against a local PostgreSQL 17 install for the same reason. Verified on both sides with a clean restart showing `Storage backend: postgres` and zero corruption/recovery messages, plus a full row-count check against the pre-migration data (users, exams, questions, answers, audit logs, everything) to confirm nothing was lost.
+
+**Dependency security patches**, three by clean version bump and one by direct source patch:
+- `dompurify` — XSS via `IN_PLACE` hook removal (GHSA-55q2-fjhq-7xh7).
+- `ip-address` — SSRF/trust-boundary bypass from octal/CIDR/IPv4-mapped address misclassification (GHSA-mwp4-54f8-5fhr and related).
+- `nanoid` — DoS via an infinite loop on a negative/zero size argument (GHSA-28wg-ghj8-5hjv, GHSA-2v37-7h3g-55p8).
+- `image-size` (pulled in transitively by `pptxgenjs`, used for the PowerPoint export on Item Analysis) — DoS via infinite loops in its ICNS/JXL parsers (GHSA-w3rx-r6r6-pgpr, GHSA-5p2g-fcmc-qvqq). No upstream fix exists yet for any released version, and the only available "fix" (downgrading `pptxgenjs` three major versions) breaks its TypeScript types. Patched the two vulnerable loops directly in `node_modules/image-size` and pinned the fix with `patch-package` (`patches/image-size+1.2.1.patch`, new `postinstall` hook) so it survives every future `npm install`.
+
+---
+
 ## v2.15.0 — Practice Center rebuild, Result redesign, Super Admin console completion
 
 **A wide-ranging pass covering the candidate practice/results experience and the remaining gaps in the Super Admin console.** Every number shown anywhere below is real — no fabricated streaks, leaderboards, "system health" latencies, or revenue trends; where a spec/reference asked for something with no real backing data, it was either dropped or rebuilt against the closest real equivalent, and that substitution is called out explicitly in each item below.
