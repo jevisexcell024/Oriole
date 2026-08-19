@@ -370,7 +370,11 @@ app.post("/api/auth/login", validate(loginSchema), async (req, res) => {
     return res.json({ twoFactorRequired: true });
   }
   issueSession(res, user);
-  await checkNewDeviceAndAlert(req, user);
+  // Fire-and-forget, same reasoning as rehashIfNeeded above: this can involve a
+  // real outbound SMTP send (new-device email), which must never add latency to
+  // the login response — a burst of first-time logins (e.g. exam-day check-in)
+  // would otherwise queue behind the mail transport's connection pool and stall.
+  checkNewDeviceAndAlert(req, user).catch(() => { /* best-effort */ });
   res.json({ user: toSafeUser(user), brandColor: effectiveBrandColor(user.tenantId ?? null) });
 });
 
@@ -413,7 +417,11 @@ app.post("/api/auth/2fa/verify", validate(twoFaCodeSchema), async (req, res) => 
   }
   clearPending2fa(res);
   issueSession(res, user);
-  await checkNewDeviceAndAlert(req, user);
+  // Fire-and-forget, same reasoning as rehashIfNeeded above: this can involve a
+  // real outbound SMTP send (new-device email), which must never add latency to
+  // the login response — a burst of first-time logins (e.g. exam-day check-in)
+  // would otherwise queue behind the mail transport's connection pool and stall.
+  checkNewDeviceAndAlert(req, user).catch(() => { /* best-effort */ });
   res.json({ user: toSafeUser(user), brandColor: effectiveBrandColor(user.tenantId ?? null) });
 });
 

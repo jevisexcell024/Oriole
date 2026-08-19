@@ -4,6 +4,20 @@ A running record of what shipped in each version. Newest first.
 
 ---
 
+## v2.17.0 — Fixed a real login-storm bottleneck, measured actual concurrent-user capacity
+
+**Found and fixed a genuine concurrency bug in `POST /api/auth/login` and `POST /api/auth/2fa/verify`**: both routes `await`ed `checkNewDeviceAndAlert()`, which can send a real outbound email (SMTP) for any first-time device. Under a burst of simultaneous first-time logins — exactly what exam-day mass check-in looks like — the mail transport's 5-connection pool became a hard bottleneck, and every login blocked on it. Measured with the existing `scripts/load-test.mjs`: 20/100/300 simultaneous first-time logins all failed completely, every one hanging until the test's own 120s timeout. Fixed by making that call fire-and-forget, matching the existing pattern already used one line above it (`rehashIfNeeded`) — it was never meant to be on the response's critical path.
+
+**Real, measured concurrent-login capacity (on the dev machine, real Postgres backend, post-fix):**
+- 20 concurrent first-time logins: 100% success, ~2.6s average.
+- 100 concurrent: 100% success, ~4.2s average.
+- 300 concurrent: 100% success, up to 16.5s worst case.
+- 500 concurrent: 72% success — the real breaking point on this hardware.
+
+Confirmed via a direct A/B test that `DATABASE_POOL_MAX` (10 → 20) was **not** the limiting factor at 500 — identical failure count either way. The actual ceiling is Node's default bcrypt/libuv thread-pool concurrency (4 threads), not the database — worth knowing before assuming a bigger connection pool would help under real load.
+
+---
+
 ## v2.16.0 — Off the embedded database, dependency security patches
 
 **Production and local dev both moved off the embedded PGlite file onto real PostgreSQL** — the single biggest reliability fix in this app's history. The embedded database had been hitting its own "corrupted → auto-recover from latest backup" path on nearly every restart, in both dev and (once, for real) production; a bare restart could silently lose anything written since the last backup. The code already supported a real `DATABASE_URL` (`server/db.ts`), it just wasn't configured anywhere. Production now runs on a dedicated PostgreSQL database via cPanel's PostgreSQL Databases feature, migrated across with a (already-existing but previously unused) `scripts/restore-backup.mjs` restore path; local dev runs against a local PostgreSQL 17 install for the same reason. Verified on both sides with a clean restart showing `Storage backend: postgres` and zero corruption/recovery messages, plus a full row-count check against the pre-migration data (users, exams, questions, answers, audit logs, everything) to confirm nothing was lost.
