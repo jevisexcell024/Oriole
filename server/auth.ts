@@ -1,10 +1,12 @@
 import jwt from "jsonwebtoken";
+import { createHash } from "node:crypto";
 import type { Request, Response, NextFunction } from "express";
 import type { SafeUser, User } from "../shared/types.ts";
 import { db } from "./db.ts";
 import { env } from "./env.ts";
 import { decryptString } from "./crypto.ts";
 import { type PermissionKey, SYSTEM_ROLE_PERMISSIONS, parseSystemParentId } from "../shared/permissions.ts";
+import { recordSession, isSessionRevoked, touchSession } from "./sessions.ts";
 
 const JWT_SECRET = env.jwtSecret;
 const COOKIE = "orcalis_session";
@@ -55,22 +57,50 @@ export function verifyPasswordSetupToken(token: string): string | null {
   }
 }
 
+/** Self-service password reset link (students). 1h window, and bound to a
+ *  fingerprint of the CURRENT password hash — so the moment the password is
+ *  changed (by this link or any other route) the link stops working, making it
+ *  genuinely single-use without needing any extra stored state. */
+const passwordFingerprint = (u: User) => createHash("sha256").update(u.passwordHash).digest("hex").slice(0, 16);
+export function passwordResetToken(user: User): string {
+  return jwt.sign({ sub: user.id, pwReset: true, pf: passwordFingerprint(user) }, JWT_SECRET, { expiresIn: "1h" });
+}
+export function verifyPasswordResetToken(token: string): User | null {
+  try {
+    const p = jwt.verify(token, JWT_SECRET) as { sub: string; pwReset?: boolean; pf?: string };
+    if (!p.pwReset) return null;
+    const user = db.data!.users.find((u) => u.id === p.sub);
+    return user && p.pf === passwordFingerprint(user) ? user : null;
+  } catch {
+    return null;
+  }
+}
+
 /** `impersonatorId`, when set, tags this session as a Super Admin "log in as"
  *  session — see POST /api/super-admin/tenants/:id/impersonate. Nothing about
  *  the token's shape or lifetime otherwise changes: it's a real, fully-working
  *  session for `user`, just one that carries a breadcrumb of who's actually
  *  driving it, read back by currentImpersonatorId() so the UI can show a
  *  banner and every audit-log entry written during it can be attributed. */
-export function issueSession(res: Response, user: User, impersonatorId?: string) {
+// "Remember me" (unchecked by default on the login form) makes this a real,
+// shorter-lived session instead of a decorative checkbox: unchecked issues a
+// browser-session cookie (no maxAge — gone when the browser closes) with a
+// 1-day token lifetime; checked behaves as before, a real 7-day persistent
+// session. Every other caller (impersonation, 2FA verify's own re-issue,
+// password-change re-issue, etc.) keeps the prior always-persistent behavior
+// by simply not passing `remember: false`.
+export async function issueSession(req: Request, res: Response, user: User, opts?: { impersonatorId?: string; remember?: boolean }) {
+  const remember = opts?.remember ?? true;
+  const sid = await recordSession(req, "user", user.id);
   const token = jwt.sign(
-    { sub: user.id, role: user.role, tv: user.tokenVersion ?? 0, tenantId: user.tenantId, imp: impersonatorId },
-    JWT_SECRET, { expiresIn: "7d" },
+    { sub: user.id, role: user.role, tv: user.tokenVersion ?? 0, tenantId: user.tenantId, imp: opts?.impersonatorId, sid },
+    JWT_SECRET, { expiresIn: remember ? "7d" : "1d" },
   );
   res.cookie(COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
     secure: env.isProd, // HTTPS-only cookie in production
-    maxAge: 7 * 24 * 60 * 60 * 1000,
+    ...(remember ? { maxAge: 7 * 24 * 60 * 60 * 1000 } : {}),
   });
 }
 
@@ -93,16 +123,34 @@ export function clearSession(res: Response) {
   res.clearCookie(COOKIE);
 }
 
+/** The session id (`sid` claim) behind the current request's cookie, if any —
+ *  lets the Sessions list UI mark one row as "this device" and refuse to let
+ *  it revoke itself out from under the request that's asking. */
+export function currentSessionId(req: Request): string | null {
+  const token = req.cookies?.[COOKIE];
+  if (!token) return null;
+  try {
+    const payload = jwt.verify(token, JWT_SECRET) as { sid?: string };
+    return payload.sid ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function currentUser(req: Request): User | null {
   const token = req.cookies?.[COOKIE];
   if (!token) return null;
   try {
-    const payload = jwt.verify(token, JWT_SECRET) as { sub: string; tv?: number; tenantId?: string };
+    const payload = jwt.verify(token, JWT_SECRET) as { sub: string; tv?: number; tenantId?: string; sid?: string };
     const user = db.data!.users.find((u) => u.id === payload.sub);
     if (!user) return null;
     // Session revocation: the token is void once the user's tokenVersion has moved
     // past the value baked into it (logout / password change / admin reset).
     if ((payload.tv ?? 0) !== (user.tokenVersion ?? 0)) return null;
+    // Finer-grained than tokenVersion: this one specific device/session was
+    // revoked from the account's Sessions list, without signing every other
+    // device out too. See server/sessions.ts.
+    if (isSessionRevoked(payload.sid)) return null;
     // Defense-in-depth: a token whose tenantId claim no longer matches the
     // fresh DB row's tenantId is treated as void, the same way a stale tv is —
     // covers the case of a user somehow moved between tenants mid-session.
@@ -112,6 +160,7 @@ export function currentUser(req: Request): User | null {
     // status rather than only at login, so suspension doesn't wait for every
     // affected user's token to expire or need its own tokenVersion bump.
     if (user.tenantId && db.data!.tenants.find((t) => t.id === user.tenantId)?.status === "suspended") return null;
+    touchSession(payload.sid);
     return user;
   } catch {
     return null;

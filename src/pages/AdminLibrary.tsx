@@ -16,6 +16,7 @@ import { useT } from "@/lib/i18n";
 import type { Book, BookGenre, ResourceType, ResourceVersion } from "@shared/types";
 import { BOOK_GENRES, RESOURCE_TYPES, RESOURCE_DIFFICULTIES } from "@shared/types";
 import { clsx } from "clsx";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 const LIME = "oklch(0.86 0.18 112)";
 
@@ -228,8 +229,8 @@ const DASH_BG = "#0c0c0c";
 const DASH_CARD = "#141414";
 const DASH_LIME = "#c8f000";
 const DASH_BORDER = "rgba(255,255,255,0.08)";
-const BARLOW = "'Barlow Condensed', sans-serif";
-const MONO = "'DM Mono', monospace";
+const BARLOW = "'Manrope', sans-serif";
+const MONO = "'Manrope', sans-serif";
 
 type Metric = "viewCount" | "downloadCount" | "bookmarkCount";
 const METRIC_META: Record<Metric, { label: string }> = {
@@ -247,7 +248,7 @@ function LibraryDashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [metric, setMetric] = useState<Metric | null>(null);
   useEffect(() => { api.get<DashboardData>("/admin/library/dashboard").then(setData).catch(() => {}); }, []);
-  if (!data) return <div className="mt-8 flex items-center gap-2 text-white/50"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>;
+  if (!data) return <ContentSkeleton variant="chart" />;
 
   // Placeholder — see comment above. Shaped like a real week, values are illustrative only.
   const viewsTrend = last7DayLabels().map((day, i) => ({ day, views: [42, 58, 51, 67, 74, 39, 46][i] }));
@@ -414,7 +415,7 @@ function VersionHistoryModal({ book, onClose, onRestored }: { book: Book; onClos
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
       <div onClick={(e) => e.stopPropagation()} className="w-full max-w-md rounded-2xl bg-[var(--card)] p-6">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-bold">Version history — {book.title}</h3>
@@ -428,7 +429,7 @@ function VersionHistoryModal({ book, onClose, onRestored }: { book: Book; onClos
             </div>
           </div>
           {versions === null ? (
-            <div className="flex items-center gap-2 py-3 text-xs text-[var(--muted)]"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading…</div>
+            <ContentSkeleton variant="lines" className="py-3" />
           ) : versions.length === 0 ? (
             <p className="py-3 text-xs text-[var(--muted)]">No prior versions — this resource hasn't been replaced yet.</p>
           ) : versions.map((v) => (
@@ -583,7 +584,7 @@ function UploadWizard({ book, onClose, onDone }: { book: Book | null; onClose: (
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
       <div onClick={(e) => e.stopPropagation()} className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-2xl bg-[var(--card)]">
         <div className="flex items-center justify-between border-b border-[var(--border)] px-6 py-4">
           <h3 className="text-sm font-bold">{book ? "Edit resource" : "Upload a resource"}</h3>

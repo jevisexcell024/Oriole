@@ -11,9 +11,13 @@ interface AuthState {
    *  Always a real hex value (server resolves the fallback), never null. */
   brandColor: string;
   /** Returns `{ twoFactorRequired: true }` when the account has 2FA on — the caller
-   *  then collects a code and calls `verify2fa`. Otherwise the user is signed in. */
-  login: (email: string, password: string) => Promise<{ twoFactorRequired?: boolean }>;
-  verify2fa: (code: string) => Promise<void>;
+   *  then collects a code and calls `verify2fa`. Otherwise the user is signed in.
+   *  `remember` (default false) is a real session-length choice, not cosmetic:
+   *  checked issues a persistent 7-day cookie, unchecked a browser-session one
+   *  that's gone once the browser closes. */
+  /** `portal` names the sign-in page used; the server only lets students in through "student" and everyone else through the default. */
+  login: (email: string, password: string, remember?: boolean, portal?: "student" | "staff") => Promise<{ twoFactorRequired?: boolean }>;
+  verify2fa: (code: string, remember?: boolean) => Promise<void>;
   logout: () => Promise<void>;
   /** Re-fetch the current user (e.g. after editing the profile). */
   refresh: () => Promise<void>;
@@ -47,15 +51,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setLoading(false));
   }, []);
 
-  const login = async (email: string, password: string) => {
-    const d = await api.post<{ user?: SafeUser; brandColor?: string; twoFactorRequired?: boolean }>("/auth/login", { email, password });
+  const login = async (email: string, password: string, remember?: boolean, portal?: "student" | "staff") => {
+    const d = await api.post<{ user?: SafeUser; brandColor?: string; twoFactorRequired?: boolean }>("/auth/login", { email, password, remember, portal });
     if (d.twoFactorRequired) return { twoFactorRequired: true };
     if (d.user) { setUser(d.user); setBrandColor(d.brandColor ?? DEFAULT_BRAND_COLOR); }
     return {};
   };
 
-  const verify2fa = async (code: string) => {
-    const d = await api.post<{ user: SafeUser; brandColor?: string }>("/auth/2fa/verify", { code });
+  const verify2fa = async (code: string, remember?: boolean) => {
+    const d = await api.post<{ user: SafeUser; brandColor?: string }>("/auth/2fa/verify", { code, remember });
     setUser(d.user);
     setBrandColor(d.brandColor ?? DEFAULT_BRAND_COLOR);
   };

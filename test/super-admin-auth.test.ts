@@ -45,13 +45,18 @@ function mockRes() {
 function mockReq(cookies: Record<string, string>): Request {
   return { cookies } as unknown as Request;
 }
+// issueSuperAdminSession() now also records a real AuthSession row (server/
+// sessions.ts), which needs req.ip and req.get("user-agent").
+function mockIssueReq(): Request {
+  return { ip: "127.0.0.1", get: () => "vitest" } as unknown as Request;
+}
 
 describe("Super Admin session (server/superAdminAuth.ts)", () => {
   it("round-trips: issuing a session, then reading it back, resolves to the same account", async () => {
     const sa = superAdmin();
     db.data!.superAdmins.push(sa);
     const { res, cookies } = mockRes();
-    issueSuperAdminSession(res, sa);
+    await issueSuperAdminSession(mockIssueReq(), res, sa);
     const resolved = currentSuperAdmin(mockReq(cookies));
     expect(resolved?.id).toBe(sa.id);
   });
@@ -68,7 +73,7 @@ describe("Super Admin session (server/superAdminAuth.ts)", () => {
     const sa = superAdmin();
     db.data!.superAdmins.push(sa);
     const { res, cookies } = mockRes();
-    issueSuperAdminSession(res, sa);
+    await issueSuperAdminSession(mockIssueReq(), res, sa);
     expect(currentSuperAdmin(mockReq(cookies))?.id).toBe(sa.id);
     // Bump tokenVersion the same way the logout/complete-password-setup routes do.
     sa.tokenVersion = (sa.tokenVersion ?? 0) + 1;
@@ -79,7 +84,7 @@ describe("Super Admin session (server/superAdminAuth.ts)", () => {
     const sa = superAdmin();
     db.data!.superAdmins.push(sa);
     const { res, cookies, wasCleared } = mockRes();
-    issueSuperAdminSession(res, sa);
+    await issueSuperAdminSession(mockIssueReq(), res, sa);
     clearSuperAdminSession(res);
     expect(wasCleared()).toBe(true);
     expect(currentSuperAdmin(mockReq(cookies))).toBeNull();
@@ -93,18 +98,18 @@ describe("Super Admin session (server/superAdminAuth.ts)", () => {
     const sa = superAdmin();
     db.data!.superAdmins.push(sa);
     const { res, cookies } = mockRes();
-    issueSuperAdminSession(res, sa);
+    await issueSuperAdminSession(mockIssueReq(), res, sa);
     expect(currentSuperAdmin(mockReq(cookies))?.id).toBe(sa.id);
     sa.disabled = true;
     expect(currentSuperAdmin(mockReq(cookies))).toBeNull();
   });
 
-  it("does not authenticate against a tenant user id that happens to collide", () => {
+  it("does not authenticate against a tenant user id that happens to collide", async () => {
     // Sanity check for the isolation claim: a superAdmins-store lookup miss
     // (e.g. an id that only exists in db.data.users) must not silently pass.
     const sa = superAdmin({ id: "collides_with_nothing" });
     const { res, cookies } = mockRes();
-    issueSuperAdminSession(res, sa); // never pushed into db.data.superAdmins
+    await issueSuperAdminSession(mockIssueReq(), res, sa); // never pushed into db.data.superAdmins
     expect(currentSuperAdmin(mockReq(cookies))).toBeNull();
   });
 });

@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import { PageHeader } from "@/components/PageHeader";
 import { useT } from "@/lib/i18n";
 import { clsx } from "clsx";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 interface ByType { type: string; severity: string; count: number; }
 interface Flagged {
@@ -33,7 +34,7 @@ export function AdminIntegrity() {
   useEffect(() => { api.get<Resp>("/admin/integrity").then(setData).catch((e) => setError(e.message)); }, []);
 
   if (error) return <AdminShell wide><p className="text-sm text-rose-400">{error}</p></AdminShell>;
-  if (!data) return <AdminShell wide><div className="flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div></AdminShell>;
+  if (!data) return <AdminShell wide><ContentSkeleton variant="stats-table" /></AdminShell>;
 
   const { kpis, byType, calculatorUsage, mediaUsage, flagged } = data;
   const maxCount = Math.max(1, ...byType.map((b) => b.count));

@@ -9,6 +9,7 @@ import {
 import { AdminShell } from "@/components/AdminShell";
 import { api } from "@/lib/api";
 import { useT, type TFn } from "@/lib/i18n";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 // ── Design tokens ────────────────────────────────────────────────────────
 const LIME = "#c8f53d";
@@ -69,11 +70,11 @@ export function AdminAnalytics() {
   useEffect(() => { api.get<CohortsResp>("/admin/analytics/cohorts").then(setCohorts).catch(() => {}); }, []);
 
   if (error) return <AdminShell wide><p className="p-6 text-sm text-rose-400">{error}</p></AdminShell>;
-  if (!d) return <AdminShell wide><div className="flex items-center gap-2 p-8 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div></AdminShell>;
+  if (!d) return <AdminShell wide><ContentSkeleton variant="chart" /></AdminShell>;
 
   return (
     <AdminShell wide>
-      <div className="fade-in -m-4 sm:-m-6" style={{ minHeight: "100vh", backgroundColor: BG, fontFamily: "Inter, sans-serif", scrollbarWidth: "none" }}>
+      <div className="fade-in -m-4 sm:-m-6" style={{ minHeight: "100vh", backgroundColor: BG, fontFamily: "Manrope, sans-serif", scrollbarWidth: "none" }}>
         {/* Header */}
         <div className="flex items-center justify-between" style={{ backgroundColor: CARD, padding: "16px 28px", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
           <div>

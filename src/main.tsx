@@ -1,4 +1,4 @@
-import { StrictMode, Suspense, lazy, type ReactNode } from "react";
+import { StrictMode, Suspense, lazy, type ComponentType, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import "./index.css";
@@ -11,81 +11,104 @@ import { IdleLogout } from "@/components/IdleLogout";
 import { useMaintenanceMessage } from "@/lib/maintenance";
 import { MaintenancePage } from "@/pages/MaintenancePage";
 import { Login } from "@/pages/Login";
-import { RequestAccess } from "@/pages/RequestAccess";
-import { Dashboard } from "@/pages/Dashboard";
-import { Exams } from "@/pages/Exams";
-import { MyResults } from "@/pages/MyResults";
-import { StudentAttendance } from "@/pages/StudentAttendance";
-import { StudentAnnouncements } from "@/pages/StudentAnnouncements";
-import { Profile } from "@/pages/Profile";
-import { PracticeTests } from "@/pages/PracticeTests";
-import { StudentCalendar, AdminCalendar } from "@/pages/Calendar";
-import { AdminItemAnalysis } from "@/pages/AdminItemAnalysis";
-import { StudentInbox, AdminInbox } from "@/pages/Inbox";
-import { Chat } from "@/pages/Chat";
-import { Library } from "@/pages/Library";
-import { LearningMaterials } from "@/pages/LearningMaterials";
-import { Timetable } from "@/pages/Timetable";
-import { Checkin } from "@/pages/Checkin";
-import { Session } from "@/pages/Session";
-import { Result } from "@/pages/Result";
-import { Certificates } from "@/pages/Certificates";
-import { Verify } from "@/pages/Verify";
-import { AdminExams } from "@/pages/AdminExams";
-import { AdminExamLibrary } from "@/pages/AdminExamLibrary";
-import { ExamBuilder } from "@/pages/ExamBuilder";
-import { AdminResults } from "@/pages/AdminResults";
-import { AdminGrading } from "@/pages/AdminGrading";
-import { AdminRegrades } from "@/pages/AdminRegrades";
-import { CertificateView } from "@/pages/CertificateView";
-import { AdminSimilarity } from "@/pages/AdminSimilarity";
-import { AdminAttemptReview } from "@/pages/AdminAttemptReview";
-import { AdminLiveMonitor } from "@/pages/AdminLiveMonitor";
-import { AdminScheduler } from "@/pages/AdminScheduler";
-import { AdminAnalytics } from "@/pages/AdminAnalytics";
-import { AdminCertificates } from "@/pages/AdminCertificates";
-import { AdminCandidates } from "@/pages/AdminCandidates";
-import { StudentsSIS, StudentRecord } from "@/pages/StudentsSIS";
-import { AdminAttendance } from "@/pages/AdminAttendance";
-import { AdminCommunication } from "@/pages/AdminCommunication";
-import { AdminIntegrity } from "@/pages/AdminIntegrity";
-import { AdminReports } from "@/pages/AdminReports";
-import { AdminIntegrations } from "@/pages/AdminIntegrations";
-import { AdminViolations } from "@/pages/AdminViolations";
-import { AdminSystemHealth } from "@/pages/AdminSystemHealth";
-import { AdminReliability } from "@/pages/AdminReliability";
-import { AdminReliabilityIncident } from "@/pages/AdminReliabilityIncident";
-import { StatusPage } from "@/pages/StatusPage";
-import { AdminOrganization } from "@/pages/AdminOrganization";
-import { AdminAuditLogs } from "@/pages/AdminAuditLogs";
-import { AdminSupport } from "@/pages/AdminSupport";
-import { AdminSettings } from "@/pages/AdminSettings";
-import { AdminAccount } from "@/pages/AdminAccount";
-// Lazy-loaded so recharts (heavy) ships in its own chunk, fetched only when an
-// admin opens the dashboard — keeps it out of the main bundle.
-const AdminDashboard = lazy(() => import("@/pages/AdminDashboard").then((m) => ({ default: m.AdminDashboard })));
-// Entire Super Admin platform — own auth provider, own routes, own shell — is
-// one lazy chunk so none of it (or its auth context) ever loads for a tenant
-// admin or candidate. See src/pages/SuperAdminApp.tsx for everything else.
-const SuperAdminApp = lazy(() => import("@/pages/SuperAdminApp").then((m) => ({ default: m.SuperAdminApp })));
-import { AdminClasses, ClassDetail } from "@/pages/AdminClasses";
-import { AdminLibrary } from "@/pages/AdminLibrary";
-import { AdminTeam } from "@/pages/AdminTeam";
-import { AdminRoles } from "@/pages/AdminRoles";
-import { ForcePasswordChange } from "@/pages/ForcePasswordChange";
-import { SetupPassword } from "@/pages/SetupPassword";
+import { StudentPortalLogin } from "@/pages/StudentPortalLogin";
+import { Shell } from "@/components/Shell";
+import { AdminShell } from "@/components/AdminShell";
+import { ContentSkeleton, skeletonForPath } from "@/components/Skeletons";
 import { can, isStaff, landingFor, type Cap } from "@/lib/roles";
+// Every page is its own chunk. Only Login (the entry route) and the maintenance
+// screen stay in the main bundle; the heavy ones (ExamBuilder, recharts-backed
+// dashboards, Monaco, Super Admin) used to ship to every visitor up front.
+function page<K extends string>(load: () => Promise<Record<K, ComponentType<any>>>, name: K) {
+  return lazy(() => load().then((m) => ({ default: m[name] })));
+}
+const RequestAccess = page(() => import("@/pages/RequestAccess"), "RequestAccess");
+const Dashboard = page(() => import("@/pages/Dashboard"), "Dashboard");
+const Exams = page(() => import("@/pages/Exams"), "Exams");
+const MyResults = page(() => import("@/pages/MyResults"), "MyResults");
+const StudentAttendance = page(() => import("@/pages/StudentAttendance"), "StudentAttendance");
+const StudentAnnouncements = page(() => import("@/pages/StudentAnnouncements"), "StudentAnnouncements");
+const Profile = page(() => import("@/pages/Profile"), "Profile");
+const PracticeTests = page(() => import("@/pages/PracticeTests"), "PracticeTests");
+const StudentCalendar = page(() => import("@/pages/Calendar"), "StudentCalendar");
+const AdminCalendar = page(() => import("@/pages/Calendar"), "AdminCalendar");
+const AdminItemAnalysis = page(() => import("@/pages/AdminItemAnalysis"), "AdminItemAnalysis");
+const StudentInbox = page(() => import("@/pages/Inbox"), "StudentInbox");
+const AdminInbox = page(() => import("@/pages/Inbox"), "AdminInbox");
+const Chat = page(() => import("@/pages/Chat"), "Chat");
+const Library = page(() => import("@/pages/Library"), "Library");
+const LearningMaterials = page(() => import("@/pages/LearningMaterials"), "LearningMaterials");
+const Timetable = page(() => import("@/pages/Timetable"), "Timetable");
+const Checkin = page(() => import("@/pages/Checkin"), "Checkin");
+const Session = page(() => import("@/pages/Session"), "Session");
+const Result = page(() => import("@/pages/Result"), "Result");
+const Certificates = page(() => import("@/pages/Certificates"), "Certificates");
+const Verify = page(() => import("@/pages/Verify"), "Verify");
+const AdminExams = page(() => import("@/pages/AdminExams"), "AdminExams");
+const AdminExamLibrary = page(() => import("@/pages/AdminExamLibrary"), "AdminExamLibrary");
+const ExamBuilder = page(() => import("@/pages/ExamBuilder"), "ExamBuilder");
+const AdminResults = page(() => import("@/pages/AdminResults"), "AdminResults");
+const AdminGrading = page(() => import("@/pages/AdminGrading"), "AdminGrading");
+const AdminRegrades = page(() => import("@/pages/AdminRegrades"), "AdminRegrades");
+const CertificateView = page(() => import("@/pages/CertificateView"), "CertificateView");
+const AdminSimilarity = page(() => import("@/pages/AdminSimilarity"), "AdminSimilarity");
+const AdminAttemptReview = page(() => import("@/pages/AdminAttemptReview"), "AdminAttemptReview");
+const AdminLiveMonitor = page(() => import("@/pages/AdminLiveMonitor"), "AdminLiveMonitor");
+const AdminScheduler = page(() => import("@/pages/AdminScheduler"), "AdminScheduler");
+const AdminAnalytics = page(() => import("@/pages/AdminAnalytics"), "AdminAnalytics");
+const AdminCertificates = page(() => import("@/pages/AdminCertificates"), "AdminCertificates");
+const AdminCandidates = page(() => import("@/pages/AdminCandidates"), "AdminCandidates");
+const StudentsSIS = page(() => import("@/pages/StudentsSIS"), "StudentsSIS");
+const StudentRecord = page(() => import("@/pages/StudentsSIS"), "StudentRecord");
+const AdminAttendance = page(() => import("@/pages/AdminAttendance"), "AdminAttendance");
+const AdminCommunication = page(() => import("@/pages/AdminCommunication"), "AdminCommunication");
+const AdminIntegrity = page(() => import("@/pages/AdminIntegrity"), "AdminIntegrity");
+const AdminReports = page(() => import("@/pages/AdminReports"), "AdminReports");
+const AdminIntegrations = page(() => import("@/pages/AdminIntegrations"), "AdminIntegrations");
+const AdminViolations = page(() => import("@/pages/AdminViolations"), "AdminViolations");
+const AdminSystemHealth = page(() => import("@/pages/AdminSystemHealth"), "AdminSystemHealth");
+const AdminReliability = page(() => import("@/pages/AdminReliability"), "AdminReliability");
+const AdminReliabilityIncident = page(() => import("@/pages/AdminReliabilityIncident"), "AdminReliabilityIncident");
+const StatusPage = page(() => import("@/pages/StatusPage"), "StatusPage");
+const AdminOrganization = page(() => import("@/pages/AdminOrganization"), "AdminOrganization");
+const AdminAuditLogs = page(() => import("@/pages/AdminAuditLogs"), "AdminAuditLogs");
+const AdminSupport = page(() => import("@/pages/AdminSupport"), "AdminSupport");
+const AdminSettings = page(() => import("@/pages/AdminSettings"), "AdminSettings");
+const AdminAccount = page(() => import("@/pages/AdminAccount"), "AdminAccount");
+const AdminClasses = page(() => import("@/pages/AdminClasses"), "AdminClasses");
+const ClassDetail = page(() => import("@/pages/AdminClasses"), "ClassDetail");
+const AdminLibrary = page(() => import("@/pages/AdminLibrary"), "AdminLibrary");
+const AdminTeam = page(() => import("@/pages/AdminTeam"), "AdminTeam");
+const AdminRoles = page(() => import("@/pages/AdminRoles"), "AdminRoles");
+const ForcePasswordChange = page(() => import("@/pages/ForcePasswordChange"), "ForcePasswordChange");
+const SetupPassword = page(() => import("@/pages/SetupPassword"), "SetupPassword");
+const ResetPassword = page(() => import("@/pages/ResetPassword"), "ResetPassword");
+// recharts-heavy dashboard and the whole Super Admin platform (own auth provider,
+// routes and shell) - see src/pages/SuperAdminApp.tsx.
+const AdminDashboard = page(() => import("@/pages/AdminDashboard"), "AdminDashboard");
+const SuperAdminApp = page(() => import("@/pages/SuperAdminApp"), "SuperAdminApp");
 
+// Student pages that sit inside the student Shell (sidebar + header). The live
+// exam session, check-in-less public pages and the Super Admin app bring their own frame.
+const STUDENT_FRAMED = /^\/(dashboard|exams|results|attendance|announcements|profile|practice|calendar|inbox|chat|library|learning-materials|timetable|certificates|exams\/[^/]+\/checkin|attempts\/[^/]+\/result)\/?$/;
+
+/** Shown while a page's code (or the session) is still loading: the real app
+ *  frame for that kind of page, with a skeleton shaped like the page itself —
+ *  not a generic full-screen loader. Before we know who is signed in there is no
+ *  frame to show yet, so it is just the skeleton. */
+function RouteFallback() {
+  const { user } = useAuth();
+  const { pathname } = useLocation();
+  const body = <ContentSkeleton variant={skeletonForPath(pathname)} />;
+  if (user && pathname.startsWith("/admin")) return <AdminShell>{body}</AdminShell>;
+  if (user && STUDENT_FRAMED.test(pathname)) return <Shell>{body}</Shell>;
+  return <div className="min-h-screen p-4 sm:p-6">{body}</div>;
+}
 function Protected({ children, cap, staff }: { children: ReactNode; cap?: Cap; staff?: boolean }) {
   const { user, loading } = useAuth();
-  if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center text-[var(--muted)]">
-        Loading…
-      </div>
-    );
-  }
-  if (!user) return <Navigate to="/login" replace />;
+  if (loading) return <RouteFallback />;
+  // Signed-out visitors go to the right door: staff routes -> /login, student routes -> /portal.
+  if (!user) return <Navigate to={cap || staff ? "/login" : "/portal"} replace />;
   // Defense in depth: Login.tsx already redirects here on sign-in, but this
   // catches direct navigation to any other URL while a first-time password
   // setup is still outstanding — no route is reachable until it's done.
@@ -116,12 +139,14 @@ function App() {
   return (
     <AuthProvider>
       <IdleLogout />
-      <Suspense fallback={<div className="flex min-h-screen items-center justify-center text-[var(--muted)]">Loading…</div>}>
+      <Suspense fallback={<RouteFallback />}>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/portal" element={<StudentPortalLogin />} />
         <Route path="/request-access" element={<RequestAccess />} />
         <Route path="/force-password-change" element={<ForcePasswordChange />} />
         <Route path="/setup-password" element={<SetupPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
         <Route path="/super-admin/*" element={<SuperAdminApp />} />
         <Route path="/verify/:certNumber" element={<Verify />} />
         <Route path="/verify" element={<Verify />} />
@@ -214,3 +239,4 @@ createRoot(document.getElementById("root")!).render(
     });
   }
 }
+

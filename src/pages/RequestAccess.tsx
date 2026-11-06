@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowLeft, ArrowRight, Loader2, CheckCircle2, Building2, Copy, Check } from "lucide-react";
+import { ArrowLeft, ArrowRight, Loader2, CheckCircle2, Copy, Check } from "lucide-react";
 import { BrandMark } from "@/components/BrandMark";
 import { api } from "@/lib/api";
 
@@ -55,8 +55,6 @@ export function RequestAccess() {
   return (
     <div className="force-light flex min-h-screen items-center justify-center px-4 py-10" style={{ background: "var(--bg)" }}>
       <div className="w-full max-w-md">
-        <div className="mb-6 flex justify-center"><BrandMark /></div>
-
         {created ? (
           <div className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-8 text-center shadow-sm">
             <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-full" style={{ background: "color-mix(in oklch, var(--color-brand-500) 15%, transparent)", color: LIME }}>
@@ -80,9 +78,7 @@ export function RequestAccess() {
         ) : (
           <div className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-8 shadow-sm">
             <div className="flex items-center gap-2.5">
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl" style={{ background: "color-mix(in oklch, var(--color-brand-500) 15%, transparent)", color: LIME }}>
-                <Building2 className="h-4.5 w-4.5" />
-              </span>
+              <BrandMark className="h-9 w-9 shrink-0 rounded-xl" />
               <div>
                 <h1 className="text-lg font-bold text-[var(--fg)]">Start your free trial</h1>
                 <p className="text-xs text-[var(--muted)]">Your school is created instantly — 7 days free, no card needed.</p>

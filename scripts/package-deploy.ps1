@@ -19,8 +19,12 @@ New-Item -ItemType Directory -Path $staging | Out-Null
 Copy-Item "dist" (Join-Path $staging "dist") -Recurse
 New-Item -ItemType Directory -Path (Join-Path $staging "dist-server") | Out-Null
 Copy-Item "dist-server\server.mjs" (Join-Path $staging "dist-server\server.mjs")
-Copy-Item "package.json" (Join-Path $staging "package.json")
-Copy-Item "package-lock.json" (Join-Path $staging "package-lock.json")
+# Ship a LEAN package.json (only what the pre-built server actually imports, ~14 packages)
+# instead of the full build-time list (50+ packages, ~350 MB), so "Run NPM Install" on the
+# host does a fraction of the work. See scripts/make-deploy-package.mjs. Append
+# --with-embedded-db to that command only for a host that has no PostgreSQL.
+node "scripts\make-deploy-package.mjs" $staging
+if ($LASTEXITCODE -ne 0) { Write-Error "Could not generate the deploy package.json."; exit 1 }
 
 Compress-Archive -Path (Join-Path $staging "*") -DestinationPath $zipPath -CompressionLevel Optimal
 
@@ -46,9 +50,12 @@ if ($leaks) {
     $leaks | ForEach-Object { Write-Host "  $($_.FullName)" -ForegroundColor Red }
     exit 1
 }
-if (-not $hasPkg -or -not $hasLock) {
-    Write-Host "WARNING: package.json or package-lock.json missing from zip." -ForegroundColor Red
+if (-not $hasPkg) {
+    Write-Host "WARNING: package.json missing from zip." -ForegroundColor Red
     exit 1
 }
+if (-not $hasLock) {
+    Write-Host "NOTE: no package-lock.json in the zip (the npm registry was unreachable while packaging); the host will resolve the pinned versions itself." -ForegroundColor Yellow
+}
 
-Write-Host "OK: no node_modules/.pgdata leaks; package.json + package-lock.json included." -ForegroundColor Green
+Write-Host "OK: no node_modules/.pgdata leaks; lean package.json included." -ForegroundColor Green

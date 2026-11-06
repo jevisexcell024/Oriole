@@ -17,7 +17,7 @@ import { clsx } from "clsx";
 const LIME = "#c8f53d";
 const CYAN = "#22d3ee";
 const DIM = "#5a5a6a";
-const MONO = "'DM Mono', monospace";
+const MONO = "'Manrope', sans-serif";
 const PLAN_COLORS = [LIME, CYAN, "#c084fc", "#fb923c", "#4ade80", "#f43f5e"];
 
 interface DashboardData {
@@ -137,7 +137,7 @@ export function SuperAdminDashboard() {
 
   return (
     <SuperAdminShell>
-      <div className="fade-in max-w-[1400px]" style={{ fontFamily: "'DM Sans', sans-serif" }}>
+      <div className="fade-in max-w-[1400px]" style={{ fontFamily: "'Manrope', sans-serif" }}>
         <PageHeader
           eyebrow={<span style={{ fontFamily: MONO }}>{t("sad.dashEyebrow")} · {quarterLabel()}</span>}
           title={t("sad.dashTitle")}

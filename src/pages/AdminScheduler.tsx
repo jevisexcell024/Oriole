@@ -7,6 +7,7 @@ import { api } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import type { Exam } from "@shared/types";
 import { clsx } from "clsx";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 interface Item { exam: Exam; questionCount: number; attemptCount: number; }
 type Status = "unscheduled" | "scheduled" | "open" | "closed";
@@ -70,7 +71,7 @@ export function AdminScheduler() {
       <div className="fade-in">
         <PageHeader title={t("asch.title")} subtitle={t("asch.subtitle")} />
 
-        {!items && <div className="mt-10 flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div>}
+        {!items && <ContentSkeleton variant="list" />}
 
         {items && (
           <>

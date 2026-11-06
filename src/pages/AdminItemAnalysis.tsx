@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Loader2, ArrowLeft, BarChart3, Users, Activity, MessageSquareText, Sheet, ListChecks, LineChart, FileBarChart2, FileDown, ExternalLink, ShieldAlert, Printer, Presentation } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
@@ -8,6 +8,7 @@ import { DataTable, type Column, type TableFilter } from "@/components/DataTable
 import { api } from "@/lib/api";
 import { useT, type TFn } from "@/lib/i18n";
 import { clsx } from "clsx";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 interface Distractor { option: string; picks: number; pct: number; correct: boolean }
 export interface Item {
@@ -222,7 +223,7 @@ export function AdminItemAnalysis() {
         />
 
         {error && <ErrorBanner className="mt-6">{error}</ErrorBanner>}
-        {!data && !error && <div className="mt-8 flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div>}
+        {!data && !error && <ContentSkeleton variant="chart" />}
 
         {data && (
           <>

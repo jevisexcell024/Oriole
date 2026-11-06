@@ -9,7 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { createHmac, createHash, randomBytes } from "node:crypto";
-import { db, initDb, snapshotStore, proctorStore, answerStore, auditStore, superAdminAuditStore, emailStore, geofenceStore, reliabilityStore, reliabilityRollupStore, mediaAssetStore, exportTenantData, deleteTenantData } from "./db.ts";
+import { db, initDb, claimInstanceLock, releaseInstanceLock, hasInstanceConflict, snapshotStore, proctorStore, answerStore, auditStore, superAdminAuditStore, emailStore, geofenceStore, reliabilityStore, reliabilityRollupStore, mediaAssetStore, exportTenantData, deleteTenantData } from "./db.ts";
 import { currentTenantId, tenantExams, getOrgSettings, effectiveBrandColor } from "./tenant.ts";
 import { sendMail, mailerStatus, verifySmtp, buildHtml, ctaButton, esc } from "./mailer.ts";
 import { renderEmailTemplate, EMAIL_TEMPLATE_DEFS } from "./emailTemplates.ts";
@@ -17,12 +17,15 @@ import { sendSms, smsEnabled, smsStatus, recentSms } from "./sms.ts";
 import {
   clearSession, currentUser, issueSession, requireAuth, requireRole, requireRoles, toSafeUser,
   issuePending2fa, pending2faUserId, clearPending2fa, requirePermission, resolvePermissions,
-  resolveCustomRolePermissions, permissionOverreach, passwordSetupToken, verifyPasswordSetupToken,
-  currentImpersonatorId,
+  resolveCustomRolePermissions, permissionOverreach, passwordSetupToken, verifyPasswordSetupToken, passwordResetToken, verifyPasswordResetToken,
+  currentImpersonatorId, currentSessionId,
 } from "./auth.ts";
 import {
   issueSuperAdminSession, currentSuperAdmin, requireSuperAdmin, requireSuperAdminOwner, clearSuperAdminSession, toSafeSuperAdmin,
+  issuePendingSuperAdmin2fa, pendingSuperAdmin2faId, clearPendingSuperAdmin2fa, currentSuperAdminSessionId,
 } from "./superAdminAuth.ts";
+import { listSessions, revokeSession, revokeAllSessions, pruneAuthSessions } from "./sessions.ts";
+import { notifyAllTenantAdmins, notifyAllSuperAdmins, listNotificationsFor, markNotificationRead } from "./notifications.ts";
 import { generateSecret, verifyTotp, verifyTotpStep, otpauthUrl, generateBackupCodes } from "./totp.ts";
 import { microsoftEnabled, authorizeUrl, exchangeCode } from "./sso.ts";
 import { tryEvalExpr } from "../shared/expr.ts";
@@ -40,7 +43,7 @@ import { classifyStatus, aggregateDailyRollup, computeReliabilityScore, DEFAULT_
 import { validate } from "./validate.ts";
 import {
   loginSchema, teamCreateSchema, passwordChangeSchema, passwordResetSchema, twoFaCodeSchema, twoFaDisableSchema,
-  customRoleCreateSchema, customRoleUpdateSchema, roleAssignSchema, passwordSetupSchema, superAdminCreateSchema, tenantCreateSchema,
+  customRoleCreateSchema, customRoleUpdateSchema, roleAssignSchema, passwordSetupSchema, forgotPasswordSchema, superAdminCreateSchema, tenantCreateSchema,
   planCreateSchema, planUpdateSchema, licenseKeyCreateSchema, licenseKeyRedeemSchema, maintenanceWindowCreateSchema, brandingUpdateSchema,
   tenantRequestCreateSchema, tenantRequestApproveSchema, tenantRequestRejectSchema,
 } from "./schemas.ts";
@@ -266,6 +269,8 @@ app.use(cookieParser());
 app.use("/api/auth/login", authLimiter); // brute-force protection on credentials
 app.use("/api/auth/signup", authLimiter);
 app.use("/api/auth/setup-password", authLimiter); // same class of endpoint — public, unauthenticated, worth capping
+app.use("/api/auth/forgot-password", authLimiter); // public + triggers outbound mail — must not be a spam cannon
+app.use("/api/auth/reset-password", authLimiter);
 app.use("/api/auth/2fa/verify", twoFaLimiter); // brute-force protection on 2FA codes / backup codes
 app.use("/api/super-admin/auth/login", superAdminAuthLimiter); // own bucket — see security.ts
 app.use("/api", apiLimiter); // global API rate limit
@@ -331,7 +336,7 @@ async function rehashIfNeeded(user: User, plaintext: string): Promise<void> {
 }
 
 app.post("/api/auth/login", validate(loginSchema), async (req, res) => {
-  const { email, password } = req.body as { email: string; password: string };
+  const { email, password, remember, portal } = req.body as { email: string; password: string; remember?: boolean; portal?: "student" | "staff" };
   const user = db.data!.users.find((u) => u.email.toLowerCase() === String(email).toLowerCase());
   // Async bcrypt (not the sync variant): hashing is CPU-heavy, and the sync call
   // blocks the single event loop — during a login stampede that freezes every
@@ -360,6 +365,21 @@ app.post("/api/auth/login", validate(loginSchema), async (req, res) => {
     await recordAuthAudit(req, "auth.login_blocked_trial_expired", String(email));
     return res.status(403).json({ error: "Your 7-day trial has ended. Contact your platform administrator to upgrade to a paid plan." });
   }
+  // Two doors, one per audience: students sign in at /portal (portal: "student"),
+  // everyone else at /login (the default). Enforced here, not just in the UI, so
+  // a student can't reach their panel through the staff page — or vice versa.
+  // Checked only after the password is verified, so it never reveals which
+  // emails exist or what role they hold to someone who doesn't know the password.
+  const isStudent = user.role === "candidate";
+  if (portal === "student" ? !isStudent : isStudent) {
+    await recordAuthAudit(req, "auth.login_wrong_portal", String(email));
+    return res.status(403).json({
+      error: isStudent
+        ? "Students sign in through the student portal. Please use your portal link."
+        : "This page is for students. Staff, please use the staff sign-in.",
+      portal: isStudent ? "/portal" : "/login",
+    });
+  }
   // Fire-and-forget: don't add hashing latency to this response, especially
   // under a login-storm where speed matters most.
   rehashIfNeeded(user, String(password)).catch(() => { /* best-effort */ });
@@ -369,7 +389,7 @@ app.post("/api/auth/login", validate(loginSchema), async (req, res) => {
     issuePending2fa(res, user.id);
     return res.json({ twoFactorRequired: true });
   }
-  issueSession(res, user);
+  await issueSession(req, res, user, { remember });
   // Fire-and-forget, same reasoning as rehashIfNeeded above: this can involve a
   // real outbound SMTP send (new-device email), which must never add latency to
   // the login response — a burst of first-time logins (e.g. exam-day check-in)
@@ -416,7 +436,7 @@ app.post("/api/auth/2fa/verify", validate(twoFaCodeSchema), async (req, res) => 
     return res.status(401).json({ error: "Invalid code. Try again." });
   }
   clearPending2fa(res);
-  issueSession(res, user);
+  await issueSession(req, res, user, { remember: req.body?.remember as boolean | undefined });
   // Fire-and-forget, same reasoning as rehashIfNeeded above: this can involve a
   // real outbound SMTP send (new-device email), which must never add latency to
   // the login response — a burst of first-time logins (e.g. exam-day check-in)
@@ -443,15 +463,60 @@ app.post("/api/auth/setup-password", validate(passwordSetupSchema), async (req, 
   user.tokenVersion = (user.tokenVersion ?? 0) + 1; // invalidate anything issued off the old placeholder hash
   await db.upsert("users", user);
   await recordAuthAudit(req, "auth.password_setup_completed", user.email);
-  issueSession(res, user);
+  await issueSession(req, res, user);
   res.json({ user: toSafeUser(user), brandColor: effectiveBrandColor(user.tenantId ?? null) });
 });
 
+// ---- student self-service password reset (public) ----
+// Always answers the same way whether or not the account exists, so this can't
+// be used to find out which emails are registered. Students only: staff
+// passwords stay administrator/self-managed through the console.
+app.post("/api/auth/forgot-password", validate(forgotPasswordSchema), async (req, res) => {
+  const { email } = req.body as { email: string };
+  res.json({ ok: true });
+  const user = db.data!.users.find((u) => u.email.toLowerCase() === String(email).toLowerCase());
+  if (!user || user.role !== "candidate") return;
+  if (user.tenantId && db.data!.tenants.find((t) => t.id === user.tenantId)?.status === "suspended") return;
+  try {
+    const url = `${env.appUrl}/reset-password?token=${passwordResetToken(user)}`;
+    const tpl = renderEmailTemplate("account.password_reset", { name: user.name });
+    const text = `Hi ${user.name},\n\n${tpl.introText}\n\n${url}\n\nThis link works once and expires in 1 hour. If you didn't ask for this, you can ignore this email — your password won't change.\n\n— Oriole`;
+    const html = buildHtml(
+      `<p style="margin:0 0 12px;font-size:15px;color:#111827"><strong>Hi ${esc(user.name)},</strong></p>
+       <p style="margin:0 0 16px">${tpl.introHtml}</p>
+       ${ctaButton("Choose a new password", url)}
+       <p style="margin:16px 0 0;font-size:13px;color:#6b7280">This link works once and expires in 1 hour. If you didn't ask for this, you can ignore this email — your password won't change.</p>`,
+      user.email,
+    );
+    await sendMail(user.email, tpl.subject, text, html, user.tenantId);
+    await recordAuthAudit(req, "auth.password_reset_requested", user.email);
+  } catch { /* best-effort; the response has already gone out */ }
+});
+
+app.post("/api/auth/reset-password", validate(passwordSetupSchema), async (req, res) => {
+  const { token, password } = req.body as { token: string; password: string };
+  const user = verifyPasswordResetToken(token);
+  if (!user || user.role !== "candidate") {
+    return res.status(400).json({ error: "This reset link is invalid or has expired. Request a new one from the sign-in page." });
+  }
+  user.passwordHash = await bcrypt.hash(password, BCRYPT_COST);
+  user.mustChangePassword = false;
+  user.tokenVersion = (user.tokenVersion ?? 0) + 1; // sign out anything issued with the old password
+  await db.upsert("users", user);
+  await revokeAllSessions("user", user.id);
+  await recordAuthAudit(req, "auth.password_reset_completed", user.email);
+  // No auto sign-in: they go back to the portal and sign in with the new password.
+  res.json({ ok: true });
+});
 app.post("/api/auth/logout", async (req, res) => {
   // Revoke this user's tokens server-side (not just clear the cookie) so a
   // captured session can't be replayed after logout.
   const user = currentUser(req);
-  if (user) { user.tokenVersion = (user.tokenVersion ?? 0) + 1; await db.upsert("users", user); }
+  if (user) {
+    user.tokenVersion = (user.tokenVersion ?? 0) + 1;
+    await db.upsert("users", user);
+    await revokeAllSessions("user", user.id);
+  }
   clearSession(res);
   res.json({ ok: true });
 });
@@ -545,9 +610,104 @@ app.post("/api/super-admin/auth/login", validate(loginSchema), async (req, res) 
     await recordSuperAdminAuthAudit(req, "superadmin.login_failed", String(email));
     return res.status(401).json({ error: "Invalid email or password." });
   }
-  issueSuperAdminSession(res, superAdmin);
+  // Same shape as tenant login's 2FA gate: don't issue the real session yet,
+  // just a short-lived challenge cookie — the platform-operator account is at
+  // least as sensitive as any tenant account.
+  if (superAdmin.twoFactorEnabled && superAdmin.twoFactorSecret) {
+    issuePendingSuperAdmin2fa(res, superAdmin.id);
+    return res.json({ twoFactorRequired: true });
+  }
+  await issueSuperAdminSession(req, res, superAdmin);
   await recordSuperAdminAudit(req, "superadmin.login", `${superAdmin.name} <${superAdmin.email}>`);
   res.json({ superAdmin: toSafeSuperAdmin(superAdmin) });
+});
+
+// Step 2 of a 2FA Super Admin login: verify the authenticator code.
+app.post("/api/super-admin/auth/2fa/verify", twoFaLimiter, validate(twoFaCodeSchema), async (req, res) => {
+  const sid = pendingSuperAdmin2faId(req);
+  if (!sid) return res.status(401).json({ error: "Your sign-in session expired. Please log in again." });
+  const superAdmin = db.data!.superAdmins.find((s) => s.id === sid);
+  if (!superAdmin || !superAdmin.twoFactorEnabled || !superAdmin.twoFactorSecret) {
+    clearPendingSuperAdmin2fa(res);
+    return res.status(400).json({ error: "Two-factor authentication is not set up." });
+  }
+  const code = String(req.body?.code ?? "").trim();
+  const step = verifyTotpStep(decryptString(superAdmin.twoFactorSecret) ?? "", code);
+  let ok = step !== null && step > (superAdmin.twoFactorLastStep ?? -1);
+  if (ok) {
+    superAdmin.twoFactorLastStep = step;
+    await db.upsert("superAdmins", superAdmin);
+  }
+  if (!ok && superAdmin.twoFactorBackupCodes?.length) {
+    const normalized = code.toLowerCase().replace(/\s/g, "");
+    for (let i = 0; i < superAdmin.twoFactorBackupCodes.length; i++) {
+      if (await bcrypt.compare(normalized, superAdmin.twoFactorBackupCodes[i])) {
+        superAdmin.twoFactorBackupCodes.splice(i, 1); // single-use
+        await db.upsert("superAdmins", superAdmin);
+        ok = true;
+        break;
+      }
+    }
+  }
+  if (!ok) {
+    await recordSuperAdminAuthAudit(req, "superadmin.2fa_failed", superAdmin.email);
+    return res.status(401).json({ error: "Invalid code. Try again." });
+  }
+  clearPendingSuperAdmin2fa(res);
+  await issueSuperAdminSession(req, res, superAdmin);
+  await recordSuperAdminAudit(req, "superadmin.login", `${superAdmin.name} <${superAdmin.email}>`);
+  res.json({ superAdmin: toSafeSuperAdmin(superAdmin) });
+});
+
+// ---- Super Admin account: 2FA setup / management (mirrors the tenant-user
+// routes above exactly — same TOTP module, same encryption, same backup-code
+// scheme — just against superAdmins instead of users). ----
+app.post("/api/super-admin/auth/2fa/setup", requireSuperAdmin, async (req, res) => {
+  const superAdmin = currentSuperAdmin(req)!;
+  const secret = generateSecret();
+  superAdmin.twoFactorPending = encryptString(secret);
+  await db.upsert("superAdmins", superAdmin);
+  res.json({ secret, otpauthUrl: otpauthUrl(secret, superAdmin.email) });
+});
+
+app.post("/api/super-admin/auth/2fa/enable", requireSuperAdmin, validate(twoFaCodeSchema), async (req, res) => {
+  const superAdmin = currentSuperAdmin(req)!;
+  if (!superAdmin.twoFactorPending) return res.status(400).json({ error: "Start setup first." });
+  const code = String(req.body?.code ?? "").trim();
+  const pendingSecret = decryptString(superAdmin.twoFactorPending) ?? "";
+  if (!verifyTotp(pendingSecret, code)) return res.status(400).json({ error: "That code didn't match. Check your authenticator app and try again." });
+  const backupCodes = generateBackupCodes(10);
+  superAdmin.twoFactorSecret = superAdmin.twoFactorPending;
+  superAdmin.twoFactorPending = null;
+  superAdmin.twoFactorEnabled = true;
+  superAdmin.twoFactorLastStep = null;
+  superAdmin.twoFactorBackupCodes = await Promise.all(backupCodes.map((c) => bcrypt.hash(c.toLowerCase(), BCRYPT_COST)));
+  await db.upsert("superAdmins", superAdmin);
+  await recordSuperAdminAudit(req, "superadmin.2fa_enabled", `${superAdmin.name} <${superAdmin.email}>`);
+  res.json({ ok: true, backupCodes });
+});
+
+app.post("/api/super-admin/auth/2fa/disable", requireSuperAdmin, validate(twoFaDisableSchema), async (req, res) => {
+  const superAdmin = currentSuperAdmin(req)!;
+  if (!superAdmin.twoFactorEnabled) return res.json({ ok: true });
+  const password = String(req.body?.password ?? "");
+  const code = String(req.body?.code ?? "").trim();
+  const okPw = password && (await bcrypt.compare(password, superAdmin.passwordHash));
+  const okCode = code && superAdmin.twoFactorSecret && verifyTotp(decryptString(superAdmin.twoFactorSecret) ?? "", code);
+  if (!okPw && !okCode) return res.status(401).json({ error: "Enter your password or a current authenticator code to disable 2FA." });
+  superAdmin.twoFactorEnabled = false;
+  superAdmin.twoFactorSecret = null;
+  superAdmin.twoFactorPending = null;
+  superAdmin.twoFactorLastStep = null;
+  superAdmin.twoFactorBackupCodes = [];
+  await db.upsert("superAdmins", superAdmin);
+  await recordSuperAdminAudit(req, "superadmin.2fa_disabled", `${superAdmin.name} <${superAdmin.email}>`);
+  await notifyAllSuperAdmins({
+    category: "security", severity: "warning",
+    title: "Two-factor authentication disabled",
+    body: `${superAdmin.name} <${superAdmin.email}> turned off 2FA on their Super Admin account.`,
+  });
+  res.json({ ok: true });
 });
 
 app.post("/api/super-admin/auth/logout", async (req, res) => {
@@ -555,6 +715,7 @@ app.post("/api/super-admin/auth/logout", async (req, res) => {
   if (superAdmin) {
     superAdmin.tokenVersion = (superAdmin.tokenVersion ?? 0) + 1; // server-side revocation, not just cookie clearing
     await db.upsert("superAdmins", superAdmin);
+    await revokeAllSessions("superAdmin", superAdmin.id);
     await recordSuperAdminAudit(req, "superadmin.logout", `${superAdmin.name} <${superAdmin.email}>`);
   }
   clearSuperAdminSession(res);
@@ -580,7 +741,7 @@ app.post("/api/super-admin/auth/complete-password-setup", requireSuperAdmin, val
   superAdmin.mustChangePassword = false;
   superAdmin.tokenVersion = (superAdmin.tokenVersion ?? 0) + 1; // revoke the bootstrap-password-derived session
   await db.upsert("superAdmins", superAdmin);
-  issueSuperAdminSession(res, superAdmin);
+  await issueSuperAdminSession(req, res, superAdmin);
   res.json({ ok: true });
 });
 
@@ -749,7 +910,7 @@ app.post("/api/super-admin/auth/password", requireSuperAdmin, validate(passwordC
   superAdmin.passwordHash = await bcrypt.hash(String(password), BCRYPT_COST);
   superAdmin.tokenVersion = (superAdmin.tokenVersion ?? 0) + 1;
   await db.upsert("superAdmins", superAdmin);
-  issueSuperAdminSession(res, superAdmin);
+  await issueSuperAdminSession(req, res, superAdmin);
   res.json({ ok: true });
 });
 
@@ -761,6 +922,23 @@ app.patch("/api/super-admin/profile", requireSuperAdmin, async (req, res) => {
   await db.upsert("superAdmins", superAdmin);
   await recordSuperAdminAudit(req, "superadmin.profile.updated", name);
   res.json({ superAdmin: toSafeSuperAdmin(superAdmin) });
+});
+
+// Real session management for the Super Admin's own account — same
+// "see my devices, kill just this one" capability tenant users get.
+app.get("/api/super-admin/auth/sessions", requireSuperAdmin, (req, res) => {
+  const superAdmin = currentSuperAdmin(req)!;
+  const currentId = currentSuperAdminSessionId(req);
+  const sessions = listSessions("superAdmin", superAdmin.id).map((s) => ({ ...s, isCurrent: s.id === currentId }));
+  res.json({ sessions });
+});
+
+app.post("/api/super-admin/auth/sessions/:id/revoke", requireSuperAdmin, async (req, res) => {
+  const superAdmin = currentSuperAdmin(req)!;
+  const ok = await revokeSession("superAdmin", superAdmin.id, String(req.params.id));
+  if (!ok) return res.status(404).json({ error: "Session not found." });
+  await recordSuperAdminAudit(req, "superadmin.session_revoked", `Revoked one session for ${superAdmin.name} <${superAdmin.email}>`);
+  res.json({ ok: true });
 });
 
 // System Information — process/OS-level detail no tenant admin view shows at
@@ -831,6 +1009,11 @@ app.post("/api/super-admin/maintenance/windows", requireSuperAdmin, validate(mai
   db.data!.maintenanceWindows.push(window);
   await db.upsert("maintenanceWindows", window);
   await recordSuperAdminAudit(req, "superadmin.maintenance.window_scheduled", `${window.startAt} → ${window.endAt}: ${message || "(no message)"}`);
+  await notifyAllTenantAdmins({
+    category: "maintenance", severity: "warning",
+    title: "Scheduled maintenance",
+    body: message || `The platform will be briefly unavailable from ${new Date(window.startAt).toLocaleString()} to ${new Date(window.endAt).toLocaleString()}.`,
+  });
   res.status(201).json({ window });
 });
 
@@ -1117,7 +1300,6 @@ async function createTenantWithAdmin(params: { tenantName: string; adminName: st
 
   const tenant: Tenant = { id: nanoid(10), name: tenantName, status: "active", createdAt: new Date().toISOString() };
   if (licenseResult) {
-    applyLicenseKeyRedemption(licenseResult.key, tenant.id);
     tenant.planId = licenseResult.plan.id;
     tenant.licenseStatus = "active";
   } else {
@@ -1129,9 +1311,6 @@ async function createTenantWithAdmin(params: { tenantName: string; adminName: st
     tenant.licenseStatus = "trial";
     tenant.licenseExpiresAt = new Date(Date.now() + TRIAL_DAYS * 24 * 3600_000).toISOString();
   }
-  db.data!.tenants.push(tenant);
-  await db.upsert("tenants", tenant);
-  if (licenseResult) await db.upsert("licenseKeys", licenseResult.key);
 
   // getOrgSettings(tenantId) throws if a tenant has no matching settings row —
   // true for tenant #1 only because the boot-time migration provisions it.
@@ -1142,8 +1321,6 @@ async function createTenantWithAdmin(params: { tenantName: string; adminName: st
     id: tenant.id, name: tenantName, supportEmail: "", website: "", timezone: "UTC",
     defaultPassingScore: 60, defaultProctored: true, autoConfirmEnrollment: false,
   };
-  db.data!.settings.push(settings);
-  await db.upsert("settings", settings);
 
   // Same no-password convention as the Super Admin team invite above: the
   // platform operator never chooses another organization's admin password.
@@ -1152,8 +1329,27 @@ async function createTenantWithAdmin(params: { tenantName: string; adminName: st
     id: nanoid(10), tenantId: tenant.id, email: adminEmail, name: adminName,
     passwordHash: await bcrypt.hash(oneTimePassword, BCRYPT_COST), role: "admin", mustChangePassword: true,
   };
+
+  // Tenant + (optional license redemption) + settings + admin as one atomic
+  // unit — a crash or DB error partway through must never leave a tenant
+  // with no settings row or no admin account (previously four separate
+  // sequential writes with no rollback if a later one failed).
+  await db.transaction(async (tx) => {
+    await tx.upsert("tenants", tenant);
+    if (licenseResult) {
+      await tx.upsert("licenseKeys", { ...licenseResult.key, redeemedByTenantIds: [...licenseResult.key.redeemedByTenantIds, tenant.id] });
+    }
+    await tx.upsert("settings", settings);
+    await tx.upsert("users", admin);
+  });
+
+  // Only update the in-memory mirror after the transaction has actually
+  // committed — never before, or a rollback would leave db.data pointing at
+  // rows that don't exist in the database.
+  db.data!.tenants.push(tenant);
+  if (licenseResult) applyLicenseKeyRedemption(licenseResult.key, tenant.id);
+  db.data!.settings.push(settings);
   db.data!.users.push(admin);
-  await db.upsert("users", admin);
 
   return { tenant, admin, oneTimePassword, licenseResult };
 }
@@ -1295,7 +1491,7 @@ app.post("/api/super-admin/tenants/:id/impersonate", requireSuperAdmin, async (r
   const admin = db.data!.users.find((u) => u.tenantId === tenant.id && u.role === "admin");
   if (!admin) return res.status(404).json({ error: "This school has no admin account yet." });
 
-  issueSession(res, admin, superAdmin.id);
+  await issueSession(req, res, admin, { impersonatorId: superAdmin.id });
   await recordSuperAdminAudit(req, "superadmin.impersonation_started", `${tenant.name} → ${admin.name} <${admin.email}>`);
   // Written directly (not via recordAudit, which reads currentUser(req) — at
   // this point in the request that's still null, since the new cookie won't
@@ -1611,7 +1807,7 @@ app.get("/api/auth/sso/microsoft/callback", async (req, res) => {
     // Only sign in an account that already exists — SSO never creates accounts.
     const user = db.data!.users.find((u) => u.email.toLowerCase() === info.email);
     if (!user) return res.redirect("/login?sso=nouser");
-    issueSession(res, user);
+    await issueSession(req, res, user);
     await recordAudit(req, "auth.sso", `${user.name} <${user.email}> (Microsoft)`);
     res.redirect("/");
   } catch {
@@ -1626,14 +1822,27 @@ app.get("/api/exams", requireAuth, async (req, res) => {
   // for the candidate (a registration is created lazily) so it appears in their
   // panel the moment an admin publishes it. Drafts/unpublished exams never show.
   const published = db.data!.exams.filter((e) => e.tenantId === user.tenantId && e.status === "published" && !e.practice);
-  let mutated = false;
+  const created: Registration[] = [];
   const items: ExamListItem[] = [];
   const orgSettings = user.tenantId ? getOrgSettings(user.tenantId) : null;
 
+  // Look this student's rows up once, instead of re-scanning every table for every
+  // published exam (that was exams × rows work on a request every student makes).
+  const myRegs = new Map<string, Registration>();
+  for (const r of db.data!.registrations) if (r.candidateId === user.id && !myRegs.has(r.examId)) myRegs.set(r.examId, r);
+  const publishedIds = new Set(published.map((e) => e.id));
+  const questionCounts = new Map<string, number>();
+  for (const q of db.data!.questions) if (publishedIds.has(q.examId)) questionCounts.set(q.examId, (questionCounts.get(q.examId) ?? 0) + 1);
+  const myRegIds = new Set([...myRegs.values()].map((r) => r.id));
+  const latestAttempt = new Map<string, Attempt>();
+  for (const a of db.data!.attempts) {
+    if (!myRegIds.has(a.registrationId)) continue;
+    const cur = latestAttempt.get(a.registrationId);
+    if (!cur || a.startedAt > cur.startedAt) latestAttempt.set(a.registrationId, a);
+  }
+
   for (const exam of published) {
-    let registration = db.data!.registrations.find(
-      (r) => r.candidateId === user.id && r.examId === exam.id,
-    );
+    let registration = myRegs.get(exam.id);
     // "assigned" exams are only visible to candidates an admin has assigned.
     // "open" exams auto-enroll every candidate on first view.
     if (!registration) {
@@ -1650,17 +1859,17 @@ app.get("/api/exams", requireAuth, async (req, res) => {
         createdAt: now(),
       };
       db.data!.registrations.push(registration);
-      mutated = true;
+      myRegs.set(exam.id, registration);
+      created.push(registration);
     }
-    const attempt =
-      db.data!.attempts
-        .filter((a) => a.registrationId === registration!.id)
-        .sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0] ?? null;
-    const questionCount = db.data!.questions.filter((q) => q.examId === exam.id).length;
-    items.push({ registration, exam, attempt, questionCount });
+    items.push({ registration, exam, attempt: latestAttempt.get(registration.id) ?? null, questionCount: questionCounts.get(exam.id) ?? 0 });
   }
 
-  if (mutated) await db.write();
+  // Persist ONLY the registrations just created. This used to call db.write(), which
+  // deletes and re-inserts every row of every table — and every student triggers it
+  // the first time they see a newly published exam, so a class opening the page at once
+  // queued hundreds of whole-database rewrites behind each other.
+  for (const reg of created) await db.upsert("registrations", reg);
   items.sort((a, b) => b.exam.createdAt.localeCompare(a.exam.createdAt));
   res.json({ items });
 });
@@ -2072,7 +2281,7 @@ async function notifyRegistered(reg: Registration) {
   const whenIso = reg.scheduledStart || exam?.availableFrom || null;
   const when = whenIso ? new Date(whenIso).toLocaleString() : "the scheduled time";
   const title = exam?.title ?? "your examination";
-  const portalUrl = `${env.appUrl}/exams`;
+  const portalUrl = `${env.appUrl}/portal`; // students sign in at the portal, not the staff /login
   const subject = `You're confirmed — ${title}`;
   const text =
     `Hi ${u.name},\n\nYou're confirmed to sit "${title}". It opens ${when}.\n\n` +
@@ -2089,6 +2298,16 @@ async function notifyRegistered(reg: Registration) {
     u.email,
   );
   try { await sendMail(u.email, subject, text, html); } catch { /* best-effort */ }
+}
+
+/** Notify a batch of newly-confirmed registrations one after another (never all at
+ *  once — a class of 200 would otherwise open 200 SMTP sends in the same tick).
+ *  Meant to be called with `void` so the admin's request returns immediately;
+ *  each send is already best-effort and logged to the outbox. */
+async function notifyRegisteredMany(regs: Registration[]) {
+  for (const reg of regs) {
+    try { await notifyRegistered(reg); } catch { /* best-effort */ }
+  }
 }
 
 /** Periodic sweep: send 24h / 1h "starting soon" reminders once each, per confirmed upcoming exam. */
@@ -2108,7 +2327,7 @@ async function sendExamReminders() {
     const fire = async (tag: string, label: string) => {
       if (sent.includes(tag)) return false;
       const when = new Date(startIso).toLocaleString();
-      const portalUrl = `${env.appUrl}/exams`;
+      const portalUrl = `${env.appUrl}/portal`;
       const tpl = renderEmailTemplate("exam.reminder", { name: u.name, examTitle: exam.title, label });
       const text = `Hi ${u.name},\n\n${tpl.introText}\nMake sure you're ready and run your system check beforehand.\n${portalUrl}\n\n— Oriole`;
       const html = buildHtml(
@@ -2438,6 +2657,7 @@ app.get("/api/attempts/:id/control", requireAuth, (req, res) => {
   if (!attempt) return res.status(404).json({ error: "Attempt not found." });
   res.json({
     paused: !!attempt.paused,
+    pauseReason: attempt.pauseReason ?? null,
     terminated: !!attempt.terminated || attempt.status === "submitted",
     terminationReason: attempt.terminationReason ?? null,
     messages: attempt.proctorMessages ?? [],
@@ -2661,14 +2881,15 @@ app.post("/api/attempts/:id/proctor-event", requireAuth, async (req, res) => {
   if (!(PROCTOR_EVENT_TYPES as readonly string[]).includes(type)) {
     return res.status(400).json({ error: "Unknown event type." });
   }
+  const onBreak = inEventGrace(attempt);
   const safeSeverity: ProctorEvent["severity"] =
-    severity === "warning" || severity === "high" ? severity : "info";
+    onBreak ? "info" : severity === "warning" || severity === "high" ? severity : "info";
   const event: ProctorEvent = {
     id: nanoid(10),
     attemptId: attempt.id,
     type,
     severity: safeSeverity,
-    message: String(message ?? "").slice(0, 500),
+    message: (onBreak ? "[during a rest break / just after] " : "") + String(message ?? "").slice(0, 500),
     at: now(),
   };
   await proctorStore.add(event);
@@ -2693,6 +2914,8 @@ app.post("/api/attempts/:id/proctor-event", requireAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
+/** Per-attempt snapshot upload counter (see the trim note in the handler below). */
+const snapshotUploads = new Map<string, number>();
 app.post("/api/attempts/:id/snapshot", requireAuth, async (req, res) => {
   const user = currentUser(req)!;
   const attempt = db.data!.attempts.find((a) => a.id === req.params.id && a.candidateId === user.id);
@@ -2705,7 +2928,12 @@ app.post("/api/attempts/:id/snapshot", requireAuth, async (req, res) => {
   const SNAPSHOT_CAP = 24;
   const frame = { id: nanoid(12), attemptId: attempt.id, dataUrl: encryptString(image), at: now() };
   await snapshotStore.add(frame);
-  await snapshotStore.trim(attempt.id, SNAPSHOT_CAP);
+  // Trimming is its own delete-with-subselect query, so do it every 5th upload rather
+  // than every one — storage stays bounded (cap + at most 4 extra frames) at a fifth of
+  // the database work per student.
+  const uploads = (snapshotUploads.get(attempt.id) ?? 0) + 1;
+  snapshotUploads.set(attempt.id, uploads);
+  if (uploads % 5 === 0) await snapshotStore.trim(attempt.id, SNAPSHOT_CAP);
   res.json({ ok: true });
 });
 
@@ -2817,6 +3045,12 @@ function issueCertificate(attempt: Attempt): Certificate | null {
   return cert;
 }
 
+/** True while an attempt is paused (e.g. a rest break) and for a short grace period after it resumes.
+ *  Integrity events in that window are recorded for the record but never counted against the student. */
+function inEventGrace(a: Attempt): boolean {
+  return !!a.paused || (!!a.eventGraceUntil && Date.now() < new Date(a.eventGraceUntil).getTime());
+}
+
 /**
  * Finalize an in-progress attempt: grade it, mark it submitted + terminated,
  * issue a certificate if earned, persist, and notify. No-op if already
@@ -2907,10 +3141,10 @@ app.post("/api/attempts/:id/wake-lock-event", requireAuth, async (req, res) => {
     const secs = Math.max(0, Number(inactiveSeconds) || 0);
     await proctorStore.add({
       id: nanoid(10), attemptId: attempt.id, type: "device_resumed",
-      severity: secs >= 30 ? "warning" : "info",
+      severity: secs >= 30 && !inEventGrace(attempt) ? "warning" : "info",
       message: `Device appeared inactive for ${Math.round(secs)}s before resuming.`, at: now(),
     });
-    if (secs >= 30 && !attempt.paused) {
+    if (secs >= 30 && !inEventGrace(attempt)) {
       const action = ld?.wakeLockResumeAction ?? "continue";
       if (action === "pause") {
         attempt.paused = true; attempt.pausedAt = now();
@@ -3199,7 +3433,7 @@ app.post("/api/admin/exams", requirePermission("exams.create"), async (req, res)
     createdAt: now(),
   };
   db.data!.exams.push(exam);
-  await db.write();
+  await db.upsert("exams", exam);
   await recordAudit(req, "exam.created", exam.title);
   res.json({ exam });
 });
@@ -3450,7 +3684,7 @@ app.post("/api/admin/exams/:id/assignments", requirePermission("exams.edit"), as
       id: nanoid(10), tenantId: tenantId ?? undefined, examId: exam.id, candidateId,
       status: "registered", approval: "pending", scheduledStart: null, systemCheckPassed: false, createdAt: now(),
     });
-    await db.write();
+    await db.upsert("registrations", db.data!.registrations[db.data!.registrations.length - 1]);
   }
   res.json({ ok: true });
 });
@@ -3462,6 +3696,8 @@ app.post("/api/admin/exams/:id/assign-bulk", requirePermission("exams.edit"), as
   const candidateIds: string[] = Array.isArray(req.body?.candidateIds) ? req.body.candidateIds : [];
   const confirm = req.body?.confirm === true;
   let assigned = 0, confirmed = 0;
+  const toNotify: Registration[] = [];
+  const touched: Registration[] = [];
   for (const cid of candidateIds) {
     const cand = db.data!.users.find((u) => u.id === cid && u.tenantId === tenantId && u.role === "candidate");
     if (!cand) continue;
@@ -3474,13 +3710,17 @@ app.post("/api/admin/exams/:id/assign-bulk", requirePermission("exams.edit"), as
       };
       db.data!.registrations.push(reg);
       assigned++;
-      if (confirm) confirmed++;
+      touched.push(reg);
+      if (confirm) { confirmed++; toNotify.push(reg); }
     } else if (confirm && reg.approval !== "confirmed") {
       reg.approval = "confirmed";
       confirmed++;
+      touched.push(reg);
+      toNotify.push(reg);
     }
   }
-  await db.write();
+  for (const r of touched) await db.upsert("registrations", r);
+  void notifyRegisteredMany(toNotify); // students hear about it; the admin isn't kept waiting
   res.json({ assigned, confirmed });
 });
 
@@ -3623,7 +3863,7 @@ app.post("/api/admin/exams/:id/questions", requirePermission("exams.edit"), asyn
   const type: Question["type"] = req.body?.type ?? "mcq";
   const q: Question = { id: nanoid(10), tenantId: tenantId ?? undefined, examId: exam.id, type, prompt: "", points: 10, ...questionDefaults(type) };
   db.data!.questions.push(q);
-  await db.write();
+  await db.upsert("questions", q); // just this row — not a rewrite of every table
   res.json({ question: q });
 });
 
@@ -3767,7 +4007,7 @@ app.patch("/api/admin/questions/:id", requirePermission("exams.edit"), async (re
   // Stamp the edit. If this question belongs to an exam with an attempt already in
   // progress, the answer to it is voided (recorded blank) at submission — see gradeAttempt.
   q.updatedAt = now();
-  await db.write();
+  await db.upsert("questions", q);
   res.json({ question: q });
 });
 
@@ -3776,7 +4016,7 @@ app.delete("/api/admin/questions/:id", requirePermission("exams.edit"), async (r
   const q = db.data!.questions.find((x) => x.id === req.params.id && x.tenantId === tenantId);
   if (!q) return res.status(404).json({ error: "Question not found." });
   db.data!.questions = db.data!.questions.filter((x) => x.id !== req.params.id);
-  await db.write();
+  await db.remove("questions", q.id);
   res.json({ ok: true });
 });
 
@@ -3915,7 +4155,15 @@ app.get("/api/admin/questions", requirePermission("exams.edit"), (req, res) => {
     const exam = db.data!.exams.find((e) => e.id === q.examId);
     return { ...q, examTitle: exam?.title ?? "—", examCode: exam?.code ?? "", examStatus: exam?.status ?? "draft" };
   });
-  res.json({ questions });
+  // Every exam in this school (not just the ones that already have questions), so a
+  // brand-new exam shows up in the bank's filter straight away, with its question count.
+  const counts = new Map<string, number>();
+  for (const q of questions) counts.set(q.examId, (counts.get(q.examId) ?? 0) + 1);
+  const exams = db.data!.exams
+    .filter((e) => e.tenantId === tenantId && !e.practice)
+    .map((e) => ({ id: e.id, title: e.title || "Untitled examination", code: e.code, status: e.status, questionCount: counts.get(e.id) ?? 0 }))
+    .sort((a, b) => a.title.localeCompare(b.title));
+  res.json({ questions, exams });
 });
 
 // ---- admin: results & analytics ----
@@ -4758,15 +5006,23 @@ app.post("/api/admin/regrades/:id/resolve", requirePermission("grading.regrade")
 
 // ---- admin: live monitor ----
 app.get("/api/admin/live", requirePermission("monitor.view"), async (req, res) => {
-  const userName = (id: string) => db.data!.users.find((u) => u.id === id)?.name ?? "Candidate";
   const inProgress = db.data!.attempts.filter((a) => a.status === "in_progress" && a.tenantId === currentTenantId(req));
   const evMap = await proctorStore.forAttempts(inProgress.map((a) => a.id));
   const ansMap = await answerStore.forAttempts(inProgress.map((a) => a.id));
   const geoMap = await geofenceStore.forAttempts(inProgress.map((a) => a.id));
-  const sessions = await Promise.all(inProgress.map(async (a) => {
+  const snapMap = await snapshotStore.latestForAttempts(inProgress.map((a) => a.id)); // one query, not one per candidate
+  // Look names and question counts up once instead of scanning whole tables per session.
+  const candidateIds = new Set(inProgress.map((a) => a.candidateId));
+  const names = new Map<string, string>();
+  for (const u of db.data!.users) if (candidateIds.has(u.id)) names.set(u.id, u.name);
+  const examIds = new Set(inProgress.map((a) => a.examId));
+  const qCounts = new Map<string, number>();
+  for (const q of db.data!.questions) if (examIds.has(q.examId)) qCounts.set(q.examId, (qCounts.get(q.examId) ?? 0) + 1);
+  const userName = (id: string) => names.get(id) ?? "Candidate";
+  const sessions = inProgress.map((a) => {
     const exam = db.data!.exams.find((e) => e.id === a.examId);
     const events = evMap.get(a.id) ?? [];
-    const questionCount = db.data!.questions.filter((q) => q.examId === a.examId).length;
+    const questionCount = qCounts.get(a.examId) ?? 0;
     const answeredCount = (ansMap.get(a.id) ?? []).filter((an) => an.value).length;
     const geoLogs = geoMap.get(a.id) ?? [];
     const lastGeo = geoLogs[geoLogs.length - 1] ?? null;
@@ -4782,8 +5038,9 @@ app.get("/api/admin/live", requirePermission("monitor.view"), async (req, res) =
       answeredCount,
       questionCount,
       recentEvents: events.slice(-4).reverse(),
-      snapshot: await latestSnapshot(a.id),
+      snapshot: snapMap.has(a.id) ? (decryptString(snapMap.get(a.id)!.dataUrl) ?? null) : null,
       paused: !!a.paused,
+      pauseReason: a.pauseReason ?? null,
       geofence: exam?.lockdown?.requireGeofence ? {
         continuousMonitoring: !!exam.lockdown.geofenceContinuousMonitoring,
         centers: exam.lockdown.geofenceCenters ?? [],
@@ -4798,7 +5055,7 @@ app.get("/api/admin/live", requirePermission("monitor.view"), async (req, res) =
         locked: !!a.geofenceLocked,
       } : null,
     };
-  }));
+  });
   res.json({ sessions });
 });
 
@@ -4820,6 +5077,7 @@ app.get("/api/admin/attempts/:id/live", requirePermission("monitor.view"), async
     examTitle: exam?.title ?? "Examination",
     status: a.status,
     paused: !!a.paused,
+    pauseReason: a.pauseReason ?? null,
     terminated: !!a.terminated,
     messages: a.proctorMessages ?? [],
     events: events.slice().reverse(),
@@ -4882,14 +5140,17 @@ app.post("/api/admin/attempts/:id/pause", requirePermission("monitor.control"), 
   if (!a) return res.status(404).json({ error: "Attempt not found." });
   if (a.status !== "in_progress") return res.status(409).json({ error: "Attempt is not in progress." });
   const pause = req.body?.paused !== false;
-  if (pause && !a.paused) { a.paused = true; a.pausedAt = now(); }
+  const isBreak = req.body?.reason === "break";
+  if (pause && !a.paused) { a.paused = true; a.pausedAt = now(); a.pauseReason = isBreak ? "break" : "proctor"; }
   else if (!pause && a.paused) {
     a.pausedMs = (a.pausedMs ?? 0) + Math.max(0, Date.now() - new Date(a.pausedAt ?? now()).getTime());
-    a.paused = false; a.pausedAt = null;
+    a.paused = false; a.pausedAt = null; a.pauseReason = null;
+    // A minute to settle back in (return to full screen, face the camera) without it counting against them.
+    a.eventGraceUntil = new Date(Date.now() + 60_000).toISOString();
   }
   await db.upsert("attempts", a);
-  await recordAudit(req, pause ? "proctor.pause" : "proctor.resume", a.id);
-  res.json({ paused: !!a.paused, deadlineAt: new Date(attemptDeadlineMs(a)).toISOString() });
+  await recordAudit(req, pause ? (isBreak ? "proctor.rest_break" : "proctor.pause") : "proctor.resume", a.id);
+  res.json({ paused: !!a.paused, pauseReason: a.pauseReason ?? null, deadlineAt: new Date(attemptDeadlineMs(a)).toISOString() });
 });
 
 // Terminate (force-submit) an attempt.
@@ -5581,7 +5842,7 @@ app.post("/api/me/password", requireAuth, validate(passwordChangeSchema), async 
   user.passwordHash = await bcrypt.hash(String(password), BCRYPT_COST);
   user.tokenVersion = (user.tokenVersion ?? 0) + 1; // revoke other sessions on password change
   await db.upsert("users", user);
-  issueSession(res, user); // keep the caller signed in with a token at the new version
+  await issueSession(req, res, user); // keep the caller signed in with a token at the new version
   res.json({ ok: true });
 });
 
@@ -5608,7 +5869,7 @@ app.post("/api/me/complete-password-setup", requireAuth, validate(passwordChange
   user.mustChangePassword = false;
   user.tokenVersion = (user.tokenVersion ?? 0) + 1; // revoke the temp-password-derived session
   await db.upsert("users", user);
-  issueSession(res, user);
+  await issueSession(req, res, user);
   res.json({ ok: true });
 });
 
@@ -5633,6 +5894,23 @@ app.patch("/api/me/profile", requireAuth, async (req, res) => {
   }
   await db.upsert("users", user);
   res.json({ user: toSafeUser(user) });
+});
+
+// Real session management — "see my devices, kill just this one" — layered
+// on top of tokenVersion's existing "revoke everything" logout button.
+app.get("/api/me/sessions", requireAuth, (req, res) => {
+  const user = currentUser(req)!;
+  const currentId = currentSessionId(req);
+  const sessions = listSessions("user", user.id).map((s) => ({ ...s, isCurrent: s.id === currentId }));
+  res.json({ sessions });
+});
+
+app.post("/api/me/sessions/:id/revoke", requireAuth, async (req, res) => {
+  const user = currentUser(req)!;
+  const ok = await revokeSession("user", user.id, String(req.params.id));
+  if (!ok) return res.status(404).json({ error: "Session not found." });
+  await recordAudit(req, "session.revoked", `Revoked one session for ${user.name} <${user.email}>`);
+  res.json({ ok: true });
 });
 
 const examById = (id: string) => db.data!.exams.find((e) => e.id === id);
@@ -5837,9 +6115,16 @@ app.get("/api/notifications", requireAuth, (req, res) => {
   const u = currentUser(req)!;
   const examName = (id: string) => db.data!.exams.find((e) => e.id === id)?.title ?? "Examination";
   const isPractice = (id: string) => !!db.data!.exams.find((e) => e.id === id)?.practice;
-  type N = { id: string; type: string; title: string; body: string; at: string; link: string };
+  type N = { id: string; type: string; title: string; body: string; at: string; link: string; readAt?: string | null };
   const items: N[] = [];
   const now = Date.now();
+
+  // Real, persisted platform notifications (maintenance/security/billing/
+  // tenant/license) merged into this same feed — one list for the user to
+  // look at, not a second parallel notifications UI.
+  for (const n of listNotificationsFor("user", u.id)) {
+    items.push({ id: `plat-${n.id}`, type: n.category, title: n.title, body: n.body, at: n.createdAt, link: n.link ?? "/notifications", readAt: n.readAt });
+  }
 
   if (u.role === "candidate") {
     for (const a of db.data!.attempts.filter((x) => x.candidateId === u.id && x.status === "submitted" && !isPractice(x.examId))) {
@@ -5885,6 +6170,30 @@ app.get("/api/notifications", requireAuth, (req, res) => {
 
   items.sort((a, b) => (b.at ?? "").localeCompare(a.at ?? ""));
   res.json({ notifications: items.slice(0, 60) });
+});
+
+// Marks one real, persisted notification read — the "plat-" prefix in the
+// feed above is stripped by the caller before hitting this (the id here is
+// the underlying PlatformNotification id, not the feed item's display id).
+app.post("/api/notifications/:id/read", requireAuth, async (req, res) => {
+  const u = currentUser(req)!;
+  const ok = await markNotificationRead("user", u.id, String(req.params.id));
+  if (!ok) return res.status(404).json({ error: "Notification not found." });
+  res.json({ ok: true });
+});
+
+// Super Admins had no notification feed at all before — real platform
+// notifications only (no derived/synthetic items, unlike the tenant feed
+// above, since there's no equivalent "your submissions/results" concept here).
+app.get("/api/super-admin/notifications", requireSuperAdmin, (req, res) => {
+  const superAdmin = currentSuperAdmin(req)!;
+  res.json({ notifications: listNotificationsFor("superAdmin", superAdmin.id).slice(0, 60) });
+});
+app.post("/api/super-admin/notifications/:id/read", requireSuperAdmin, async (req, res) => {
+  const superAdmin = currentSuperAdmin(req)!;
+  const ok = await markNotificationRead("superAdmin", superAdmin.id, String(req.params.id));
+  if (!ok) return res.status(404).json({ error: "Notification not found." });
+  res.json({ ok: true });
 });
 
 // ---- admin: Integrity — cross-exam proctoring overview ----
@@ -7886,6 +8195,7 @@ app.post("/api/admin/classes/:id/members", requirePermission("students.manage"),
   if (!cls) return res.status(404).json({ error: "Class not found." });
   const ids: string[] = Array.isArray(req.body?.candidateIds) ? req.body.candidateIds : [];
   let enrolled = 0;
+  const toNotify: Registration[] = [];
   for (const id of ids) {
     if (db.data!.users.some((u) => u.id === id && u.tenantId === tenantId && u.role === "candidate") && !cls.memberIds.includes(id)) {
       cls.memberIds.push(id);
@@ -7893,17 +8203,21 @@ app.post("/api/admin/classes/:id/members", requirePermission("students.manage"),
       for (const assignment of cls.assignments) {
         const alreadyReg = db.data!.registrations.some((r) => r.examId === assignment.examId && r.candidateId === id);
         if (!alreadyReg) {
-          db.data!.registrations.push({
+          const reg: Registration = {
             id: nanoid(10), tenantId: tenantId ?? undefined, examId: assignment.examId, candidateId: id,
             status: "registered", approval: "confirmed",
             scheduledStart: assignment.scheduledStart, systemCheckPassed: false, createdAt: now(),
-          });
+          };
+          db.data!.registrations.push(reg);
+          toNotify.push(reg);
           enrolled++;
         }
       }
     }
   }
-  await db.write();
+  await db.upsert("classes", cls);
+  for (const r of toNotify) await db.upsert("registrations", r);
+  void notifyRegisteredMany(toNotify); // a student added after the exam was sent still hears about it
   res.json({ ok: true, members: cls.memberIds.length, enrolled });
 });
 
@@ -8034,6 +8348,8 @@ app.post("/api/admin/classes/:id/assign-exam", requirePermission("students.manag
   if (cls.memberIds.length === 0) return res.status(400).json({ error: "Add students to the class first." });
   const scheduledStart = req.body?.scheduledStart ? new Date(req.body.scheduledStart).toISOString() : null;
 
+  const toNotify: Registration[] = [];
+  const touched: Registration[] = []; // every registration changed here, announced or not
   for (const cid of cls.memberIds) {
     let reg = db.data!.registrations.find((r) => r.examId === exam.id && r.candidateId === cid);
     if (!reg) {
@@ -8042,12 +8358,17 @@ app.post("/api/admin/classes/:id/assign-exam", requirePermission("students.manag
     } else {
       reg.approval = "confirmed";
       reg.scheduledStart = scheduledStart;
-      if (reg.status === "submitted") continue;
+      touched.push(reg);
+      if (reg.status === "submitted") continue; // already sat it — nothing to announce
       reg.status = "registered";
     }
+    if (!touched.includes(reg)) touched.push(reg);
+    toNotify.push(reg);
   }
   cls.assignments.push({ examId: exam.id, scheduledStart, assignedAt: now() });
-  await db.write();
+  await db.upsert("classes", cls);
+  for (const r of touched) await db.upsert("registrations", r);
+  void notifyRegisteredMany(toNotify); // email each student that the exam was sent to them
   await recordAudit(req, "class.exam_assigned", `${exam.title} → ${cls.name}${scheduledStart ? ` @ ${new Date(scheduledStart).toLocaleString()}` : ""}`);
   res.json({ ok: true, assigned: cls.memberIds.length });
 });
@@ -8309,7 +8630,7 @@ app.patch("/api/admin/team/:id/custom-role", requirePermission("roles.team_manag
 });
 
 // Liveness: process is up. Readiness: storage is reachable (for load-balancer probes).
-app.get("/api/health", (_req, res) => res.json({ ok: true, uptime: process.uptime() }));
+app.get("/api/health", (_req, res) => res.json({ ok: true, uptime: process.uptime(), ...(hasInstanceConflict() ? { instanceConflict: true } : {}) }));
 app.get("/api/ready", async (_req, res) => {
   try {
     await db.ping();
@@ -8354,8 +8675,16 @@ if (env.jwtIsDefault) {
 await initDb();
 scheduleRetention();
 scheduleBackup();
+// Detect a second copy of this app running against the same database (see db.ts). Two copies
+// each keep their own in-memory data, so an exam started on one can look "not found" to the other.
+void claimInstanceLock().then((ok) => {
+  if (!ok) logger.error("ANOTHER Oriole process is already running against this database. Running more than one copy is not supported: each keeps its own in-memory data, so exam sessions can appear to vanish. Limit the app to a single instance in the host settings.");
+});
 scheduleReliability({ dispatchWebhook, sendMail, sendSms, attemptDeadlineMs });
 // Verify SMTP at startup so misconfiguration shows up immediately in the log.
+if (env.isProd && !mailerStatus().live) {
+  logger.error("✉️  MAIL_TRANSPORT is not 'smtp' — NO email is being delivered (welcome/invite and password-reset emails are only logged to the in-app outbox). Set MAIL_TRANSPORT=smtp plus SMTP_HOST/PORT/USER/PASS/MAIL_FROM.");
+}
 verifySmtp().then(({ ok, error }) => {
   if (!ok) logger.warn({ error }, "⚠️  SMTP verification failed — check SMTP_HOST/PORT/USER/PASS");
   else if (env.isProd) logger.info("✔ SMTP connection verified");
@@ -8450,6 +8779,12 @@ const reportTimer = setInterval(() => {
 }, 3_600_000);
 reportTimer.unref?.();
 
+const sessionPruneTimer = setInterval(() => {
+  void trackedSweep("pruneAuthSessions", async () => { await pruneAuthSessions(); }, "session prune failed");
+}, 3_600_000);
+sessionPruneTimer.unref?.();
+void trackedSweep("pruneAuthSessions", async () => { await pruneAuthSessions(); }, "session prune failed");
+
 const maintenanceWindowTimer = setInterval(() => {
   void trackedSweep("maintenanceWindow", maintenanceWindowSweep, "maintenance window sweep failed");
 }, 60_000);
@@ -8472,6 +8807,8 @@ async function shutdown(signal: string) {
   clearInterval(digestTimer);
   clearInterval(reportTimer); // was previously missing from this list — a pre-existing gap, fixed in passing
   clearInterval(maintenanceWindowTimer);
+  clearInterval(sessionPruneTimer);
+  void releaseInstanceLock();
 
   // Both the graceful path (server.close()'s callback, once every open
   // connection has drained) and the hard-cap timeout below must close the

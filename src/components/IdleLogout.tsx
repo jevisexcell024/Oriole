@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ShieldAlert } from "lucide-react";
 import { useAuth } from "@/lib/auth";
@@ -44,11 +44,12 @@ export function IdleLogout() {
     if (loggingOut.current) return;
     loggingOut.current = true;
     setRemaining(null);
+    const wasStudent = user?.role === "candidate";
     try { await logout(); } catch { /* ignore */ }
     try { localStorage.removeItem(KEY); } catch { /* ignore */ }
-    navigate("/login", { replace: true });
+    navigate(wasStudent ? "/portal" : "/login", { replace: true });
     loggingOut.current = false;
-  }, [logout, navigate]);
+  }, [logout, navigate, user]);
 
   // Evaluate idle time once per second.
   useEffect(() => {

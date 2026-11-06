@@ -1,12 +1,13 @@
-﻿import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { Radio, Loader2, AlertTriangle, ShieldCheck, Clock, Pause, Play, MessageSquare, Ban, Send, X, ExternalLink, MapPin, LayoutGrid, Map as MapIcon, Unlock } from "lucide-react";
+import { Radio, Loader2, AlertTriangle, ShieldCheck, Clock, Pause, Play, Coffee, MessageSquare, Ban, Send, X, ExternalLink, MapPin, LayoutGrid, Map as MapIcon, Unlock } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
 import { PageHeader } from "@/components/PageHeader";
 import { api } from "@/lib/api";
 import { GeofenceMap, type LiveCandidateMarker } from "@/components/GeofenceMap";
 import type { ProctorEvent, GeofenceCenter, GeofenceLog } from "@shared/types";
 import { clsx } from "clsx";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 interface SessionGeofence {
   continuousMonitoring: boolean;
@@ -28,6 +29,7 @@ interface Session {
   recentEvents: ProctorEvent[];
   snapshot: string | null;
   paused: boolean;
+  pauseReason?: "break" | "proctor" | null;
   geofence: SessionGeofence | null;
 }
 
@@ -49,7 +51,7 @@ export function AdminLiveMonitor() {
   useEffect(() => {
     const load = () => api.get<{ sessions: Session[] }>("/admin/live").then((d) => setSessions(d.sessions)).catch(() => {});
     load();
-    const poll = setInterval(load, 4000);     // refresh data every 4s
+    const poll = setInterval(() => { if (!document.hidden) load(); }, 6000); // every 6s, and not while this tab is in the background
     const clock = setInterval(() => setTick((t) => t + 1), 1000); // tick countdowns
     return () => { clearInterval(poll); clearInterval(clock); };
   }, []);
@@ -87,7 +89,7 @@ export function AdminLiveMonitor() {
         <PageHeader title="Live Monitor" subtitle="In-progress proctored sessions, refreshed automatically."
           actions={<span className="inline-flex items-center gap-1.5 rounded-full bg-white/15 px-2.5 py-1 text-[11px] font-semibold text-white"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-rose-400" /> LIVE</span>} />
 
-        {!sessions && <div className="mt-10 flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>}
+        {!sessions && <ContentSkeleton variant="cards" />}
 
         {sessions && sessions.length === 0 && (
           <div className="card mt-6 flex flex-col items-center gap-2 p-12 text-center">
@@ -161,7 +163,7 @@ export function AdminLiveMonitor() {
                   <Clock className="h-3 w-3" /> {remaining(s.startedAt, s.durationMinutes)}
                 </span>
                 <span className={clsx("absolute left-2 top-2 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold text-white", s.paused ? "bg-sky-500/90" : "bg-rose-500/90")}>
-                  {s.paused ? <><Pause className="h-2.5 w-2.5" /> PAUSED</> : <><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--card)]" /> LIVE</>}
+                  {s.paused ? <><Pause className="h-2.5 w-2.5" /> {s.pauseReason === "break" ? "REST BREAK" : "PAUSED"}</> : <><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--card)]" /> LIVE</>}
                 </span>
                 {s.geofence?.inside === false && (
                   <span className="absolute bottom-2 left-2 inline-flex items-center gap-1 rounded-md bg-rose-500/90 px-1.5 py-0.5 text-[10px] font-semibold text-white">
@@ -219,7 +221,7 @@ export function AdminLiveMonitor() {
 
 interface LiveDetail {
   attemptId: string; candidateName: string; examTitle: string; status: string;
-  paused: boolean; terminated: boolean; messages: { id: string; text: string; at: string }[];
+  paused: boolean; pauseReason?: "break" | "proctor" | null; terminated: boolean; messages: { id: string; text: string; at: string }[];
   events: ProctorEvent[]; snapshots: { id: string; dataUrl: string; at: string }[];
   integrity: number; flagCount: number; answeredCount: number; questionCount: number;
   geofence: (SessionGeofence & { history: GeofenceLog[] }) | null;
@@ -236,7 +238,7 @@ function InterveneDrawer({ attemptId, onClose }: { attemptId: string; onClose: (
   useEffect(() => {
     liveRef.current = true;
     load();
-    const poll = setInterval(load, 3000);
+    const poll = setInterval(() => { if (!document.hidden) load(); }, 5000);
     return () => { liveRef.current = false; clearInterval(poll); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attemptId]);
@@ -248,9 +250,11 @@ function InterveneDrawer({ attemptId, onClose }: { attemptId: string; onClose: (
     catch (e) { alert((e as Error).message); }
     finally { setBusy(null); }
   };
-  const togglePause = async () => {
+  // `reason: "break"` starts a rest break: the timer stops AND nothing the student does
+  // (leaving full screen, looking away, noise) is counted against them until a minute after it ends.
+  const togglePause = async (reason?: "break") => {
     setBusy("pause");
-    try { await api.post(`/admin/attempts/${attemptId}/pause`, { paused: !d?.paused }); load(); }
+    try { await api.post(`/admin/attempts/${attemptId}/pause`, { paused: !d?.paused, ...(reason ? { reason } : {}) }); load(); }
     catch (e) { alert((e as Error).message); }
     finally { setBusy(null); }
   };
@@ -272,7 +276,7 @@ function InterveneDrawer({ attemptId, onClose }: { attemptId: string; onClose: (
   const flaggedSnap = (at: string) => (d?.events ?? []).some((e) => e.severity !== "info" && Math.abs(new Date(e.at).getTime() - new Date(at).getTime()) < 16000);
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-black/50" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/50">
       <div className="flex h-full w-full max-w-md flex-col border-l border-[var(--border)] bg-[var(--card)] shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-3.5">
           <div className="min-w-0">
@@ -286,7 +290,7 @@ function InterveneDrawer({ attemptId, onClose }: { attemptId: string; onClose: (
         </div>
 
         {!d ? (
-          <div className="flex flex-1 items-center justify-center gap-2 text-sm text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>
+          <div className="flex-1 p-4"><ContentSkeleton variant="lines" /></div>
         ) : d.terminated || d.status === "submitted" ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-sm text-[var(--muted)]"><Ban className="h-7 w-7" /> This attempt has ended.</div>
         ) : (
@@ -294,7 +298,7 @@ function InterveneDrawer({ attemptId, onClose }: { attemptId: string; onClose: (
             {/* Live snapshot */}
             <div className="relative aspect-video bg-black">
               {d.snapshots.length > 0 ? <img src={d.snapshots[d.snapshots.length - 1].dataUrl} alt="" className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center text-xs text-white/50">Awaiting camera…</div>}
-              {d.paused && <span className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-md bg-sky-500/90 px-1.5 py-0.5 text-[10px] font-semibold text-white"><Pause className="h-2.5 w-2.5" /> PAUSED</span>}
+              {d.paused && <span className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-md bg-sky-500/90 px-1.5 py-0.5 text-[10px] font-semibold text-white"><Pause className="h-2.5 w-2.5" /> {d.pauseReason === "break" ? "REST BREAK" : "PAUSED"}</span>}
             </div>
             <div className="flex items-center justify-between px-5 py-3 text-xs">
               <span>Progress <span className="font-semibold">{d.answeredCount}/{d.questionCount}</span></span>
@@ -377,9 +381,13 @@ function InterveneDrawer({ attemptId, onClose }: { attemptId: string; onClose: (
             </div>
             {sent && <p className="mt-1 text-[11px] text-emerald-400"><MessageSquare className="mr-1 inline h-3 w-3" /> Message delivered.</p>}
             <div className="mt-3 flex gap-2">
-              <button onClick={togglePause} disabled={busy === "pause"} className="btn btn-outline h-9 flex-1 disabled:opacity-50">
-                {busy === "pause" ? <Loader2 className="h-4 w-4 animate-spin" /> : d.paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />} {d.paused ? "Resume" : "Pause"}
+              <button onClick={() => togglePause()} disabled={busy === "pause"} className="btn btn-outline h-9 flex-1 disabled:opacity-50">
+                {busy === "pause" ? <Loader2 className="h-4 w-4 animate-spin" /> : d.paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />} {d.paused ? (d.pauseReason === "break" ? "End break" : "Resume") : "Pause"}
               </button>
+              {!d.paused && (
+                <button onClick={() => togglePause("break")} disabled={busy === "pause"} title="Stops the timer and ignores integrity flags until a minute after the break ends"
+                  className="btn btn-outline h-9 flex-1 disabled:opacity-50"><Coffee className="h-4 w-4" /> Rest break</button>
+              )}
               <button onClick={terminate} disabled={busy === "term"} className="btn h-9 flex-1 bg-rose-500/15 text-rose-400 hover:bg-rose-500/25 disabled:opacity-50">
                 {busy === "term" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Ban className="h-4 w-4" />} Terminate
               </button>

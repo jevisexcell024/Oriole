@@ -11,6 +11,7 @@ import { useAuth } from "@/lib/auth";
 import { useT, type TFn } from "@/lib/i18n";
 import { can, type Cap } from "@/lib/roles";
 import { initials as ini } from "@/lib/format";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 /* ── Oriole palette ────────────────────────────────────────────────────────────
    Three solid brand colors, semantically assigned:
@@ -30,10 +31,10 @@ const V = {
 };
 
 /* Fonts — matches the rest of the admin shell exactly:
-   Space Grotesk for headings / big numbers / labels
-   DM Sans for body / prose / small copy                                      */
-const DISPLAY = "'Space Grotesk', 'Segoe UI', sans-serif";
-const SANS    = "'DM Sans', 'Segoe UI', sans-serif";
+   Manrope for headings / big numbers / labels
+   Manrope for body / prose / small copy                                      */
+const DISPLAY = "'Manrope', 'Segoe UI', sans-serif";
+const SANS    = "'Manrope', 'Segoe UI', sans-serif";
 
 const HEALTH_COLORS = [C.lime, C.pink, C.white, C.lime];
 const AVA = [C.pink, C.lime, C.pink, C.lime, C.pink, C.lime];
@@ -77,7 +78,7 @@ function Card({ children, className = "", style }: { children: ReactNode; classN
   );
 }
 
-/* eye label — uppercase tracking, Space Grotesk */
+/* eye label — uppercase tracking, Manrope */
 const eye: CSSProperties = { fontFamily: DISPLAY, fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: V.mutedFg };
 /* recharts tooltip */
 const tip: CSSProperties = { backgroundColor: V.card, border: "1px solid var(--border)", borderRadius: 10, fontFamily: SANS, fontSize: 11, color: V.fg };
@@ -188,9 +189,8 @@ export function AdminDashboard() {
     return (
       <AdminShell>
         {header}
-        <div className="py-24 text-center" style={{ fontFamily: SANS, fontSize: 13, color: V.mutedFg }}>
-          {stalled ? t("adash.reconnecting") : t("adash.loadingDashboard")}
-        </div>
+        {stalled && <p className="mb-3 text-center" style={{ fontFamily: SANS, fontSize: 13, color: V.mutedFg }}>{t("adash.reconnecting")}</p>}
+        <ContentSkeleton variant="chart" />
       </AdminShell>
     );
   }

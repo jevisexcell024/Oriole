@@ -27,13 +27,15 @@ type TFn = ReturnType<typeof useT>;
 // instead of a fixed dark palette, matching Dashboard.tsx's convention.
 const CARD = "var(--card)";
 const LIME = "var(--color-brand-500)";
+// Lime as text/icon colour: deeper olive in light mode (see --lime-text in index.css).
+const LIME_TEXT = "var(--lime-text)";
 const BORDER = "var(--border)";
-const BARLOW = "'Barlow Condensed', sans-serif";
-const MONO = "'DM Mono', monospace";
+const BARLOW = "'Manrope', sans-serif";
+const MONO = "'Manrope', sans-serif";
 
 const PRIORITY_META: Record<Ann["priority"], { color: string; bg: string; icon: typeof AlertTriangle; labelKey: string }> = {
   urgent: { color: "#ef4444", bg: "rgba(239,68,68,0.14)", icon: AlertTriangle, labelKey: "ann.urgent" },
-  normal: { color: LIME, bg: "color-mix(in oklch, var(--color-brand-500) 14%, transparent)", icon: Megaphone, labelKey: "ann.normal" },
+  normal: { color: LIME_TEXT, bg: "color-mix(in oklch, var(--color-brand-500) 14%, transparent)", icon: Megaphone, labelKey: "ann.normal" },
   high: { color: "#3b82f6", bg: "rgba(59,130,246,0.14)", icon: Info, labelKey: "ann.high" },
 };
 
@@ -176,7 +178,7 @@ export function StudentAnnouncements() {
                 key={tb.key}
                 onClick={() => setFilter(tb.key)}
                 className="-mb-px flex items-center gap-1.5 border-b-2 pb-2.5 text-sm font-medium transition"
-                style={filter === tb.key ? { borderColor: LIME, color: LIME } : { borderColor: "transparent", color: "var(--muted)" }}
+                style={filter === tb.key ? { borderColor: LIME, color: LIME_TEXT } : { borderColor: "transparent", color: "var(--muted)" }}
               >
                 {t(tb.labelKey)}
                 <span className="text-[11px]" style={{ fontFamily: MONO }}>
@@ -195,7 +197,7 @@ export function StudentAnnouncements() {
 
         {pinned.length > 0 && (
           <div className="mt-5">
-            <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: LIME, fontFamily: MONO }}>
+            <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: LIME_TEXT, fontFamily: MONO }}>
               <Pin className="h-3 w-3" /> {t("ann.pinned")}
             </div>
             <div className="space-y-3">
@@ -252,7 +254,7 @@ function AnnCard({ a, t, expanded, onToggle, onMarkRead }: { a: Ann; t: TFn; exp
 
       <p className={clsx("mt-3 whitespace-pre-line text-sm text-[var(--fg)]", !expanded && "line-clamp-2")}>{a.message}</p>
       {long && (
-        <button onClick={onToggle} className="mt-1 text-xs font-medium" style={{ color: LIME }}>
+        <button onClick={onToggle} className="mt-1 text-xs font-medium" style={{ color: LIME_TEXT }}>
           {expanded ? t("ann.showLess") : t("ann.readMore")}
         </button>
       )}
@@ -271,7 +273,7 @@ function AnnCard({ a, t, expanded, onToggle, onMarkRead }: { a: Ann; t: TFn; exp
               <Check className="h-3 w-3" /> {t("ann.markAsRead")}
             </span>
           ) : (
-            <button onClick={onMarkRead} className="inline-flex items-center gap-1 transition hover:text-[var(--fg)]" style={{ color: LIME }}>
+            <button onClick={onMarkRead} className="inline-flex items-center gap-1 transition hover:text-[var(--fg)]" style={{ color: LIME_TEXT }}>
               <Check className="h-3 w-3" /> {t("ann.markAsRead")}
             </button>
           )}

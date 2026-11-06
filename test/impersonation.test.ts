@@ -40,23 +40,28 @@ function mockRes() {
 function mockReq(cookies: Record<string, string>): Request {
   return { cookies } as unknown as Request;
 }
+// issueSession() now also records a real AuthSession row (server/sessions.ts),
+// which needs req.ip and req.get("user-agent").
+function mockIssueReq(): Request {
+  return { ip: "127.0.0.1", get: () => "vitest" } as unknown as Request;
+}
 
 describe("Impersonation session tagging (server/auth.ts)", () => {
-  it("an ordinary session (no impersonatorId) reports no impersonator", () => {
+  it("an ordinary session (no impersonatorId) reports no impersonator", async () => {
     const u = user();
     db.data!.users.push(u);
     const { res, cookies } = mockRes();
-    issueSession(res, u);
+    await issueSession(mockIssueReq(), res, u);
     expect(currentUser(mockReq(cookies))?.id).toBe(u.id);
     expect(currentImpersonatorId(mockReq(cookies))).toBeNull();
   });
 
-  it("a session issued with an impersonatorId still resolves to the real target user", () => {
+  it("a session issued with an impersonatorId still resolves to the real target user", async () => {
     const u = user();
     db.data!.users.push(u);
     const superAdminId = "sa_" + Math.random().toString(36).slice(2);
     const { res, cookies } = mockRes();
-    issueSession(res, u, superAdminId);
+    await issueSession(mockIssueReq(), res, u, { impersonatorId: superAdminId });
     // The session is a fully real, working session for the impersonated
     // admin — impersonation doesn't change who currentUser() resolves to,
     // only adds a breadcrumb of who's actually driving it.

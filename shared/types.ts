@@ -5,6 +5,41 @@ export type { GradeScale, GradeBand } from "./grades.ts";
 
 export type Role = "candidate" | "admin" | "facilitator" | "proctor";
 
+/** A real, individually-visible/revocable login session — one row per issued
+ *  JWT (embedded as its `sid` claim), for both tenant users and Super Admins
+ *  (distinguished by `ownerType`, one table rather than two parallel ones).
+ *  tokenVersion (on User/SuperAdmin) already does "revoke everything at once";
+ *  this is the finer-grained "see my devices, kill just this one" layer on
+ *  top of it — checked against the in-memory mirror on every request, same
+ *  cost as the existing user/tenant lookups, not an extra DB round-trip. */
+/** One real, persisted platform notification — the single source of truth
+ *  across every category, instead of a separate ad-hoc system per module.
+ *  One row per actual recipient (not a broadcast row with per-user read
+ *  tracking) — simpler, and correct for every real trigger this app has. */
+export interface PlatformNotification {
+  id: string;
+  recipientType: "user" | "superAdmin";
+  recipientId: string;
+  category: "system" | "maintenance" | "security" | "billing" | "tenant" | "license";
+  title: string;
+  body: string;
+  severity: "info" | "warning" | "critical";
+  link?: string;
+  createdAt: string;
+  readAt?: string | null;
+}
+
+export interface AuthSession {
+  id: string;
+  ownerType: "user" | "superAdmin";
+  ownerId: string;
+  userAgent: string;
+  ip: string;
+  createdAt: string;
+  lastSeenAt: string;
+  revokedAt?: string | null;
+}
+
 /** One school/organization on the platform — the unit every tenant-scoped
  *  record (User, Exam, ...) belongs to. Named "Tenant" rather than
  *  "Institution" because that word already means the internal structure of
@@ -213,6 +248,15 @@ export interface SuperAdmin {
    *  a tenant's data, creating/suspending tenants, managing Super Admin
    *  team members, and issuing/revoking license keys. See requireSuperAdminOwner. */
   role?: "owner" | "support";
+  // ── Two-factor authentication (TOTP authenticator app) — same shape and
+  // at-rest encryption as User's below; a platform-operator account is at
+  // least as sensitive as any tenant account, so it gets the same real
+  // second factor, not a weaker or fabricated one. ──
+  twoFactorEnabled?: boolean;
+  twoFactorSecret?: string | null;
+  twoFactorPending?: string | null;
+  twoFactorBackupCodes?: string[];
+  twoFactorLastStep?: number | null;
 }
 
 /** Client-facing DTO for SuperAdmin — no passwordHash, mirrors SafeUser below. */
@@ -222,6 +266,7 @@ export interface SafeSuperAdmin {
   name: string;
   mustChangePassword?: boolean;
   role: "owner" | "support";
+  twoFactorEnabled?: boolean;
 }
 
 /** Row shape for the Super Admin team list — unlike SafeSuperAdmin (which is
@@ -711,6 +756,11 @@ export interface Attempt {
   pausedAt?: string | null;
   /** Accumulated paused time (ms), added to the deadline so paused time isn't lost. */
   pausedMs?: number;
+  /** Why the attempt is paused: a proctor-granted rest "break" (an accommodation) or an ordinary proctor pause. */
+  pauseReason?: "break" | "proctor" | null;
+  /** After any pause ends, integrity flags are ignored until this time (ISO), so a student coming back from
+   *  a break is not penalised for the moment it takes to settle back in (return to full screen, face the camera). */
+  eventGraceUntil?: string | null;
   /** Set when a proctor force-submitted the attempt. */
   terminated?: boolean;
   terminationReason?: string | null;

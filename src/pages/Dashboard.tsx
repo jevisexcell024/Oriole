@@ -10,6 +10,7 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import type { ExamListItem } from "@shared/types";
 import { clsx } from "clsx";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 // ── Design tokens ── theme-aware: these track the app's light/dark CSS
 // variables (src/index.css) instead of a fixed dark palette, so the toggle
@@ -19,6 +20,8 @@ const CARD = "var(--card)";
 const SURFACE = "var(--card-2)";
 const DEEP = "var(--border-strong)";
 const LIME = "var(--color-brand-500)";
+// Lime used as TEXT/icon colour: same bright lime on dark, a deeper shade of the brand colour on light, where plain lime on white is nearly unreadable.
+const LIME_TEXT = "var(--lime-text)";
 const CYAN = "#22d3ee";
 const PURPLE = "#c084fc";
 const AMBER = "#f59e0b";
@@ -27,9 +30,9 @@ const FG = "var(--fg)";
 const DIM = "var(--muted)";
 const DESTRUCTIVE = "#ef4444";
 const BORDER = "var(--border)";
-const FONT = "'Inter', sans-serif";
-const BARLOW = "'Barlow Condensed', sans-serif";
-const MONO = "'DM Mono', monospace";
+const FONT = "'Manrope', sans-serif";
+const BARLOW = "'Manrope', sans-serif";
+const MONO = "'Manrope', sans-serif";
 const SUBJECT_COLORS = [LIME, CYAN, PURPLE, AMBER];
 
 interface Summary { enrolled: number; completed: number; pending: number; awaitingApproval: number; avgScore: number | null; passed: number; streak: number; }
@@ -174,12 +177,7 @@ export function Dashboard() {
     <Shell>
       <div className="fade-in -m-4 sm:-m-6 px-6 py-6 lg:px-10 lg:py-8" style={{ background: BG, fontFamily: FONT, minHeight: "calc(100vh - 69px)" }}>
         {loading ? (
-          <div className="space-y-4">
-            <Skeleton className="h-24 rounded-2xl" />
-            <Skeleton className="h-56 rounded-2xl" />
-            <Skeleton className="h-72 rounded-2xl" />
-            <Skeleton className="h-72 rounded-2xl" />
-          </div>
+          <ContentSkeleton variant="dashboard" className="mt-0" />
         ) : (
           // Main column (left) + a fixed-width right rail — calendar and
           // upcoming exams live there, everything else flows in the main
@@ -201,7 +199,7 @@ export function Dashboard() {
                 className="group flex items-center gap-4 rounded-[22px] px-5 py-4 shadow-[0_8px_30px_rgba(15,23,42,0.05)] transition-shadow duration-200 hover:shadow-[0_12px_36px_rgba(15,23,42,0.08)]"
                 style={{ background: CARD, border: `1px solid ${BORDER}` }}>
                 <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl" style={{ background: "color-mix(in oklch, var(--color-brand-500) 12%, transparent)" }}>
-                  <BookOpen className="h-5 w-5" style={{ color: LIME }} />
+                  <BookOpen className="h-5 w-5" style={{ color: LIME_TEXT }} />
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block" style={{ fontSize: 13.5, fontWeight: 600, color: FG }}>Your Study Toolkit</span>
@@ -223,7 +221,7 @@ export function Dashboard() {
                   <div className="flex items-start justify-between">
                     <PanelTitle title="Hours Activity" sub="Time spent in exams · last 7 days" />
                     {weekOverWeekPct !== null && (
-                      <span className="flex items-center gap-1 rounded-md" style={{ fontSize: 10, fontWeight: 600, color: weekOverWeekPct >= 0 ? LIME : DESTRUCTIVE, background: weekOverWeekPct >= 0 ? "color-mix(in oklch, var(--color-brand-500) 9%, transparent)" : `${DESTRUCTIVE}18`, padding: "3px 8px" }}>
+                      <span className="flex items-center gap-1 rounded-md" style={{ fontSize: 10, fontWeight: 600, color: weekOverWeekPct >= 0 ? LIME_TEXT : DESTRUCTIVE, background: weekOverWeekPct >= 0 ? "color-mix(in oklch, var(--color-brand-500) 9%, transparent)" : `${DESTRUCTIVE}18`, padding: "3px 8px" }}>
                         {weekOverWeekPct >= 0 ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />} {weekOverWeekPct >= 0 ? "+" : ""}{weekOverWeekPct}% vs last week
                       </span>
                     )}
@@ -261,7 +259,7 @@ export function Dashboard() {
                         className="rounded-lg py-1.5 pl-8 pr-3 text-xs outline-none"
                         style={{ background: SURFACE, border: `1px solid ${BORDER}`, color: FG, width: 180 }} />
                     </div>
-                    <Link to="/exams" style={{ color: LIME, fontSize: 12 }} className="whitespace-nowrap hover:opacity-70">View all →</Link>
+                    <Link to="/exams" style={{ color: LIME_TEXT, fontSize: 12 }} className="whitespace-nowrap hover:opacity-70">View all →</Link>
                   </div>
                 </div>
 
@@ -297,7 +295,7 @@ export function Dashboard() {
                     <div className="flex" style={{ gap: 2 }}>
                       {([["active", "Active"], ["all", "All"]] as const).map(([key, label]) => (
                         <button key={key} onClick={() => setActiveOnly(key === "active")} className="transition"
-                          style={{ padding: "4px 10px", borderRadius: 999, fontSize: 11, background: (activeOnly ? "active" : "all") === key ? "color-mix(in oklch, var(--color-brand-500) 12%, transparent)" : "transparent", color: (activeOnly ? "active" : "all") === key ? LIME : DIM }}>
+                          style={{ padding: "4px 10px", borderRadius: 999, fontSize: 11, background: (activeOnly ? "active" : "all") === key ? "color-mix(in oklch, var(--color-brand-500) 12%, transparent)" : "transparent", color: (activeOnly ? "active" : "all") === key ? LIME_TEXT : DIM }}>
                           {label}
                         </button>
                       ))}
@@ -319,7 +317,7 @@ export function Dashboard() {
                             <BookOpen className="h-4 w-4" style={{ color }} />
                           </span>
                           <div className="min-w-0 flex-1">
-                            <p className="truncate transition group-hover:text-brand-400" style={{ fontSize: 12.5, fontWeight: 500, color: FG }}>{it.exam.title}</p>
+                            <p className="truncate transition group-hover:text-[var(--lime-text)]" style={{ fontSize: 12.5, fontWeight: 500, color: FG }}>{it.exam.title}</p>
                             <p className="mt-0.5 truncate" style={{ fontFamily: MONO, fontSize: 10.5, color: DIM }}>{it.exam.subject ?? "General"} · {subLabel}</p>
                             <div className="mt-1.5 h-1 w-full" style={{ background: DEEP, borderRadius: 2 }}>
                               <div className="h-full transition-[width] duration-500" style={{ width: `${pct}%`, background: color, borderRadius: 2 }} />
@@ -373,7 +371,7 @@ export function Dashboard() {
                           <BookOpen className="h-4 w-4" style={{ color }} />
                         </span>
                         <div className="min-w-0 flex-1">
-                          <p className="truncate transition group-hover:text-brand-400" style={{ fontSize: 12.5, fontWeight: 500, color: FG }}>{it.exam.title}</p>
+                          <p className="truncate transition group-hover:text-[var(--lime-text)]" style={{ fontSize: 12.5, fontWeight: 500, color: FG }}>{it.exam.title}</p>
                           <p className="mt-0.5 truncate" style={{ fontFamily: MONO, fontSize: 10.5, color: DIM }}>
                             {d.toLocaleDateString(undefined, { month: "short", day: "numeric" })} · {d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
                           </p>
@@ -393,7 +391,7 @@ export function Dashboard() {
 }
 
 const CHECKLIST_META: Record<"completed" | "in_progress" | "upcoming", { label: string; color: string; icon: typeof CheckCircle2 }> = {
-  completed: { label: "Completed", color: LIME, icon: CheckCircle2 },
+  completed: { label: "Completed", color: LIME_TEXT, icon: CheckCircle2 },
   in_progress: { label: "In progress", color: AMBER, icon: Clock },
   upcoming: { label: "Upcoming", color: BLUE, icon: Circle },
 };
@@ -422,7 +420,7 @@ function GlanceCard({ icon: Icon, label, value, sub }: { icon: typeof TrendingUp
     <div className="flex items-center gap-3.5 rounded-[22px] p-4 shadow-[0_8px_30px_rgba(15,23,42,0.05)] transition-[box-shadow,transform] duration-200 hover:-translate-y-0.5 hover:shadow-[0_12px_36px_rgba(15,23,42,0.08)]"
       style={{ background: CARD, border: `1px solid ${BORDER}` }}>
       <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl" style={{ background: "color-mix(in oklch, var(--color-brand-500) 12%, transparent)" }}>
-        <Icon className="h-5 w-5" style={{ color: LIME }} />
+        <Icon className="h-5 w-5" style={{ color: LIME_TEXT }} />
       </span>
       <div className="min-w-0">
         <p style={{ fontSize: 10, color: DIM, textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</p>
@@ -456,7 +454,7 @@ function ProgressRing({ pct }: { pct: number }) {
 function CourseCard({ it, color }: { it: ExamListItem; color: string }) {
   const done = it.attempt?.status === "submitted";
   const active = it.attempt?.status === "in_progress";
-  const statusMeta = done ? { label: "Completed", color: LIME } : active ? { label: "In progress", color: AMBER } : { label: "Not started", color: DIM };
+  const statusMeta = done ? { label: "Completed", color: LIME_TEXT } : active ? { label: "In progress", color: AMBER } : { label: "Not started", color: DIM };
   return (
     <Link to={done && it.attempt ? `/attempts/${it.attempt.id}/result` : `/exams/${it.registration.id}/checkin`}
       className="group flex h-[188px] flex-col justify-between rounded-2xl p-4 shadow-[0_8px_30px_rgba(15,23,42,0.05)] transition-[box-shadow,transform] duration-200 hover:-translate-y-0.5 hover:shadow-[0_12px_36px_rgba(15,23,42,0.08)]"
@@ -465,7 +463,7 @@ function CourseCard({ it, color }: { it: ExamListItem; color: string }) {
         <span className="flex h-9 w-9 items-center justify-center rounded-lg" style={{ background: `${color}18` }}>
           <BookOpen className="h-4 w-4" style={{ color }} />
         </span>
-        <p className="mt-3 line-clamp-2 transition group-hover:text-brand-400" style={{ fontSize: 13.5, fontWeight: 600, color: FG, lineHeight: 1.3 }}>{it.exam.title}</p>
+        <p className="mt-3 line-clamp-2 transition group-hover:text-[var(--lime-text)]" style={{ fontSize: 13.5, fontWeight: 600, color: FG, lineHeight: 1.3 }}>{it.exam.title}</p>
         <p className="mt-1" style={{ fontFamily: MONO, fontSize: 10.5, color: DIM }}>{it.exam.subject ?? "General"}</p>
       </div>
       <div className="flex items-center justify-between">
@@ -527,7 +525,7 @@ function MiniCalendar({ exams }: { exams: ExamListItem[] }) {
           return (
             <Link key={i} to={byDay.get(key(d))?.[0] ? `/exams/${byDay.get(key(d))![0].registration.id}/checkin` : "/calendar"}
               className="flex flex-col items-center justify-center gap-1 transition hover:opacity-80">
-              <span className="flex items-center justify-center font-medium transition" style={{ fontFamily: MONO, width: 26, height: 26, borderRadius: "50%", fontSize: 11, background: isToday ? LIME : "transparent", color: isToday ? "var(--brand-ink)" : has ? LIME : inMonth ? FG : "color-mix(in oklch, var(--muted) 55%, transparent)", fontWeight: isToday ? 700 : 400 }}>
+              <span className="flex items-center justify-center font-medium transition" style={{ fontFamily: MONO, width: 26, height: 26, borderRadius: "50%", fontSize: 11, background: isToday ? LIME : "transparent", color: isToday ? "var(--brand-ink)" : has ? LIME_TEXT : inMonth ? FG : "color-mix(in oklch, var(--muted) 55%, transparent)", fontWeight: isToday ? 700 : 400 }}>
                 {d.getDate()}
               </span>
             </Link>
@@ -538,7 +536,7 @@ function MiniCalendar({ exams }: { exams: ExamListItem[] }) {
         <span className="flex items-center gap-1.5" style={{ fontSize: 11, color: DIM }}>
           <span style={{ width: 6, height: 6, borderRadius: "50%", background: LIME }} /> {[...byDay.values()].reduce((s, v) => s + v.length, 0)} exam day{[...byDay.values()].length === 1 ? "" : "s"}
         </span>
-        <Link to="/calendar" style={{ color: LIME, fontSize: 11 }} className="hover:opacity-70">Full calendar →</Link>
+        <Link to="/calendar" style={{ color: LIME_TEXT, fontSize: 11 }} className="hover:opacity-70">Full calendar →</Link>
       </div>
     </Panel>
   );

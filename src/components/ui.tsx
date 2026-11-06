@@ -23,9 +23,11 @@ export function SuperAdminStatCard({ icon: Icon, label, value, note }: { icon: C
   );
 }
 
-/** A single shimmering placeholder block. Compose these to mirror real layout. */
+/** A single shimmering placeholder block. Compose these to mirror real layout.
+ *  Uses the theme-aware `.skeleton` fill (index.css) — the old white-alpha fill
+ *  vanished on the light canvas. */
 export function Skeleton({ className }: { className?: string }) {
-  return <div className={clsx("animate-pulse rounded-md bg-white/[0.06]", className)} />;
+  return <div className={clsx("skeleton animate-pulse rounded-md", className)} />;
 }
 
 /**
@@ -78,11 +80,12 @@ export function EmptyState({
   );
 }
 
-/** Centered modal dialog with a click-outside-to-dismiss scrim. Body scroll is
- *  the caller's concern; this only owns the overlay/panel chrome. */
+/** Centered modal dialog. Only the X (or the caller's own buttons) closes it —
+ *  clicking the scrim does nothing, so a stray click can't discard work. Body
+ *  scroll is the caller's concern; this only owns the overlay/panel chrome. */
 export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
       <div className="w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between"><h2 className="text-lg font-bold">{title}</h2><button onClick={onClose} className="rounded-lg p-1 text-[var(--muted)] hover:bg-white/[0.05]"><X className="h-5 w-5" /></button></div>
         {children}

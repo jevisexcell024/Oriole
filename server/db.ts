@@ -1,4 +1,6 @@
-import { PGlite } from "@electric-sql/pglite";
+// Type only: the embedded database module is loaded on demand (see openPglite), so a
+// production server using PostgreSQL never pays for parsing/holding it in memory.
+import type { PGlite } from "@electric-sql/pglite";
 import bcrypt from "bcryptjs";
 import { nanoid } from "nanoid";
 import path from "node:path";
@@ -14,7 +16,7 @@ import type {
   Faculty, Department, Program, Campus, AcademicYear, ClassGroup, RegradeRequest, Book, ReadingProgress,
   ResourceVersion, ResourceBookmark, ResourceRating, ResourceDownloadLog, GeofenceLog, CustomRole,
   ReliabilityIncident, ReliabilitySample, ReliabilityDailyRollup, ReliabilitySubsystemKey, MediaAsset, SuperAdmin,
-  PlatformMaintenance, EmailTemplate, SupportTicket, Tenant, Plan, LicenseKey, MaintenanceWindow, PlatformBranding, TenantRequest,
+  PlatformMaintenance, EmailTemplate, SupportTicket, Tenant, Plan, LicenseKey, MaintenanceWindow, PlatformBranding, TenantRequest, AuthSession, PlatformNotification,
 } from "../shared/types.ts";
 import { DEFAULT_LOCKDOWN, DEFAULT_LEARNING_STRUCTURE } from "../shared/types.ts";
 
@@ -30,6 +32,16 @@ export interface Schema {
   // server/superAdminAuth.ts). Its own audit trail lives off-mirror as
   // superAdminAuditStore, mirroring auditStore below but never sharing a table.
   superAdmins: SuperAdmin[];
+  // Real, individually-revocable login sessions — one row per issued JWT (see
+  // AuthSession's doc comment in shared/types.ts). Kept in the full mirror
+  // (not off-mirror like snapshots/answers below) because every authenticated
+  // request needs an O(1) in-memory revocation check, not a DB round-trip.
+  authSessions: AuthSession[];
+  // Real, persisted platform notifications — see PlatformNotification's doc
+  // comment. One source of truth across every category, merged into the
+  // tenant-user-facing feed at GET /api/notifications and served fresh for
+  // Super Admins at GET /api/super-admin/notifications.
+  platformNotifications: PlatformNotification[];
   // Single row (id: "platform"), read on every /api/* request by the
   // maintenance gate middleware — see PlatformMaintenance's doc comment.
   maintenance: PlatformMaintenance[];
@@ -86,7 +98,7 @@ const gunzipAsync = promisify(gunzip);
 
 const defaultData: Schema = {
   tenants: [],
-  users: [], superAdmins: [], maintenance: [], emailTemplates: [], supportTickets: [], plans: [], licenseKeys: [], tenantRequests: [], maintenanceWindows: [], branding: [], exams: [], questions: [], registrations: [],
+  users: [], superAdmins: [], authSessions: [], platformNotifications: [], maintenance: [], emailTemplates: [], supportTickets: [], plans: [], licenseKeys: [], tenantRequests: [], maintenanceWindows: [], branding: [], exams: [], questions: [], registrations: [],
   attempts: [], certificates: [], announcements: [],
   settings: [],
   faculties: [], departments: [], programs: [], campuses: [], academicYears: [], classes: [], regradeRequests: [],
@@ -104,6 +116,8 @@ const TABLES: { key: keyof Schema; table: string; idField: string }[] = [
   { key: "tenants", table: "tenants", idField: "id" },
   { key: "users", table: "users", idField: "id" },
   { key: "superAdmins", table: "super_admins", idField: "id" },
+  { key: "authSessions", table: "auth_sessions", idField: "id" },
+  { key: "platformNotifications", table: "platform_notifications", idField: "id" },
   { key: "maintenance", table: "platform_maintenance", idField: "id" },
   { key: "emailTemplates", table: "email_templates", idField: "id" },
   { key: "supportTickets", table: "support_tickets", idField: "id" },
@@ -169,7 +183,9 @@ async function createBackend(overrideDataDir?: string): Promise<Backend> {
     const Pool = (pgModule.Pool ?? pgModule.default!.Pool);
     const pool = new Pool({
       connectionString: url,
-      max: Number(process.env.DATABASE_POOL_MAX ?? 10),
+      // 5 is plenty for short queries and keeps this app's share of the database server's
+      // connection/process limit small on shared hosting. Raise via DATABASE_POOL_MAX if needed.
+      max: Number(process.env.DATABASE_POOL_MAX ?? 5),
       ssl: process.env.DATABASE_SSL === "false" ? undefined : { rejectUnauthorized: false },
     });
     return {
@@ -224,8 +240,14 @@ interface PgPool {
  * On init failure we remove the stale lock and retry exactly once.
  */
 async function openPglite(dataDir: string): Promise<PGlite> {
+  let PGliteCtor: typeof import("@electric-sql/pglite").PGlite;
+  try {
+    ({ PGlite: PGliteCtor } = await import("@electric-sql/pglite"));
+  } catch {
+    throw new Error("No DATABASE_URL is set and the embedded database package is not installed. Set DATABASE_URL to your PostgreSQL connection string.");
+  }
   const attempt = async () => {
-    const inst = new PGlite(dataDir);
+    const inst = new PGliteCtor(dataDir);
     await inst.query("select 1"); // force init so failures surface here
     return inst;
   };
@@ -247,6 +269,42 @@ const be = () => {
   return backend;
 };
 
+// ── Single-process guard ──
+// The in-memory mirror below is per process: if a host starts a SECOND copy of this app
+// against the same database, each copy would serve from its own (diverging) memory — one
+// can answer "attempt not found" for an exam the other started. Holding a PostgreSQL
+// advisory lock on a dedicated connection lets the second copy notice and say so loudly.
+let instanceConflict = false;
+let instanceLockClient: { end: () => Promise<void> } | null = null;
+export const hasInstanceConflict = () => instanceConflict;
+/** Returns false if another process already holds the lock (or true / not applicable). */
+export async function claimInstanceLock(): Promise<boolean> {
+  const url = process.env.DATABASE_URL;
+  if (!url || be().kind !== "postgres") return true;
+  try {
+    const pgModule = (await import("pg")) as unknown as {
+      default?: { Client: new (cfg: unknown) => PgClient };
+      Client?: new (cfg: unknown) => PgClient;
+    };
+    const Client = pgModule.Client ?? pgModule.default!.Client;
+    const client = new Client({ connectionString: url, ssl: process.env.DATABASE_SSL === "false" ? undefined : { rejectUnauthorized: false } });
+    await client.connect();
+    const { rows } = await client.query("select pg_try_advisory_lock(727001) as ok");
+    if (rows[0]?.ok) { instanceLockClient = client; return true; }
+    await client.end();
+    instanceConflict = true;
+    return false;
+  } catch {
+    return true; // never block startup over a diagnostic
+  }
+}
+interface PgClient {
+  connect: () => Promise<void>;
+  query: (sql: string) => Promise<{ rows: { ok?: boolean }[] }>;
+  end: () => Promise<void>;
+}
+export async function releaseInstanceLock() { try { await instanceLockClient?.end(); } catch { /* ignore */ } instanceLockClient = null; }
+
 // Serializes full-mirror flushes: the delete-then-reinsert in write() is not
 // safe to run concurrently on a real (non-PGlite) backend — two overlapping
 // flushes race on the same rows. Chaining them makes write() atomic per process.
@@ -257,6 +315,15 @@ export const db: {
   read: () => Promise<void>;
   write: () => Promise<void>;
   upsert: <K extends keyof Schema>(key: K, item: Schema[K][number]) => Promise<void>;
+  /** Runs `fn` inside a real database transaction — every `tx.upsert()` call
+   *  inside it commits together or not at all (ROLLBACK + rethrow on any
+   *  error). For a multi-table write that must never partially succeed (e.g.
+   *  creating a tenant + its settings + its admin user as one unit).
+   *  Only writes SQL rows — it deliberately does NOT touch db.data's
+   *  in-memory mirror. Update db.data yourself, and only AFTER this resolves
+   *  successfully: mutating it inside `fn` (or before awaiting this call)
+   *  would leave the in-memory mirror ahead of the database on a rollback. */
+  transaction: (fn: (tx: { upsert: <K extends keyof Schema>(key: K, item: Schema[K][number]) => Promise<void> }) => Promise<void>) => Promise<void>;
   remove: (key: keyof Schema, id: string) => Promise<void>;
   removeMany: (key: keyof Schema, ids: string[]) => Promise<void>;
   close: () => Promise<void>;
@@ -304,6 +371,21 @@ export const db: {
       [id, JSON.stringify(item)],
     );
   },
+  async transaction(fn) {
+    await be().transaction(async (tx) => {
+      await fn({
+        async upsert(key, item) {
+          const meta = TABLE_BY_KEY.get(key)!;
+          const id = String((item as unknown as Record<string, unknown>)[meta.idField]);
+          await tx.query(
+            `insert into ${meta.table}(id, doc) values ($1, $2::jsonb)
+             on conflict (id) do update set doc = excluded.doc`,
+            [id, JSON.stringify(item)],
+          );
+        },
+      });
+    });
+  },
   async remove(key, id) {
     const meta = TABLE_BY_KEY.get(key)!;
     await be().query(`delete from ${meta.table} where id = $1`, [String(id)]);
@@ -338,6 +420,21 @@ export async function dumpAll(): Promise<Record<string, unknown[]>> {
     out[table] = rows.map((r) => r.doc);
   }
   return out;
+}
+
+/** Same data as dumpAll(), but yielded one table at a time so a backup never holds the
+ *  whole database in memory at once. `skip` leaves named tables out (e.g. "snapshots"). */
+export async function* dumpEach(skip: string[] = []): AsyncGenerator<[string, unknown[]]> {
+  for (const { key, table } of TABLES) {
+    if (skip.includes(key)) continue;
+    const { rows } = await be().query<{ doc: unknown }>(`select doc from ${table}`);
+    yield [key, rows.map((r) => r.doc)];
+  }
+  for (const table of OFF_MIRROR_TABLES) {
+    if (skip.includes(table)) continue;
+    const { rows } = await be().query<{ doc: unknown }>(`select doc from ${table}`);
+    yield [table, rows.map((r) => r.doc)];
+  }
 }
 
 // Tenant-scoped mirrored collections eligible for the Super Admin export/delete
@@ -438,6 +535,18 @@ export const snapshotStore = {
     const { rows } = await be().query<{ doc: Snapshot }>(
       `select doc from snapshots where attempt_id = $1 order by at desc limit 1`, [attemptId]);
     return rows[0]?.doc ?? null;
+  },
+  /** Newest frame for each of several attempts in ONE query. The live monitor used to
+   *  run a separate query per candidate on every refresh — dozens of simultaneous
+   *  queries every few seconds for a large exam. */
+  async latestForAttempts(attemptIds: string[]): Promise<Map<string, Snapshot>> {
+    const out = new Map<string, Snapshot>();
+    if (attemptIds.length === 0) return out;
+    const { rows } = await be().query<{ attempt_id: string; doc: Snapshot }>(
+      `select distinct on (attempt_id) attempt_id, doc from snapshots
+         where attempt_id = any($1::text[]) order by attempt_id, at desc`, [attemptIds]);
+    for (const r of rows) out.set(r.attempt_id, r.doc);
+    return out;
   },
   /** Keep only the most recent `cap` frames for an attempt; delete the rest. */
   async trim(attemptId: string, cap: number): Promise<void> {

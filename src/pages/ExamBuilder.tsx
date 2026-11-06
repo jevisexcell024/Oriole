@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   ArrowLeft, Eye, Send, Plus, Trash2, Copy, ChevronUp, ChevronDown, ChevronRight, ChevronLeft, Check,
@@ -20,6 +20,7 @@ import { GeofenceMap } from "@/components/GeofenceMap";
 import { MediaStimulus } from "@/components/MediaStimulus";
 import type { Exam, GeofenceCenter, LockdownConfig, Question, QuestionType, RubricCriterion } from "@shared/types";
 import { clsx } from "clsx";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 type SaveStatus = "idle" | "saving" | "saved";
 type Tab = "structure" | "settings" | "proctoring";
@@ -2173,7 +2174,7 @@ function PickFromBankModal({ excludeExamId, onClose, onAdd }: { excludeExamId: s
   const toggle = (id: string) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const confirm = async () => { if (!sel.size) return; setBusy(true); try { await onAdd([...sel]); } finally { setBusy(false); } };
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
       <div className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-2xl border border-[var(--border)] bg-[var(--card)] shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-3.5">
           <h2 className="inline-flex items-center gap-2 text-base font-bold"><Library className="h-5 w-5 text-brand-400" /> {t("eb.pickFromBank")}</h2>
@@ -2191,7 +2192,7 @@ function PickFromBankModal({ excludeExamId, onClose, onAdd }: { excludeExamId: s
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
           {!all ? (
-            <div className="flex items-center gap-2 p-6 text-sm text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("eb.loadingBank")}</div>
+            <ContentSkeleton variant="lines" className="p-6" />
           ) : filtered.length === 0 ? (
             <p className="p-6 text-center text-sm text-[var(--muted)]">{t("eb.noMatchingBank")}</p>
           ) : filtered.map((q) => {

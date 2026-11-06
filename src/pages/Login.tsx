@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ShieldCheck, Loader2, Mail, Lock, ArrowRight, Eye, EyeOff } from "lucide-react";
+import { Loader2, Mail, Lock, ArrowRight, Eye, EyeOff } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { landingFor } from "@/lib/roles";
 import { BrandMark } from "@/components/BrandMark";
@@ -88,19 +88,15 @@ export function Login() {
       <LoginHeroBackdrop {...hero} />
 
       <div className="relative z-10 grid w-full max-w-6xl grid-cols-1 gap-6 lg:grid-cols-[440px_1fr] lg:items-center">
-        {/* Glass card, with a soft brand-colored halo glowing around its edges
-           (heaviest bottom-right) — the "lit from within" rim light that
-           reads as thick glass rather than a flat translucent panel. */}
+        {/* Glass card — flat: no box-shadow, no glow. */}
         <div className="relative">
-          <div className="liquid-glass-halo" aria-hidden="true" />
           <div
             ref={cardRef}
             onPointerMove={onCardPointerMove}
-            className="liquid-glass relative z-10 flex flex-col rounded-[32px] border-2 px-8 py-8 shadow-2xl backdrop-blur-2xl backdrop-saturate-[200%] sm:px-10"
+            className="liquid-glass relative z-10 flex flex-col rounded-[32px] border-2 px-8 py-8 backdrop-blur-2xl backdrop-saturate-[200%] sm:px-10"
             style={{
               background: "var(--glass-surface)",
               borderColor: "var(--glass-border)",
-              boxShadow: "inset 0 1px 0 0 var(--glass-highlight), inset 0 0 40px 0 color-mix(in oklch, var(--color-brand-500) 8%, transparent), 0 25px 60px -12px rgba(0,0,0,0.5)",
             }}
           >
           {/* Brand lockup + language */}
@@ -134,7 +130,7 @@ export function Login() {
                       />
                     </div>
                     {error && <div role="alert" className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-500">{error}</div>}
-                    <button type="submit" disabled={busy} className="liquid-spring flex w-full items-center justify-center gap-2 rounded-full px-5 py-3 text-sm font-bold text-[var(--brand-ink)] shadow-sm transition hover:brightness-95 disabled:opacity-70" style={{ background: PURPLE }}>
+                    <button type="submit" disabled={busy} className="liquid-spring flex w-full items-center justify-center gap-2 rounded-full px-5 py-3 text-sm font-bold text-[var(--brand-ink)] transition hover:brightness-95 disabled:opacity-70" style={{ background: PURPLE }}>
                       {busy ? <><Loader2 className="h-4 w-4 animate-spin" /> {t("auth.verifying")}</> : <>{t("auth.verify")} <ArrowRight className="h-4 w-4" /></>}
                     </button>
                     <div className="text-center">
@@ -190,7 +186,7 @@ export function Login() {
                     <button
                       type="submit"
                       disabled={busy}
-                      className="liquid-spring flex w-full items-center justify-center gap-2 rounded-full px-5 py-3 text-sm font-bold text-[var(--brand-ink)] shadow-sm transition hover:brightness-95 disabled:opacity-70"
+                      className="liquid-spring flex w-full items-center justify-center gap-2 rounded-full px-5 py-3 text-sm font-bold text-[var(--brand-ink)] transition hover:brightness-95 disabled:opacity-70"
                       style={{ background: PURPLE }}
                     >
                       {busy ? <><Loader2 className="h-4 w-4 animate-spin" /> {t("auth.signingIn")}</> : <>{t("auth.signIn")} <ArrowRight className="h-4 w-4" /></>}
@@ -201,9 +197,12 @@ export function Login() {
                       </button>
                       <span className="text-[var(--muted)]">·</span>
                       <a href="/request-access" className="text-sm text-[var(--muted)] underline-offset-2 transition hover:text-[var(--fg)] hover:underline">
-                        New school? Request access
+                        Request access
                       </a>
                     </div>
+                    <p className="text-center text-xs text-[var(--muted)]">
+                      Student? <a href="/portal" className="font-semibold text-[var(--fg)] underline-offset-2 hover:underline">Go to the student portal</a>
+                    </p>
                   </form>
                 </>
               )}
@@ -212,7 +211,7 @@ export function Login() {
 
           {/* Footer */}
           <div className="flex items-center justify-center gap-1.5 text-[11px] text-[var(--muted)]">
-            <ShieldCheck className="h-3.5 w-3.5 text-brand-400" /> Secured by <span className="font-semibold text-[var(--fg)]">JevisLab</span> · Oriole
+            <BrandMark className="h-3.5 w-3.5 rounded-[3px]" /> Secured by <span className="font-semibold text-[var(--fg)]">JevisLab</span> · Oriole
           </div>
           </div>
         </div>

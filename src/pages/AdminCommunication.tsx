@@ -9,6 +9,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { api } from "@/lib/api";
 import { useT, type TFn } from "@/lib/i18n";
 import { clsx } from "clsx";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 type Tab = "announcements" | "compose" | "broadcast";
 type Channel = "in_app" | "email" | "sms" | "whatsapp";
@@ -114,7 +115,7 @@ function AnnouncementsTab({ t, anns, onNew, onReload }: { t: TFn; anns: Announce
   async function del(id: string) {
     try { await api.del(`/admin/announcements/${id}`); onReload(); } catch { /* ignore */ }
   }
-  if (!anns) return <div className="flex items-center gap-2 py-10 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div>;
+  if (!anns) return <ContentSkeleton variant="list" />;
   if (anns.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-[var(--border)] py-20 text-center">
@@ -193,7 +194,7 @@ function NewAnnouncementModal({ t, mailer, onClose, onCreated }: { t: TFn; maile
   const smsWarn = channels.includes("sms") || channels.includes("whatsapp");
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
       <div className="w-full max-w-lg rounded-2xl bg-[var(--card)] p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between">
           <div>
@@ -361,7 +362,7 @@ function BroadcastTab({ t, mailer }: { t: TFn; mailer: MailerStatus | null }) {
       )}
       <div className="card p-5">
         <h2 className="flex items-center gap-2 text-sm font-semibold"><Inbox className="h-4 w-4 text-brand-400" /> {t("acom.deliveryLog")} {emails && <span className="text-xs font-normal text-[var(--muted)]">· {emails.length}</span>}</h2>
-        {!emails ? <div className="mt-3 flex items-center gap-2 text-sm text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div>
+        {!emails ? <ContentSkeleton variant="lines" className="mt-3" />
           : emails.length === 0 ? <p className="mt-3 text-sm text-[var(--muted)]">{t("acom.nothingSent")}</p>
           : (
             <div className="mt-3 max-h-[480px] space-y-2 overflow-y-auto pr-1">

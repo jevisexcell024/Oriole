@@ -11,6 +11,7 @@ import { api } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import type { ExamListItem } from "@shared/types";
 import { clsx } from "clsx";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
 
@@ -93,7 +94,7 @@ export function Exams() {
     <Shell>
       <div className="fade-in">
         {error && <p className="text-sm text-rose-400">{error}</p>}
-        {!items && !error && <div className="flex items-center gap-2 py-16 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> Loading exams…</div>}
+        {!items && !error && <ContentSkeleton variant="exams" />}
 
         {items && items.length === 0 && (
           <div className="card mt-2 rounded-2xl p-12 text-center text-sm text-[var(--muted)]">You have no exams assigned yet.</div>
@@ -242,7 +243,7 @@ function ExamDetail({ it, now, user, perm, tab, setTab }: {
       <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-[1.4fr_1fr]">
         <div className="rounded-xl border border-[var(--border)] p-4">
           <div className="flex items-center justify-between">
-            <p className="inline-flex items-center gap-1.5 text-sm font-bold"><ShieldCheck className="h-4 w-4 text-brand-400" /> Readiness Center</p>
+            <p className="inline-flex items-center gap-1.5 text-sm font-bold"><ShieldCheck className="h-4 w-4 text-[var(--lime-text)]" /> Readiness Center</p>
             <span className={clsx("rounded-full px-2 py-0.5 text-[11px] font-semibold", readyPassed === ready.length ? "bg-emerald-500/15 text-emerald-500" : "bg-amber-500/15 text-amber-500")}>{readyPassed} / {ready.length} Passed</span>
           </div>
           <div className="mt-3 grid grid-cols-1 gap-x-4 gap-y-2 sm:grid-cols-2">
@@ -320,13 +321,13 @@ function ExamDetail({ it, now, user, perm, tab, setTab }: {
             {ex.resources && ex.resources.length > 0 && (
               <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
                 {ex.resources.map((r, i) => (
-                  <a key={i} href={r.url} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-xl border border-[var(--border)] p-3 text-sm font-semibold text-[var(--fg)] hover:bg-[var(--card-2)]"><Globe className="h-4 w-4 shrink-0 text-brand-400" /> <span className="truncate">{r.label || r.url}</span></a>
+                  <a key={i} href={r.url} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-xl border border-[var(--border)] p-3 text-sm font-semibold text-[var(--fg)] hover:bg-[var(--card-2)]"><Globe className="h-4 w-4 shrink-0 text-[var(--lime-text)]" /> <span className="truncate">{r.label || r.url}</span></a>
                 ))}
               </div>
             )}
             <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-              <Link to="/results" className="flex items-center gap-2 rounded-xl border border-[var(--border)] p-3 text-sm font-semibold text-[var(--fg)] hover:bg-[var(--card-2)]"><History className="h-4 w-4 text-brand-400" /> Past Results</Link>
-              <Link to="/announcements" className="flex items-center gap-2 rounded-xl border border-[var(--border)] p-3 text-sm font-semibold text-[var(--fg)] hover:bg-[var(--card-2)]"><BookOpen className="h-4 w-4 text-brand-400" /> Announcements</Link>
+              <Link to="/results" className="flex items-center gap-2 rounded-xl border border-[var(--border)] p-3 text-sm font-semibold text-[var(--fg)] hover:bg-[var(--card-2)]"><History className="h-4 w-4 text-[var(--lime-text)]" /> Past Results</Link>
+              <Link to="/announcements" className="flex items-center gap-2 rounded-xl border border-[var(--border)] p-3 text-sm font-semibold text-[var(--fg)] hover:bg-[var(--card-2)]"><BookOpen className="h-4 w-4 text-[var(--lime-text)]" /> Announcements</Link>
             </div>
           </div>
         )}

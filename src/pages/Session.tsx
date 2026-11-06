@@ -3,7 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import {
   Clock, ShieldCheck, AlertTriangle, Loader2, Send, ChevronLeft, ChevronRight, CircleDot, Circle,
   Lock, Maximize, EyeOff, Flag, Check, CloudOff, CloudUpload, X, CheckSquare, Square,
-  ChevronUp, ChevronDown, Upload, Pause as PauseIcon, MessageSquare, WifiOff, MapPin,
+  ChevronUp, ChevronDown, Upload, Pause as PauseIcon, MessageSquare, WifiOff, MapPin, Coffee, Volume2, VolumeX,
 } from "lucide-react";
 import { api, sendBeaconJson } from "@/lib/api";
 import { useProctoring } from "@/lib/proctoring";
@@ -11,6 +11,8 @@ import { useGeofenceMonitor } from "@/lib/geofence";
 import { useExamLockdown, type LockdownEvent } from "@/lib/lockdown";
 import { useWakeLock } from "@/lib/wakeLock";
 import { useAnswerSync } from "@/lib/useAnswerSync";
+import { useReadAloud, speechTextFor } from "@/lib/readAloud";
+import { useBreakMusic } from "@/lib/breakMusic";
 import { CodeAnswer } from "@/components/CodeAnswer";
 import { Calculator } from "@/components/Calculator";
 import { MediaStimulus } from "@/components/MediaStimulus";
@@ -20,6 +22,7 @@ import { MathText } from "@/lib/richtext";
 import { useT } from "@/lib/i18n";
 import type { Attempt, Exam, PublicQuestion } from "@shared/types";
 import { clsx } from "clsx";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 /** Parse a JSON-array answer value, padded to `len` slots. */
 function arrAnswer(value: string, len: number): string[] {
@@ -37,6 +40,10 @@ interface LoadResp {
   serverNow: string;  // server clock at load (ISO) — anchors the countdown
   codeRunner?: boolean; // whether the code Run/Test feature is enabled server-side
 }
+
+/** Text-size steps offered on the exam page, and where the choice is remembered. */
+const TEXT_SCALES = [1, 1.15, 1.3, 1.5] as const;
+const TEXT_SCALE_KEY = "orcalis-exam-text-scale";
 
 export function Session() {
   const t = useT();
@@ -61,6 +68,10 @@ export function Session() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [paused, setPaused] = useState(false);
   const pausedRef = useRef(false);
+  // "break" = a rest break granted by the proctor (accommodation); integrity flags are ignored
+  // while it lasts and for a minute after it ends (graceUntilRef), so it can never cost the student.
+  const [pauseReason, setPauseReason] = useState<"break" | "proctor" | null>(null);
+  const graceUntilRef = useRef(0);
   const [geofencePauseAuto, setGeofencePauseAuto] = useState(false);
   const [geofenceLocked, setGeofenceLocked] = useState(false);
   const [proctorMsgs, setProctorMsgs] = useState<{ id: string; text: string; at: string }[]>([]);
@@ -71,6 +82,35 @@ export function Session() {
   const [calcState, setCalcState] = useState<CalcState>(INITIAL_CALC_STATE);
 
   const sync = useAnswerSync(attemptId);
+  const reader = useReadAloud();
+  // Soft background music during a proctor-granted REST BREAK only (never a plain pause or a
+  // geofence pause). The student can switch it off on the break screen; the choice is remembered.
+  const [musicOn, setMusicOn] = useState<boolean>(() => { try { return localStorage.getItem("orcalis-break-music") !== "off"; } catch { return true; } });
+  useEffect(() => { try { localStorage.setItem("orcalis-break-music", musicOn ? "on" : "off"); } catch { /* storage unavailable */ } }, [musicOn]);
+  useBreakMusic(paused && pauseReason === "break" && !geofencePauseAuto && musicOn);
+  // Stop speaking when the question changes or the exam is paused.
+  useEffect(() => { reader.stop(); }, [idx, paused, reader.stop]);
+
+  // Text size the student chooses for themselves, remembered on this device. It works by
+  // scaling the page's root font size while the exam is open, so everything sized in rem
+  // (question text, answers, buttons, spacing) grows together; it is put back on exit.
+  const [textScale, setTextScale] = useState<number>(() => {
+    try {
+      const v = Number(localStorage.getItem(TEXT_SCALE_KEY));
+      return (TEXT_SCALES as readonly number[]).includes(v) ? v : 1;
+    } catch { return 1; }
+  });
+  useEffect(() => {
+    document.documentElement.style.fontSize = `${16 * textScale}px`;
+    try { localStorage.setItem(TEXT_SCALE_KEY, String(textScale)); } catch { /* storage unavailable */ }
+    return () => { document.documentElement.style.fontSize = ""; };
+  }, [textScale]);
+  const scaleIdx = Math.max(0, (TEXT_SCALES as readonly number[]).indexOf(textScale));
+  const stepScale = (dir: -1 | 1) => setTextScale(TEXT_SCALES[Math.min(TEXT_SCALES.length - 1, Math.max(0, scaleIdx + dir))]);
+
+  // Keep the current question's button visible inside the (scrollable) question list.
+  const paletteRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  useEffect(() => { paletteRefs.current[idx]?.scrollIntoView({ block: "nearest" }); }, [idx]);
 
   const onEvent = useCallback((e: LockdownEvent) => {
     if (!attemptId) return;
@@ -79,6 +119,8 @@ export function Session() {
     // teardown artefacts) being recorded when WE call exitFullscreen() as part
     // of finishing the exam. Real in-exam flags are unaffected.
     if (submittedRef.current) return;
+    // Paused (rest break) or just resumed: nothing counts. The server ignores these too.
+    if (pausedRef.current || Date.now() < graceUntilRef.current) return;
     // Beacon/keepalive delivery so a flag that triggers an immediate auto-submit
     // (and unmounts this page) is still recorded server-side rather than aborted.
     sendBeaconJson(`/attempts/${attemptId}/proctor-event`, e);
@@ -87,7 +129,7 @@ export function Session() {
     setViolationCount((c) => c + 1);
   }, [attemptId]);
 
-  const { videoRef, cameraReady, faceStatus } = useProctoring({ active: !!data && proctored && (ld?.webcam ?? true), onEvent, audioMonitoring: ld?.audioMonitoring });
+  const { videoRef, cameraReady, faceStatus } = useProctoring({ active: !!data && proctored && (ld?.webcam ?? true), onEvent, audioMonitoring: ld?.audioMonitoring && !reader.speaking });
   const lockdown = useExamLockdown({ active: !!data && proctored, onEvent, rules: ld });
   const geo = useGeofenceMonitor({
     active: !!data && proctored && !!ld?.requireGeofence && !!ld?.geofenceContinuousMonitoring,
@@ -178,24 +220,29 @@ export function Session() {
   useEffect(() => {
     if (!data || !attemptId) return;
     let alive = true;
+    let failures = 0; // consecutive failed polls — drives the back-off below
+    let timer: number | undefined;
     const poll = async () => {
       try {
-        const c = await api.get<{ paused: boolean; terminated: boolean; terminationReason: string | null; messages: { id: string; text: string; at: string }[]; deadlineAt: string; serverNow: string; geofenceLocked: boolean; geofenceOutsideSince: string | null; geofencePauseAuto: boolean }>(`/attempts/${attemptId}/control`);
+        const c = await api.get<{ paused: boolean; pauseReason: "break" | "proctor" | null; terminated: boolean; terminationReason: string | null; messages: { id: string; text: string; at: string }[]; deadlineAt: string; serverNow: string; geofenceLocked: boolean; geofenceOutsideSince: string | null; geofencePauseAuto: boolean }>(`/attempts/${attemptId}/control`);
         if (!alive) return;
+        failures = 0;
         if (c.terminated && !submittedRef.current) {
           submittedRef.current = true;
           if (document.fullscreenElement) await document.exitFullscreen().catch(() => {});
           navigate(`/attempts/${attemptId}/result`, { replace: true, state: { terminated: true, reason: c.terminationReason } });
           return;
         }
+        if (pausedRef.current && !c.paused) graceUntilRef.current = Date.now() + 60_000; // resumed: a minute to settle back in
         pausedRef.current = c.paused;
         setPaused(c.paused);
+        setPauseReason(c.pauseReason ?? null);
         setGeofencePauseAuto(c.geofencePauseAuto);
         setGeofenceLocked(c.geofenceLocked);
         setProctorMsgs(c.messages);
         // A pause/resume changes the deadline — refresh the countdown anchors when it does.
         setData((d) => (d && d.deadlineAt !== c.deadlineAt ? { ...d, deadlineAt: c.deadlineAt, serverNow: c.serverNow } : d));
-      } catch { /* transient — try again next tick */ }
+      } catch { failures += 1; /* transient — try again, a little later each time */ }
     };
     // 7s rather than a tighter interval: this only affects how fast the UI
     // reflects a pause/message/termination the server has already enforced
@@ -206,8 +253,20 @@ export function Session() {
     // exam-hall NAT'd IP add up in simultaneous-connection count fast enough
     // to trip a host firewall's per-IP connection-rate limit (seen in
     // production: 173 connections from one shared IP briefly auto-blocked).
-    const id = setInterval(poll, 7000);
-    return () => { alive = false; clearInterval(id); };
+    //
+    // Scheduling: one request at a time (never overlapping), each wait randomised ±20% so
+    // a whole class that started together does not hit the server in the same instant,
+    // and doubling (up to 60s) while the server is failing, so a struggling server is not
+    // hammered by every candidate retrying in lockstep.
+    const loop = async () => {
+      if (!alive) return;
+      await poll();
+      if (!alive) return;
+      const base = failures > 0 ? Math.min(60_000, 8_000 * 2 ** failures) : 8_000;
+      timer = window.setTimeout(loop, base * (0.8 + Math.random() * 0.4));
+    };
+    timer = window.setTimeout(loop, 8_000 * (0.8 + Math.random() * 0.4));
+    return () => { alive = false; if (timer) clearTimeout(timer); };
   }, [data, attemptId, navigate]);
 
   // Violation escalation → auto-submit. A limit of 0 means zero tolerance:
@@ -230,20 +289,30 @@ export function Session() {
   // Periodic webcam snapshot upload for the live proctoring wall.
   useEffect(() => {
     if (!proctored || !cameraReady || !(ld?.webcam ?? true) || !attemptId) return;
-    const capture = () => {
+    // One frame roughly every 30s (randomised, so candidates who started together don't
+    // all upload at once), never two in flight, and slower while uploads are failing.
+    let stopped = false;
+    let delay = 30_000;
+    let timer: number | undefined;
+    const schedule = (ms: number) => { timer = window.setTimeout(capture, ms * (0.8 + Math.random() * 0.4)); };
+    const capture = async () => {
+      if (stopped) return;
       const v = videoRef.current;
-      if (!v || v.readyState < 2) return;
       const c = document.createElement("canvas");
       c.width = 240; c.height = 180;
       const ctx = c.getContext("2d");
-      if (!ctx) return;
+      if (!v || v.readyState < 2 || !ctx || !navigator.onLine) { schedule(5_000); return; }
       ctx.drawImage(v, 0, 0, c.width, c.height);
-      api.post(`/attempts/${attemptId}/snapshot`, { image: c.toDataURL("image/jpeg", 0.5) }).catch(() => {});
+      try {
+        await api.post(`/attempts/${attemptId}/snapshot`, { image: c.toDataURL("image/jpeg", 0.5) });
+        delay = 30_000;
+      } catch {
+        delay = Math.min(120_000, delay * 2);
+      }
+      schedule(delay);
     };
-    const t = window.setTimeout(capture, 1500);
-    const id = window.setInterval(capture, 15000);
-    return () => { clearTimeout(t); clearInterval(id); };
-  }, [proctored, cameraReady, attemptId, ld, videoRef]);
+    timer = window.setTimeout(capture, 2_000 + Math.random() * 13_000); // first frame at a random moment in the first ~15s
+    return () => { stopped = true; if (timer) clearTimeout(timer); };  }, [proctored, cameraReady, attemptId, ld, videoRef]);
 
   // Record (but don't auto-submit on) private-browsing — heuristic, so it's
   // logged for the proctor rather than trusted to end the exam. The hard block
@@ -291,7 +360,7 @@ export function Session() {
   const requestSubmit = () => setConfirmOpen(true);
 
   if (error && !data) return <Centered>{error}</Centered>;
-  if (!data) return <Centered><Loader2 className="h-5 w-5 animate-spin" /> Loading exam…</Centered>;
+  if (!data) return <div className="min-h-screen p-4 sm:p-6"><ContentSkeleton variant="exam-session" /></div>;
 
   const q = data.questions[idx];
   const section = (data.exam.sections ?? []).find((s) => s.id === q.sectionId) ?? null;
@@ -307,17 +376,25 @@ export function Session() {
       {paused && (
         <div className="fixed inset-0 z-[60] flex flex-col items-center justify-center gap-4 bg-[var(--color-navy)] text-white">
           <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/15">
-            {geofencePauseAuto ? <MapPin className="h-7 w-7" /> : <PauseIcon className="h-7 w-7" />}
+            {geofencePauseAuto ? <MapPin className="h-7 w-7" /> : pauseReason === "break" ? <Coffee className="h-7 w-7" /> : <PauseIcon className="h-7 w-7" />}
           </div>
-          <p className="text-xl font-bold">{geofencePauseAuto ? t("run.geofencePausedTitle") : t("run.pausedTitle")}</p>
+          <p className="text-xl font-bold">{geofencePauseAuto ? t("run.geofencePausedTitle") : pauseReason === "break" ? "Rest break" : t("run.pausedTitle")}</p>
           <p className="max-w-md text-center text-sm text-white/70">
             {geofencePauseAuto
               ? t("run.geofencePausedBody")
-              : "A proctor has paused your session. Your timer is frozen — please wait, do not close this window. The exam will resume automatically."}
+              : pauseReason === "break"
+                ? "Take the time you need. Your timer is stopped, and nothing you do during this break counts against you. Your proctor will restart the exam when you are ready — you do not need to do anything."
+                : "A proctor has paused your session. Your timer is frozen — please wait, do not close this window. The exam will resume automatically."}
           </p>
           <span className="inline-flex items-center gap-2 text-xs text-white/60">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" /> {geofencePauseAuto ? t("run.geofenceWaitingReturn") : "Waiting for the proctor…"}
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> {geofencePauseAuto ? t("run.geofenceWaitingReturn") : pauseReason === "break" ? "Waiting for your proctor to resume…" : "Waiting for the proctor…"}
           </span>
+          {pauseReason === "break" && !geofencePauseAuto && (
+            <button type="button" onClick={() => setMusicOn((v) => !v)} aria-pressed={musicOn}
+              className="mt-1 inline-flex items-center gap-2 rounded-full border border-white/25 px-4 py-2 text-sm font-semibold text-white/90 transition hover:bg-white/10">
+              {musicOn ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />} {musicOn ? "Calm music: on" : "Calm music: off"}
+            </button>
+          )}
         </div>
       )}
 
@@ -379,9 +456,16 @@ export function Session() {
             </div>
           </div>
           <div className="flex items-center gap-3">
+            <div className="flex items-center rounded-xl border border-[var(--border)] bg-[var(--bg)]" role="group" aria-label="Text size">
+              <button type="button" onClick={() => stepScale(-1)} disabled={scaleIdx === 0} aria-label="Make text smaller" title="Smaller text"
+                className="rounded-l-xl px-2.5 py-2 text-xs font-bold hover:bg-[var(--card-2)] disabled:opacity-40">A−</button>
+              <span className="hidden min-w-[2.75rem] border-x border-[var(--border)] px-1 py-2 text-center text-xs font-semibold tabular-nums sm:inline-block" aria-live="polite" title="Text size">{Math.round(textScale * 100)}%</span>
+              <button type="button" onClick={() => stepScale(1)} disabled={scaleIdx === TEXT_SCALES.length - 1} aria-label="Make text larger" title="Larger text"
+                className="rounded-r-xl px-2.5 py-2 text-base font-bold leading-none hover:bg-[var(--card-2)] disabled:opacity-40">A+</button>
+            </div>
             <SaveChip state={sync.state} />
             {proctored && (
-              <span className="hidden items-center gap-1.5 rounded-full bg-brand-500/15 px-2.5 py-1 text-[11px] font-semibold text-brand-400 sm:inline-flex" title="Copy, paste, screenshots and tab-switching are disabled and logged.">
+              <span className="hidden items-center gap-1.5 rounded-full bg-brand-500/15 px-2.5 py-1 text-[11px] font-semibold text-[var(--lime-text)] sm:inline-flex" title="Copy, paste, screenshots and tab-switching are disabled and logged.">
                 <Lock className="h-3 w-3" /> {t("run.locked")}
               </span>
             )}
@@ -434,10 +518,10 @@ export function Session() {
 
       {/* Messages from the proctor */}
       {proctorMsgs.filter((m) => !dismissedMsgs.has(m.id)).map((m) => (
-        <div key={m.id} className="mx-auto mt-3 flex max-w-6xl items-start gap-2 rounded-xl bg-brand-500/15 px-4 py-3 text-sm font-medium text-brand-300 ring-1 ring-brand-500/30">
+        <div key={m.id} className="mx-auto mt-3 flex max-w-6xl items-start gap-2 rounded-xl bg-brand-500/15 px-4 py-3 text-sm font-medium text-[var(--lime-text)] ring-1 ring-brand-500/30">
           <MessageSquare className="mt-0.5 h-4 w-4 shrink-0" />
           <span className="flex-1"><span className="font-semibold">Proctor:</span> {m.text}</span>
-          <button onClick={() => setDismissedMsgs((s) => new Set(s).add(m.id))} className="shrink-0 text-brand-300/70 hover:text-brand-200"><X className="h-4 w-4" /></button>
+          <button onClick={() => setDismissedMsgs((s) => new Set(s).add(m.id))} className="shrink-0 text-[var(--lime-text)] opacity-70 hover:opacity-100"><X className="h-4 w-4" /></button>
         </div>
       ))}
 
@@ -447,18 +531,28 @@ export function Session() {
           {section && (
             <div className="mb-3 rounded-[3px] border border-brand-500/30 bg-brand-500/10 px-4 py-2.5">
               <div className="flex items-center justify-between gap-2">
-                <p className="text-[11px] font-bold uppercase tracking-wider text-brand-400">{section.title}</p>
-                {section.timeLimitMinutes ? <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-brand-400"><Clock className="h-3 w-3" /> Suggested {section.timeLimitMinutes} min</span> : null}
+                <p className="text-[11px] font-bold uppercase tracking-wider text-[var(--lime-text)]">{section.title}</p>
+                {section.timeLimitMinutes ? <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[var(--lime-text)]"><Clock className="h-3 w-3" /> Suggested {section.timeLimitMinutes} min</span> : null}
               </div>
               {section.instructions && <p className="mt-0.5 text-xs text-[var(--muted)]">{section.instructions}</p>}
             </div>
           )}
           <div className="card p-6">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold uppercase tracking-wide text-brand-400">
+              <span className="text-xs font-semibold uppercase tracking-wide text-[var(--lime-text)]">
                 Question {idx + 1} of {data.questions.length}
               </span>
               <div className="flex items-center gap-3">
+                {reader.supported && (
+                  <button type="button" onClick={() => (reader.speaking ? reader.stop() : reader.speak(speechTextFor(q)))}
+                    aria-pressed={reader.speaking}
+                    className={clsx("inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition",
+                      reader.speaking ? "border-brand-500 bg-brand-500/15 text-[var(--lime-text)]" : "border-[var(--border)] text-[var(--fg)] hover:bg-[var(--card-2)]")}
+                    title={reader.speaking ? "Stop reading" : "Read this question and its answers out loud"}>
+                    {reader.speaking ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
+                    {reader.speaking ? "Stop" : "Read aloud"}
+                  </button>
+                )}
                 <button onClick={() => toggleFlag(q.id)}
                   className={clsx("inline-flex items-center gap-1.5 text-xs font-medium transition",
                     flagged.has(q.id) ? "text-amber-400" : "text-[var(--muted)] hover:text-[var(--fg)]")}
@@ -484,7 +578,9 @@ export function Session() {
             </div>
           </div>
 
-          <div className="mt-4 flex items-center justify-between">
+          {/* Pinned to the bottom of the screen so Previous / Next / Submit are always in reach,
+              however long the question is — no scrolling down to move on. */}
+          <div className="sticky bottom-0 z-10 -mx-5 mt-4 flex items-center justify-between border-t border-[var(--border)] bg-[var(--bg)] px-5 py-3">
             <button className="btn btn-outline" disabled={idx === 0} onClick={() => setIdx((i) => i - 1)}>
               <ChevronLeft className="h-4 w-4" /> Previous
             </button>
@@ -502,11 +598,11 @@ export function Session() {
         </div>
 
         {/* Proctoring + navigator sidebar */}
-        <aside className="space-y-4">
+        <aside className="space-y-4 lg:sticky lg:top-[5rem] lg:max-h-[calc(100vh-6rem)] lg:self-start lg:overflow-y-auto">
           {proctored && (
             <div className="card overflow-hidden">
               <div className="flex items-center justify-between border-b border-[var(--border)] px-3 py-2 text-xs font-semibold">
-                <span className="inline-flex items-center gap-1.5"><ShieldCheck className="h-3.5 w-3.5 text-brand-400" /> Proctoring</span>
+                <span className="inline-flex items-center gap-1.5"><ShieldCheck className="h-3.5 w-3.5 text-[var(--lime-text)]" /> Proctoring</span>
                 <span className="inline-flex h-2 w-2 rounded-full bg-rose-500 animate-pulse" title="Recording" />
               </div>
               <div className="relative aspect-video bg-black">
@@ -542,18 +638,20 @@ export function Session() {
               <span>Questions</span>
               <span className="text-[var(--muted)]">{answeredCount}/{data.questions.length} answered</span>
             </div>
-            <div className="mt-3 grid grid-cols-6 gap-2">
+            <div className="mt-3 max-h-[38vh] overflow-y-auto pr-1">
+            <div className="grid grid-cols-6 gap-2 p-1">
               {data.questions.map((qq, i) => {
                 const answered = isAnswered(qq);
                 const isFlagged = flagged.has(qq.id);
                 return (
                   <button
                     key={qq.id}
+                    ref={(el) => { paletteRefs.current[i] = el; }}
                     onClick={() => setIdx(i)}
                     className={clsx(
                       "relative flex h-9 items-center justify-center rounded-lg text-xs font-semibold transition",
                       i === idx ? "bg-brand-600 text-white"
-                        : answered ? "bg-brand-500/15 text-brand-400"
+                        : answered ? "bg-brand-500/15 text-[var(--lime-text)]"
                         : "border border-[var(--border)] text-[var(--muted)] hover:bg-white/[0.03]",
                     )}
                   >
@@ -562,6 +660,7 @@ export function Session() {
                   </button>
                 );
               })}
+            </div>
             </div>
             <div className="mt-3 flex items-center justify-center gap-3 text-[10px] text-[var(--muted)]">
               <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-brand-500/40" /> Answered</span>
@@ -577,7 +676,7 @@ export function Session() {
 
       {/* Pre-submit review */}
       {confirmOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setConfirmOpen(false)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="w-full max-w-md rounded-[4px] border border-[var(--border)] bg-[var(--card)] p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-bold">{t("run.submitConfirm")}</h2>
@@ -588,12 +687,13 @@ export function Session() {
             {(unanswered.length > 0 || flagged.size > 0) && (
               <div className="mt-4 space-y-3">
                 {unanswered.length > 0 && (
-                  <div className="rounded-[3px] border border-amber-500/30 bg-amber-500/10 p-3">
-                    <p className="text-xs font-semibold text-amber-400">{unanswered.length} unanswered</p>
+                  <div className="rounded-[3px] border p-3" style={{ borderColor: "color-mix(in oklch, var(--color-brand-500) 70%, transparent)", background: "color-mix(in oklch, var(--color-brand-500) 14%, transparent)" }}>
+                    <p className="text-sm font-bold" style={{ color: "var(--lime-text)" }}>{unanswered.length} unanswered</p>
                     <div className="mt-2 flex flex-wrap gap-1.5">
                       {unanswered.map(({ i }) => (
                         <button key={i} onClick={() => { setIdx(i); setConfirmOpen(false); }}
-                          className="rounded-sm bg-amber-500/15 px-2 py-0.5 text-xs font-semibold text-amber-300 hover:bg-amber-500/25">{i + 1}</button>
+                          className="rounded-sm border px-2.5 py-1 text-sm font-bold hover:brightness-95"
+                          style={{ color: "var(--lime-text)", borderColor: "var(--color-brand-500)", background: "color-mix(in oklch, var(--color-brand-500) 22%, var(--card))" }}>{i + 1}</button>
                       ))}
                     </div>
                   </div>
@@ -691,7 +791,7 @@ function AnswerArea({ q, value, onChange, codeRunner }: { q: PublicQuestion; val
         <button key={opt} onClick={() => toggle(opt)}
           className={clsx("flex w-full items-center gap-3 rounded-[3px] border p-3.5 text-left text-sm transition",
             sel ? "border-brand-500 bg-brand-500/15" : "border-[var(--border)] hover:bg-white/[0.02]")}>
-          {sel ? <CheckSquare className="h-4 w-4 text-brand-400" /> : <Square className="h-4 w-4 text-[var(--muted)]" />}
+          {sel ? <CheckSquare className="h-4 w-4 text-[var(--lime-text)]" /> : <Square className="h-4 w-4 text-[var(--muted)]" />}
           <span className="capitalize"><MathText>{opt}</MathText></span>
         </button>
       );
@@ -704,7 +804,7 @@ function AnswerArea({ q, value, onChange, codeRunner }: { q: PublicQuestion; val
       <button key={opt} onClick={() => onChange(opt)}
         className={clsx("flex w-full items-center gap-3 rounded-[3px] border p-3.5 text-left text-sm transition",
           selected ? "border-brand-500 bg-brand-500/15" : "border-[var(--border)] hover:bg-white/[0.02]")}>
-        {selected ? <CircleDot className="h-4 w-4 text-brand-400" /> : <Circle className="h-4 w-4 text-[var(--muted)]" />}
+        {selected ? <CircleDot className="h-4 w-4 text-[var(--lime-text)]" /> : <Circle className="h-4 w-4 text-[var(--muted)]" />}
         <span className="capitalize"><MathText>{opt}</MathText></span>
       </button>
     );
@@ -770,7 +870,7 @@ function OrderingAnswer({ q, value, onChange }: { q: PublicQuestion; value: stri
     <div className="space-y-2">
       {order.map((it, i) => (
         <div key={it + i} className="flex items-center gap-3 rounded-[3px] border border-[var(--border)] p-3">
-          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-brand-500/15 text-xs font-bold text-brand-400">{i + 1}</span>
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-brand-500/15 text-xs font-bold text-[var(--lime-text)]">{i + 1}</span>
           <span className="flex-1 text-sm"><MathText>{it}</MathText></span>
           <button onClick={() => move(i, -1)} disabled={i === 0} className="rounded p-1 text-[var(--muted)] hover:text-[var(--fg)] disabled:opacity-30"><ChevronUp className="h-4 w-4" /></button>
           <button onClick={() => move(i, 1)} disabled={i === order.length - 1} className="rounded p-1 text-[var(--muted)] hover:text-[var(--fg)] disabled:opacity-30"><ChevronDown className="h-4 w-4" /></button>

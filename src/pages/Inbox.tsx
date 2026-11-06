@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Loader2, Bell, CheckCircle2, Megaphone, ClipboardCheck, Clock, FileText, Inbox as InboxIcon, CheckCheck } from "lucide-react";
 import { Shell } from "@/components/Shell";
@@ -7,6 +7,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { api } from "@/lib/api";
 import { useT, type TFn } from "@/lib/i18n";
 import { clsx } from "clsx";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 interface Notif { id: string; type: string; title: string; body: string; at: string; link: string; }
 
@@ -45,7 +46,7 @@ function InboxView() {
       />
 
       {!items ? (
-        <div className="mt-8 flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div>
+        <ContentSkeleton variant="list" />
       ) : items.length === 0 ? (
         <div className="mt-6 flex flex-col items-center gap-2 rounded-2xl border border-dashed border-[var(--border)] py-16 text-center">
           <Bell className="h-8 w-8 text-[var(--muted)]" />

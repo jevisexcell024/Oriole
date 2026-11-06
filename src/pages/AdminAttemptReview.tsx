@@ -4,19 +4,19 @@ import {
   ArrowLeft, Loader2, CheckCircle2, XCircle, Award, ShieldAlert, User, Mail, Send, Gauge, Film, Clock, Download, EyeOff, Scale,
 } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
-import { Breadcrumbs } from "@/components/Breadcrumbs";
 import { MediaStimulus } from "@/components/MediaStimulus";
 import { api } from "@/lib/api";
 import { useT, type TFn } from "@/lib/i18n";
 import type { Attempt, Certificate, Exam, GradingStatus, ProctorEvent, RubricCriterion } from "@shared/types";
 import { clsx } from "clsx";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 const SEV_KEY: Record<string, string> = { high: "common.high", warning: "common.warning", low: "aar.sevLow", info: "aar.sevInfo" };
 
 // Same Fluent/Microsoft-style tokens as the candidate-facing Result page
 // (src/pages/Result.tsx) — applied here too since this is the admin's view of
 // the exact same attempt/result data, just with grading controls added.
-const FLUENT_FONT = "'Segoe UI Variable Text', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif";
+const FLUENT_FONT = "'Manrope', 'Segoe UI', ui-sans-serif, system-ui, sans-serif";
 const FLUENT_SHADOW = "0 1.6px 3.6px rgba(0,0,0,0.11), 0 0.3px 0.9px rgba(0,0,0,0.07)";
 const FLUENT_CARD = { background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, boxShadow: FLUENT_SHADOW } as const;
 
@@ -69,7 +69,7 @@ export function AdminAttemptReview() {
   useEffect(() => { load(); }, [load]);
 
   if (error) return <AdminShell wide><p className="text-sm text-rose-400">{error}</p></AdminShell>;
-  if (!data) return <AdminShell wide><div className="flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div></AdminShell>;
+  if (!data) return <AdminShell wide><ContentSkeleton variant="detail" /></AdminShell>;
 
   const { attempt, exam, candidate, review, proctorEvents, certificate, integrity, integrityBreakdown, studentRef, verificationPhoto, snapshots, gradingStatus, pendingCount, anonymous, secondMark, idDocumentPhoto, idVerified, idVerifiedBy, registrationId, roomScanPhotos } = data;
   const correctCount = review.filter((r) => r.correct).length;
@@ -116,7 +116,6 @@ export function AdminAttemptReview() {
   return (
     <AdminShell wide>
       <div className="fade-in max-w-3xl" style={{ fontFamily: FLUENT_FONT }}>
-        <Breadcrumbs current={anonymous ? undefined : candidate.name} />
         <Link to="/admin/grading" className="inline-flex items-center gap-1.5 text-sm text-[var(--muted)] hover:text-[var(--fg)]">
           <ArrowLeft className="h-4 w-4" /> {t("aar.gradingQueue")}
         </Link>

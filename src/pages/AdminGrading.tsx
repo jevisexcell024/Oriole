@@ -7,6 +7,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { api } from "@/lib/api";
 import { DataTable, type Column } from "@/components/DataTable";
 import { useT } from "@/lib/i18n";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 interface QueueItem {
   attemptId: string;
@@ -45,7 +46,7 @@ export function AdminGrading() {
         <PageHeader title={t("agr.title")} subtitle={t("agr.subtitle")} />
 
         {error && <ErrorBanner className="mt-6">{error}</ErrorBanner>}
-        {!queue && !error && <div className="mt-8 flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div>}
+        {!queue && !error && <ContentSkeleton variant="list" />}
 
         {queue && (
           <div className="mt-6">

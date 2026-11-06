@@ -1,5 +1,5 @@
-﻿import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import {
   Plus, FileText, Loader2, Search, ArrowUpRight, Clock, CalendarClock, ClipboardCheck,
   BookOpen, LayoutGrid, List, ArrowLeft, CheckCircle2, PencilLine, Library, SlidersHorizontal,
@@ -12,6 +12,7 @@ import { api } from "@/lib/api";
 import { useT, type TFn } from "@/lib/i18n";
 import type { Exam, Question, QuestionType } from "@shared/types";
 import { clsx } from "clsx";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 const G = { btn: "#111110", accent: "var(--color-brand-500)" };
 const STATUS_KEY: Record<string, string> = { published: "aex.statusPublished", draft: "aex.statusDraft" };
@@ -210,7 +211,7 @@ function ExamsView({ data, onCreate, creating, onOpen, onDuplicate, onDelete }: 
 
       {/* Results */}
       {!data ? (
-        <div className="flex items-center gap-2 py-16 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("alib.loadingLibrary")}</div>
+        <ContentSkeleton variant="cards" />
       ) : filtered.length === 0 ? (
         <div className="mt-4 card rounded-2xl py-16 text-center">
           <FileText className="mx-auto h-8 w-8 text-[var(--muted)]" />
@@ -259,17 +260,20 @@ const Q_TYPE_ICON: Record<QuestionType, typeof ListChecks> = {
 function QuestionsView() {
   const t = useT();
   const [questions, setQuestions] = useState<BankQuestion[] | null>(null);
+  const [allExams, setAllExams] = useState<{ id: string; title: string; code: string; status: string; questionCount: number }[]>([]);
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<"all" | QuestionType>("all");
   const [examFilter, setExamFilter] = useState("all");
 
-  useEffect(() => { api.get<{ questions: BankQuestion[] }>("/admin/questions").then((d) => setQuestions(d.questions)).catch(() => setQuestions([])); }, []);
+  useEffect(() => {
+    api.get<{ questions: BankQuestion[]; exams?: typeof allExams }>("/admin/questions")
+      .then((d) => { setQuestions(d.questions); setAllExams(d.exams ?? []); })
+      .catch(() => setQuestions([]));
+  }, []);
 
-  const exams = useMemo(() => {
-    const m = new Map<string, string>();
-    (questions ?? []).forEach((q) => m.set(q.examId, q.examTitle));
-    return [...m.entries()];
-  }, [questions]);
+  // Every exam, including ones that have no questions yet.
+  const exams = useMemo(() => allExams.map((e) => [e.id, e.title, e.questionCount] as const), [allExams]);
+  const selectedExam = allExams.find((e) => e.id === examFilter) ?? null;
 
   const filtered = (questions ?? []).filter((q) => {
     if (typeFilter !== "all" && q.type !== typeFilter) return false;
@@ -291,7 +295,7 @@ function QuestionsView() {
     }
   };
 
-  if (!questions) return <div className="flex items-center gap-2 py-16 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("alib.loadingQuestions")}</div>;
+  if (!questions) return <ContentSkeleton variant="list" />;
 
   return (
     <>
@@ -328,7 +332,7 @@ function QuestionsView() {
             </select>
             <select value={examFilter} onChange={(e) => setExamFilter(e.target.value)} className="h-10 max-w-[220px] rounded-full border border-[var(--border)] bg-[var(--card-2)] px-4 text-sm font-medium outline-none">
               <option value="all">{t("alib.allExamsOpt")}</option>
-              {exams.map(([id, title]) => <option key={id} value={id}>{title}</option>)}
+              {exams.map(([id, title, n]) => <option key={id} value={id}>{title} ({n})</option>)}
             </select>
           </div>
         </div>
@@ -338,7 +342,15 @@ function QuestionsView() {
       <p className="mb-3 mt-4 text-xs text-[var(--muted)]">{t("alib.showingQuestions", { n: filtered.length })}</p>
       <div className="card overflow-hidden rounded-2xl">
         {filtered.length === 0 ? (
-          <p className="p-10 text-center text-sm text-[var(--muted)]">{t("alib.noQuestionsMatch")}</p>
+          selectedExam && selectedExam.questionCount === 0 && !query.trim() && typeFilter === "all" ? (
+            <div className="p-10 text-center">
+              <p className="text-sm font-semibold">{selectedExam.title} has no questions yet</p>
+              <p className="mt-1 text-sm text-[var(--muted)]">Questions appear in the bank as soon as you add them to the exam.</p>
+              <Link to={`/admin/exams/${selectedExam.id}`} className="btn btn-primary mt-4 inline-flex">Add questions</Link>
+            </div>
+          ) : (
+            <p className="p-10 text-center text-sm text-[var(--muted)]">{t("alib.noQuestionsMatch")}</p>
+          )
         ) : (
           <div className="divide-y divide-[var(--border)]">
             {filtered.map((q) => {

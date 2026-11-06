@@ -1,7 +1,8 @@
-﻿import { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { Printer, Loader2, Award, ShieldCheck, ArrowLeft } from "lucide-react";
 import { api } from "@/lib/api";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 interface VerifyResp {
   valid: boolean;
@@ -29,7 +30,7 @@ export function CertificateView() {
     return () => { alive = false; };
   }, [verifyUrl]);
 
-  if (!data) return <div className="flex min-h-screen items-center justify-center gap-2 text-[var(--muted)]"><Loader2 className="h-5 w-5 animate-spin" /> Loading certificate…</div>;
+  if (!data) return <div className="min-h-screen p-4 sm:p-6"><ContentSkeleton variant="detail" /></div>;
   if (!data.valid || !data.certificate) return (
     <div className="flex min-h-screen flex-col items-center justify-center gap-3 p-6 text-center">
       <Award className="h-9 w-9 text-[var(--muted)]" />
@@ -54,7 +55,7 @@ export function CertificateView() {
           <div className="pointer-events-none absolute inset-3 rounded-md border-2 border-brand-500/40" />
           <div className="relative">
             <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[#111110] text-white"><Award className="h-7 w-7" /></div>
-            <p className="mt-4 text-xs font-semibold uppercase tracking-[0.3em] text-brand-400">Certificate of Achievement</p>
+            <p className="mt-4 text-xs font-semibold uppercase tracking-[0.3em] text-[var(--lime-text)]">Certificate of Achievement</p>
             <p className="mt-6 text-sm text-[#5A7280]">This is to certify that</p>
             <h1 className="mt-1 text-3xl font-extrabold tracking-tight">{c.holderName}</h1>
             <p className="mt-4 text-sm text-[#5A7280]">has successfully completed</p>

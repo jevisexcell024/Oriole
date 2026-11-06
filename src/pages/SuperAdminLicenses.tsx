@@ -355,7 +355,7 @@ export function SuperAdminLicenses() {
         </div>
 
         {isNarrow && selected && (
-          <div className="fixed inset-0 z-40 flex justify-end bg-black/50" onClick={() => setSelectedId(null)}>
+          <div className="fixed inset-0 z-40 flex justify-end bg-black/50">
             <div className="h-full w-full max-w-[380px] overflow-y-auto bg-[var(--bg)] p-4" onClick={(e) => e.stopPropagation()}>
               <DetailsPanel row={selected} isOwner={isOwner} onClose={() => setSelectedId(null)} onEdit={() => selected && setManaging(selected)} onChanged={load} />
             </div>

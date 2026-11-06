@@ -7,6 +7,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { useT } from "@/lib/i18n";
 import { checkPermissionsPolicy, type PermissionsPolicyReport, type PolicyFeatureState } from "@/lib/permissionsPolicyCheck";
 import { clsx } from "clsx";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 interface Health {
   api: string;
@@ -72,7 +73,7 @@ export function AdminSystemHealth() {
         </div>
 
         {error && <ErrorBanner className="mt-6">{error}</ErrorBanner>}
-        {!h && !error && <div className="mt-8 flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div>}
+        {!h && !error && <ContentSkeleton variant="cards" />}
 
         {h && (
           <>
@@ -169,7 +170,7 @@ export function AdminSystemHealth() {
                   )}
                 </>
               ) : (
-                <div className="mt-3 flex items-center gap-2 text-xs text-[var(--muted)]"><Loader2 className="h-3.5 w-3.5 animate-spin" /> {t("common.loading")}</div>
+                <ContentSkeleton variant="lines" className="mt-3" />
               )}
             </div>
           </>

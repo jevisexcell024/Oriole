@@ -45,7 +45,7 @@ export function SetupPassword() {
           <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-rose-500/15 text-rose-400"><AlertTriangle className="h-6 w-6" /></span>
           <h1 className="mt-4 text-lg font-bold">{t("spw.invalidLink")}</h1>
           <p className="mt-1.5 text-sm text-[var(--muted)]">{t("spw.invalidLinkHint")}</p>
-          <Link to="/login" className="btn btn-primary mt-5 inline-flex h-11 w-full">{t("spw.goToLogin")}</Link>
+          <Link to="/portal" className="btn btn-primary mt-5 inline-flex h-11 w-full">{t("spw.goToLogin")}</Link>
         </div>
       </div>
     );

@@ -7,6 +7,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { DataTable, type Column, type TableFilter } from "@/components/DataTable";
 import { useT } from "@/lib/i18n";
 import { clsx } from "clsx";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 interface Log { id: string; at: string; actorId: string; actorName: string; action: string; target: string; }
 const fmt = (s: string) => new Date(s).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -43,7 +44,7 @@ export function AdminAuditLogs() {
         <PageHeader title={t("alog.title")} subtitle={t("alog.subtitle")} />
 
         {error && <ErrorBanner className="mt-6">{error}</ErrorBanner>}
-        {!logs && !error && <div className="mt-8 flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div>}
+        {!logs && !error && <ContentSkeleton variant="table" />}
 
         {logs && (
           <div className="mt-6">

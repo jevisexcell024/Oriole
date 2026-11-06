@@ -5,7 +5,7 @@
 // measured capacity number instead of an unverified assumption.
 //
 // Usage:
-//   node scripts/load-test.mjs [--students=500] [--duration=90] [--base=http://localhost:8787]
+//   node scripts/load-test.mjs [--proctored] [--students=500] [--duration=90] [--base=http://localhost:8787]
 //
 // Requires: the dev server running locally (`npm run dev:api` or `npm run dev`)
 // with the seeded admin account (npm run seed, or ADMIN_EMAIL/ADMIN_PASSWORD env
@@ -32,6 +32,12 @@ const DURATION_S = Number(args.duration || 90);
 // (simulates students trickling into check-in over a window rather than
 // everyone clicking "Start Exam" in the same instant). 0 = original behavior.
 const STAGGER_S = Number(args.stagger || 0);
+// --proctored: also simulate webcam proctoring. Each student uploads a ~12KB JPEG data URL
+// to /snapshot every ~30s (what the real client does), the heaviest write path on exam day.
+// --snapshot-every=<seconds> shortens the interval to stress-test beyond real-life load.
+const PROCTORED = args.proctored === "true";
+const SNAPSHOT_INTERVAL_MS = Number(args["snapshot-every"] || 30) * 1000;
+const FAKE_FRAME = "data:image/jpeg;base64," + Buffer.alloc(9000, 7).toString("base64");
 const POLL_INTERVAL_MS = 3500;
 const ANSWER_INTERVAL_MS = 10000;
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "admin@orcalis.dev";
@@ -86,7 +92,7 @@ class Session {
 }
 
 // ---- Metrics ----
-const metrics = { control: [], answer: [], login: [] };
+const metrics = { control: [], answer: [], login: [], snapshot: [] };
 const errors = [];
 function record(bucket, ms, ok, note) {
   metrics[bucket].push(ms);
@@ -118,7 +124,7 @@ async function setup() {
   const examRes = await admin.request("POST", "/api/admin/exams", { title: "Load Test Exam (auto-generated, safe to delete)", code: `LOADTEST-${Date.now()}` });
   if (!examRes.ok) throw new Error(`Exam creation failed: ${JSON.stringify(examRes.json)}`);
   const examId = examRes.json.exam.id;
-  await admin.request("PATCH", `/api/admin/exams/${examId}`, { proctored: false, durationMinutes: 60, passingScore: 1 });
+  await admin.request("PATCH", `/api/admin/exams/${examId}`, { proctored: PROCTORED, durationMinutes: 60, passingScore: 1 });
 
   const qRes = await admin.request("POST", `/api/admin/exams/${examId}/questions`, { type: "mcq" });
   const questionId = qRes.json.question.id;
@@ -156,7 +162,7 @@ async function runStudent(cred, questionId, stopAt, startDelayMs = 0) {
   // (many students logging in within the same few seconds) the test is meant to
   // measure. A short timeout would just hide how long the queue actually takes
   // to drain instead of reporting it.
-  const login = await s.request("POST", "/api/auth/login", { email: cred.email, password: cred.tempPassword }, 120000);
+  const login = await s.request("POST", "/api/auth/login", { email: cred.email, password: cred.tempPassword, portal: "student" }, 120000);
   record("login", login.ms, login.ok, login.ok ? undefined : `login ${login.status}`);
   if (!login.ok) return;
 
@@ -170,6 +176,7 @@ async function runStudent(cred, questionId, stopAt, startDelayMs = 0) {
   const attemptId = start.json.attempt.id;
 
   let lastAnswerAt = 0;
+  let lastSnapAt = Date.now() - Math.random() * SNAPSHOT_INTERVAL_MS;
   while (Date.now() < stopAt) {
     const control = await s.request("GET", `/api/attempts/${attemptId}/control`);
     record("control", control.ms, control.ok, control.ok ? undefined : `control ${control.status}`);
@@ -179,6 +186,12 @@ async function runStudent(cred, questionId, stopAt, startDelayMs = 0) {
       lastAnswerAt = Date.now();
       const ans = await s.request("POST", `/api/attempts/${attemptId}/answer`, { questionId, value: "A" });
       record("answer", ans.ms, ans.ok, ans.ok ? undefined : `answer ${ans.status}`);
+    }
+
+    if (PROCTORED && Date.now() - lastSnapAt > SNAPSHOT_INTERVAL_MS) {
+      lastSnapAt = Date.now();
+      const snap = await s.request("POST", `/api/attempts/${attemptId}/snapshot`, { image: FAKE_FRAME });
+      record("snapshot", snap.ms, snap.ok, snap.ok ? undefined : `snapshot ${snap.status ?? snap.error}`);
     }
 
     await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
@@ -207,6 +220,7 @@ async function main() {
   console.log(summarize("login", metrics.login));
   console.log(summarize("control-poll", metrics.control));
   console.log(summarize("answer-save", metrics.answer));
+  if (PROCTORED) console.log(summarize("webcam-snapshot", metrics.snapshot));
   console.log(`\n  Total control-polls: ${metrics.control.length}  |  Total errors: ${errors.length}`);
   if (errors.length) {
     console.log("\n  First 10 errors:");

@@ -59,7 +59,7 @@ export function MyResults() {
                       ) : (
                         <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/15 px-2 py-0.5 font-semibold text-rose-400"><XCircle className="h-3 w-3" /> {t("res.notPassed")}</span>
                       )}
-                      {!hide && r.letter && <span className="inline-flex items-center gap-1 rounded-full bg-brand-500/15 px-2 py-0.5 font-semibold text-brand-400">{t("res.grade")} {r.letter}</span>}
+                      {!hide && r.letter && <span className="inline-flex items-center gap-1 rounded-full bg-brand-500/15 px-2 py-0.5 font-semibold text-[var(--lime-text)]">{t("res.grade")} {r.letter}</span>}
                     </div>
                   </div>
                   <div className="flex items-center gap-3">

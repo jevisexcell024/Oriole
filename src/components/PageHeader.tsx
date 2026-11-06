@@ -1,25 +1,11 @@
 import { type ReactNode } from "react";
-import { Breadcrumbs } from "@/components/Breadcrumbs";
 
-/** Consistent page header — a #111110 panel with title, optional eyebrow/subtitle,
- *  and optional right-side actions. A lime keyline ties it to the brand. Renders a
- *  breadcrumb trail automatically from the current route; pass `crumbCurrent` on
- *  detail pages to swap in the loaded entity's name once it resolves.
- *  Used across every admin and student page. */
-export function PageHeader({ title, subtitle, eyebrow, actions, crumbCurrent }: { title: ReactNode; subtitle?: ReactNode; eyebrow?: ReactNode; actions?: ReactNode; crumbCurrent?: string }) {
-  return (
-    <div className="sticky top-[var(--app-header-h,0px)] z-10 mb-5 flex flex-wrap items-center justify-between gap-3 rounded-[6px] bg-[#111110] px-5 py-4">
-      <div className="flex min-w-0 items-stretch gap-3.5">
-        {/* Brand keyline */}
-        <span aria-hidden className="mt-0.5 w-[3px] shrink-0 rounded-full bg-brand-500" />
-        <div className="min-w-0">
-          <Breadcrumbs current={crumbCurrent} variant="panel" />
-          {eyebrow && <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-400">{eyebrow}</p>}
-          <h1 className="font-display text-2xl font-semibold tracking-tight text-white">{title}</h1>
-          {subtitle && <p className="mt-0.5 text-sm text-[#C7D6DA]">{subtitle}</p>}
-        </div>
-      </div>
-      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
-    </div>
-  );
+/** Page header slot. The black title banner (breadcrumbs, title, subtitle) was
+ *  removed from every page; this component stays so call sites keep working, and
+ *  renders only the page's `actions` (primary buttons) — nothing at all when a
+ *  page has none. `title`, `subtitle`, `eyebrow` and `crumbCurrent` are accepted
+ *  and ignored. */
+export function PageHeader({ actions }: { title?: ReactNode; subtitle?: ReactNode; eyebrow?: ReactNode; actions?: ReactNode; crumbCurrent?: string }) {
+  if (!actions) return null;
+  return <div className="mb-5 flex flex-wrap items-center justify-end gap-2">{actions}</div>;
 }

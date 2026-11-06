@@ -1,10 +1,11 @@
-﻿import { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { FileText, Loader2, Download, GraduationCap, BookOpen, Award, BarChart3, CalendarClock, Plus, Trash2, Send } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
 import { ErrorBanner } from "@/components/ui";
 import { api } from "@/lib/api";
 import { PageHeader } from "@/components/PageHeader";
 import { useT } from "@/lib/i18n";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 interface ReportDef { key: string; title: string; desc: string; rows: number; }
 interface Sched { id: string; reportKey: string; frequency: "daily" | "weekly"; recipients: string[]; lastSentAt: string | null; title: string; }
@@ -78,7 +79,7 @@ export function AdminReports() {
         </div>
 
         {error && <ErrorBanner className="mt-6">{error}</ErrorBanner>}
-        {!data && !error && <div className="mt-8 flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div>}
+        {!data && !error && <ContentSkeleton variant="cards" />}
 
         {data && (
           <>

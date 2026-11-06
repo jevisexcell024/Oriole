@@ -89,7 +89,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const today = new Date();
 
   return (
-    <div className="force-light flex min-h-screen">
+    <div className="force-light flex min-h-screen text-[var(--fg)]">
       {/* Backdrop (mobile) */}
       {mobileOpen && <div className="fixed inset-0 z-40 bg-black/50 lg:hidden" onClick={() => setMobileOpen(false)} />}
 
@@ -201,7 +201,7 @@ export function Shell({ children }: { children: ReactNode }) {
             </div>
           </Link>
           <button className="rounded-lg p-2 text-[#9FBCC2] hover:bg-brand-500 hover:text-[var(--brand-ink)]"
-            title={t("nav.signOut")} onClick={async () => { await logout(); navigate("/login"); }}>
+            title={t("nav.signOut")} onClick={async () => { await logout(); navigate("/portal"); }}>
             <LogOut className="h-4 w-4" />
           </button>
         </div>
@@ -236,7 +236,7 @@ export function Shell({ children }: { children: ReactNode }) {
                           onClick={() => { setApps(false); navigate(n.to); }}
                           className={clsx("flex flex-col items-center gap-1.5 rounded-lg p-2.5 text-center transition",
                             isLocked ? "cursor-not-allowed opacity-40" : "hover:bg-[var(--card-2)]")}>
-                          <n.icon className={clsx("h-5 w-5", isLocked ? "text-[var(--muted)]" : "text-brand-400")} />
+                          <n.icon className={clsx("h-5 w-5", isLocked ? "text-[var(--muted)]" : "text-[var(--lime-text)]")} />
                           <span className="text-[11px] leading-tight text-[var(--muted)]">{t(n.labelKey)}</span>
                         </button>
                       );

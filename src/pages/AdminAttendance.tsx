@@ -10,6 +10,7 @@ import { api } from "@/lib/api";
 import { DataTable, type Column, type TableFilter } from "@/components/DataTable";
 import { useT } from "@/lib/i18n";
 import { clsx } from "clsx";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 interface Session {
   examId: string; title: string; code: string; status: string; scheduled: string | null;
@@ -84,7 +85,7 @@ export function AdminAttendance() {
         <PageHeader title={t("aatt.title")} subtitle={t("aatt.subtitle")} />
 
         {error && <ErrorBanner className="mt-6">{error}</ErrorBanner>}
-        {!sessions && !error && <div className="mt-8 flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div>}
+        {!sessions && !error && <ContentSkeleton variant="table" />}
         {sessions && sessions.length === 0 && <p className="card mt-6 p-8 text-center text-sm text-[var(--muted)]">{t("aatt.noSessions")}</p>}
 
         {sessions && sessions.length > 0 && (
@@ -103,7 +104,7 @@ export function AdminAttendance() {
             </div>
 
             {!detail ? (
-              <div className="mt-8 flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("aatt.loadingRoster")}</div>
+              <ContentSkeleton variant="table" />
             ) : (
               <>
                 <div className="mt-5 grid grid-cols-2 gap-4 sm:grid-cols-5">

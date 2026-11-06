@@ -1,7 +1,6 @@
-﻿@import "tailwindcss";
-/* Type system — Space Grotesk (display/headings) + DM Sans (body), loaded via
-   <link> in index.html. Grotesk gives headings real character; DM Sans is a warm,
-   highly readable workhorse for dense enterprise UI. */
+@import "tailwindcss";
+/* Type system — Manrope for everything (headings and body), loaded via
+   <link> in index.html. */
 
 @theme {
   /* ── Oriole palette ──
@@ -15,9 +14,9 @@
   --color-brand-700: oklch(0.89 0.16 112);
   --color-navy: oklch(0.28 0.02 110);
 
-  /* Heading font + body font. */
-  --font-display: "Space Grotesk", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
-  --font-sans: "DM Sans", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  /* Heading font + body font — both Manrope. */
+  --font-display: "Manrope", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Manrope", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
 
   /* ── Corners (tight, enterprise/engineered feel). ── */
   --radius-xs: 2px;
@@ -46,6 +45,9 @@
        badges) — near-black by default, flipped to white for a dark chosen
        brand color. src/lib/brandColor.ts overrides this inline per tenant. */
     --brand-ink: #111110;
+    /* Brand colour as TEXT on the page canvas: bright lime reads fine on the
+       dark canvas, so it stays as-is here; the light theme darkens it. */
+    --lime-text: var(--color-brand-500);
 
     /* Frosted-glass surfaces (Login.tsx's floating card) — translucent so a
        backdrop-blur picks up whatever's behind it. Kept separate from --card
@@ -68,6 +70,9 @@
     --fg: #1B1D12;
     --muted: #565B47;
     --ring: oklch(0.86 0.18 112 / 0.35);
+    /* Deep olive-lime for text on white — derived from the live brand colour so
+       a custom tenant brand darkens correctly too. ~7:1 contrast on #fff. */
+    --lime-text: color-mix(in oklch, var(--color-brand-500) 38%, black);
 
     --glass-surface: rgba(255, 255, 255, 0.46);
     --glass-border: rgba(255, 255, 255, 0.65);
@@ -84,6 +89,9 @@
      dark/light preference — :root.light only fires from the class living on
      <html>, not on an arbitrary descendant. */
   .force-light {
+    /* Same deep olive as :root.light — the student shell (Shell.tsx) paints its
+       content area with this class, so lime TEXT there needs the dark shade. */
+    --lime-text: color-mix(in oklch, var(--color-brand-500) 38%, black);
     --bg: #E9EADF;
     --bg-subtle: #FFFFFF;
     --card: #FFFFFF;
@@ -107,14 +115,12 @@
     background: var(--bg);
     color: var(--fg);
     font-family: var(--font-sans);
-    font-size: 14px;
+    font-size: 0.875rem; /* = 14px at the default root size; follows the exam page's text-size setting */
     line-height: 1.5;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
-    font-feature-settings: "ss01", "cv01"; /* DM Sans alt forms — friendlier a/g */
   }
-  /* Headings use the display font across the whole project. Space Grotesk reads
-     best a touch tighter; weights stay 600/700 for a crisp, engineered tone. */
+  /* Headings use the display font (Manrope) across the whole project. */
   h1, h2, h3, h4, h5, h6 { font-family: var(--font-display); font-weight: 600; letter-spacing: -0.012em; }
   h1 { letter-spacing: -0.02em; }
   /* Numbers in data/metrics line up in columns — essential for an analytics product. */
@@ -275,12 +281,70 @@
   .liquid-spring:active { transform: translateY(0) scale(0.99); }
 }
 
-/* Subtle, dark-friendly scrollbars across the app. */
-* { scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.16) transparent; }
+/* ── Icon motion ──
+   Every lucide icon in the app: a lift + tilt when its own button / link is
+   hovered, a press-down on click, and a few icon-specific moves (bell rings, arrows nudge, cogs turn…). Lives in
+   @layer components so any utility on an icon (animate-spin, transition-*) still
+   wins. Uses `transform` only — Tailwind positions icons with `translate`/
+   `rotate`/`scale`, so there is no clash. Spinners (animate-*) are skipped, and
+   it is switched off during exams and under prefers-reduced-motion. */
+@layer components {
+  svg.lucide:not([class*="animate-"]) {
+    transition: transform .28s cubic-bezier(.34, 1.56, .64, 1);
+    transform-origin: center;
+  }
+  :is(a, button, summary, [role="button"]):hover svg.lucide:not([class*="animate-"]) {
+    transform: translateY(-1px) scale(1.14) rotate(-5deg);
+  }
+  :is(a, button, [role="button"]):active svg.lucide:not([class*="animate-"]) {
+    transform: scale(.88);
+    transition-duration: .08s;
+  }
+  :is(button, a):disabled svg.lucide,
+  :is(button, a)[aria-disabled="true"] svg.lucide { transform: none; }
+
+  /* Icon-specific hover behaviour (replaces the generic tilt). */
+  :is(a, button, [role="button"]):hover svg.lucide-bell,
+  :is(a, button, [role="button"]):hover svg.lucide-bell-ring { animation: icon-ring .6s ease-in-out; transform: none; }
+  :is(a, button, [role="button"]):hover svg.lucide-arrow-right,
+  :is(a, button, [role="button"]):hover svg.lucide-chevron-right,
+  :is(a, button, [role="button"]):hover svg.lucide-arrow-up-right { transform: translateX(3px); }
+  :is(a, button, [role="button"]):hover svg.lucide-arrow-left,
+  :is(a, button, [role="button"]):hover svg.lucide-chevron-left { transform: translateX(-3px); }
+  :is(a, button, [role="button"]):hover svg.lucide-download,
+  :is(a, button, [role="button"]):hover svg.lucide-arrow-down { transform: translateY(3px); }
+  :is(a, button, [role="button"]):hover svg.lucide-upload,
+  :is(a, button, [role="button"]):hover svg.lucide-arrow-up { transform: translateY(-3px); }
+  :is(a, button, [role="button"]):hover svg.lucide-settings,
+  :is(a, button, [role="button"]):hover svg.lucide-refresh-cw,
+  :is(a, button, [role="button"]):hover svg.lucide-rotate-cw,
+  :is(a, button, [role="button"]):hover svg.lucide-sun { transform: rotate(120deg) scale(1.1); transition-duration: .5s; }
+  :is(a, button, [role="button"]):hover svg.lucide-moon { transform: rotate(-25deg) scale(1.1); }
+  :is(a, button, [role="button"]):hover svg.lucide-trash-2,
+  :is(a, button, [role="button"]):hover svg.lucide-x { transform: rotate(10deg) scale(1.12); }
+
+  @keyframes icon-ring {
+    0%, 100% { transform: rotate(0); }
+    20% { transform: rotate(16deg); }
+    40% { transform: rotate(-14deg); }
+    60% { transform: rotate(9deg); }
+    80% { transform: rotate(-6deg); }
+  }
+  /* Nothing decorative moves while a candidate is sitting an exam. */
+  body.exam-lockdown svg.lucide { animation: none !important; transition: none !important; transform: none !important; }
+}
+
+/* Loading placeholder fill — derived from the text colour so it reads on both
+   the dark and light canvas (a fixed white-alpha fill disappears on light). */
+.skeleton { background: color-mix(in srgb, var(--fg) 9%, transparent); }
+
+/* Subtle scrollbars across the app, tinted from the text colour so they stay
+   visible in light mode too (white thumbs were invisible on the light canvas). */
+* { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--fg) 22%, transparent) transparent; }
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.14); border-radius: 9999px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.26); }
+::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--fg) 20%, transparent); border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--fg) 36%, transparent); }
 
 .fade-in { animation: fade .35s ease both; }
 @keyframes fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }

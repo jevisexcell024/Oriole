@@ -6,7 +6,6 @@ import {
 } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
 import { PageHeader } from "@/components/PageHeader";
-import { Breadcrumbs } from "@/components/Breadcrumbs";
 import { Skeleton, EmptyState, Modal } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useT, type TFn } from "@/lib/i18n";
@@ -187,7 +186,6 @@ export function ClassDetail() {
   return (
     <AdminShell wide>
       <div className="fade-in max-w-4xl">
-        <Breadcrumbs current={d.class.name} />
         <Link to="/admin/classes" className="inline-flex items-center gap-1.5 text-sm text-[var(--muted)] hover:text-[var(--fg)]"><ArrowLeft className="h-4 w-4" /> {t("acls.title")}</Link>
 
         <div className="card mt-4 flex items-center justify-between p-6">

@@ -7,6 +7,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { useT } from "@/lib/i18n";
 import { useAuth } from "@/lib/auth";
 import { clsx } from "clsx";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 interface Settings {
   id: string;
@@ -102,7 +103,7 @@ export function AdminSettings() {
         <PageHeader title={t("aset.title")} subtitle={t("aset.subtitle")} />
 
         {error && <ErrorBanner className="mt-6">{error}</ErrorBanner>}
-        {!s && !error && <div className="mt-8 flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div>}
+        {!s && !error && <ContentSkeleton variant="form" />}
 
         {s && (
           <div className="card mt-6 p-6">

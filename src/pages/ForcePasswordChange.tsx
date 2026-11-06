@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { KeyRound, Loader2, LogOut } from "lucide-react";
+import { KeyRound, Loader2, LogOut, Eye, EyeOff } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
 import { landingFor } from "@/lib/roles";
@@ -59,14 +59,14 @@ export function ForcePasswordChange() {
 
         <div className="mt-6 space-y-3">
           <Field label={t("fpc.currentPassword")}>
-            <input type="password" className="input h-11" value={current} onChange={(e) => setCurrent(e.target.value)} autoComplete="current-password" placeholder={t("fpc.currentPasswordHint")} />
+            <PasswordInput value={current} onChange={setCurrent} autoComplete="current-password" placeholder={t("fpc.currentPasswordHint")} />
           </Field>
           <Field label={t("fpc.newPassword")}>
-            <input type="password" className="input h-11" value={next} onChange={(e) => setNext(e.target.value)} autoComplete="new-password" />
+            <PasswordInput value={next} onChange={setNext} autoComplete="new-password" />
             {next.length > 0 && (!pwLongEnough || !pwVaried) && <span className="mt-1 block text-xs text-rose-400">{t("fpc.reqHint")}</span>}
           </Field>
           <Field label={t("fpc.confirmPassword")}>
-            <input type="password" className="input h-11" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="new-password" />
+            <PasswordInput value={confirm} onChange={setConfirm} autoComplete="new-password" />
           </Field>
         </div>
 
@@ -75,10 +75,24 @@ export function ForcePasswordChange() {
         <button onClick={submit} disabled={busy || !valid} className="btn btn-primary mt-5 h-11 w-full disabled:opacity-50">
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null} {t("fpc.submit")}
         </button>
-        <button onClick={() => { void logout(); navigate("/login"); }} className="mt-3 flex w-full items-center justify-center gap-1.5 text-xs font-medium text-[var(--muted)] hover:text-[var(--fg)]">
+        <button onClick={() => { const back = user?.role === "candidate" ? "/portal" : "/login"; void logout(); navigate(back); }} className="mt-3 flex w-full items-center justify-center gap-1.5 text-xs font-medium text-[var(--muted)] hover:text-[var(--fg)]">
           <LogOut className="h-3.5 w-3.5" /> {t("fpc.signOut")}
         </button>
       </div>
+    </div>
+  );
+}
+
+/** Password field with an eye button so people can check what they typed. */
+function PasswordInput({ value, onChange, autoComplete, placeholder }: { value: string; onChange: (v: string) => void; autoComplete: string; placeholder?: string }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div className="relative">
+      <input type={show ? "text" : "password"} className="input h-11 pr-11" value={value} onChange={(e) => onChange(e.target.value)} autoComplete={autoComplete} placeholder={placeholder} />
+      <button type="button" onClick={() => setShow((v) => !v)} aria-label={show ? "Hide password" : "Show password"}
+        className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-[var(--muted)] hover:text-[var(--fg)]">
+        {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+      </button>
     </div>
   );
 }

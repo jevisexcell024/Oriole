@@ -22,6 +22,7 @@ import { SuperAdminLicenses } from "@/pages/SuperAdminLicenses";
 import { SuperAdminLicenseKeys } from "@/pages/SuperAdminLicenseKeys";
 import { SuperAdminAnalytics } from "@/pages/SuperAdminAnalytics";
 import { SuperAdminInfrastructure } from "@/pages/SuperAdminInfrastructure";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 /** Entire Super Admin subtree in one file, lazy-loaded as a single unit from
  *  main.tsx (one route: <Route path="/super-admin/*" element={<SuperAdminApp/>}/>).
@@ -31,7 +32,7 @@ import { SuperAdminInfrastructure } from "@/pages/SuperAdminInfrastructure";
  *  adding one <Route> here; main.tsx never changes again after this. */
 function SuperAdminProtected({ children }: { children: ReactNode }) {
   const { superAdmin, loading } = useSuperAdminAuth();
-  if (loading) return <div className="flex min-h-screen items-center justify-center text-[var(--muted)]">Loading…</div>;
+  if (loading) return <div className="min-h-screen p-4 sm:p-6"><ContentSkeleton variant="chart" /></div>;
   if (!superAdmin) return <Navigate to="/super-admin/login" replace />;
   if (superAdmin.mustChangePassword) return <Navigate to="/super-admin/force-password-change" replace />;
   return <>{children}</>;

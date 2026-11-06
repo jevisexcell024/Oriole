@@ -10,6 +10,7 @@ import { DataTable, type Column } from "@/components/DataTable";
 import { api } from "@/lib/api";
 import { useT, type TFn } from "@/lib/i18n";
 import { clsx } from "clsx";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 interface PermissionDef { key: string; category: string; label: string; description: string; }
 interface RoleScope { facultyId?: string | null; departmentId?: string | null; campusId?: string | null }
@@ -186,7 +187,7 @@ export function AdminRoles() {
         </div>
         <div className="mt-3">
           {!roles ? (
-            <div className="flex items-center gap-2 text-sm text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div>
+            <ContentSkeleton variant="list" />
           ) : (
             <DataTable
               rows={roles}
@@ -283,7 +284,7 @@ function RoleFormModal({ role, permissions, categories, roles, inst, logs, resol
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
       <div className="flex max-h-[88vh] w-full max-w-2xl flex-col rounded-2xl border border-[var(--border)] bg-[var(--card)] shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-[var(--border)] px-6 py-4">
           <h2 className="text-lg font-bold">{role ? t("arole.editTitle") : t("arole.newTitle")}</h2>
@@ -418,7 +419,7 @@ function DeleteRoleModal({ role, roles, team, roleOptions, roleName, onClose, on
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
       <div className="w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between"><h2 className="text-lg font-bold">{t("arole.deleteTitle")}</h2><button onClick={onClose} className="rounded-lg p-1 text-[var(--muted)] hover:bg-white/[0.05]"><X className="h-5 w-5" /></button></div>
         <p className="mt-3 text-sm text-[var(--muted)]">{t("arole.deleteWarn", { name: role.name })}</p>
@@ -489,7 +490,7 @@ function CompareModal({ options, permissions, categories, resolveInherited, syst
   const pickedSets = picked.map((id) => ({ id, name: options.find((o) => o.id === id)?.name ?? id, perms: permsFor(id) }));
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
       <div className="flex max-h-[88vh] w-full max-w-3xl flex-col rounded-2xl border border-[var(--border)] bg-[var(--card)] shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-[var(--border)] px-6 py-4">
           <h2 className="text-lg font-bold">{t("arole.compareTitle")}</h2>

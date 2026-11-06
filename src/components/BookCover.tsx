@@ -65,7 +65,7 @@ export function BookCover({
           <div className="flex h-full w-full items-center justify-center">
             <span
               className={clsx("font-semibold text-white/90", isGrid ? "text-3xl" : "text-sm")}
-              style={{ fontFamily: "'Playfair Display', serif" }}
+              style={{ fontFamily: "'Manrope', sans-serif" }}
             >
               {monogram(title)}
             </span>

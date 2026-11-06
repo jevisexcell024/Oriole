@@ -29,6 +29,8 @@ type StatusFilter = "all" | "completed" | "notStarted";
 // Same accent set the Dashboard uses (src/pages/Dashboard.tsx) — kept consistent
 // rather than inventing new colors for this page.
 const LIME = "var(--color-brand-500)";
+// Lime as text/icon colour: deeper olive in light mode (see --lime-text in index.css).
+const LIME_TEXT = "var(--lime-text)";
 const CYAN = "#22d3ee";
 const PURPLE = "#c084fc";
 const AMBER = "#f59e0b";
@@ -190,7 +192,7 @@ export function PracticeTests() {
             <div className="flex flex-wrap items-center gap-8" style={{ borderRadius: 28, padding: "44px 48px", background: "linear-gradient(135deg, #14140f 0%, #1c1c14 100%)" }}>
               <ScoreRing pct={avgScore} />
               <div className="min-w-0 flex-1">
-                <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: LIME }}>
+                <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: LIME_TEXT }}>
                   {continueItem ? "Pick up where you left off" : "Keep up the great work"}
                 </p>
                 <h2 className="mt-1 text-2xl font-bold text-white">
@@ -227,7 +229,7 @@ export function PracticeTests() {
             {/* Continue Practice — 22px radius, 26/30px padding, 52×52 icon, 220×8 progress */}
             {continueItem && (
               <div className="card mt-4 flex flex-wrap items-center gap-5" style={{ borderRadius: 22, padding: "26px 30px" }}>
-                <span className="flex shrink-0 items-center justify-center rounded-2xl" style={{ width: 52, height: 52, background: tint(LIME), color: LIME }}>
+                <span className="flex shrink-0 items-center justify-center rounded-2xl" style={{ width: 52, height: 52, background: tint(LIME), color: LIME_TEXT }}>
                   <RotateCcw className="h-6 w-6" />
                 </span>
                 <div className="min-w-0 flex-1">
@@ -259,7 +261,7 @@ export function PracticeTests() {
               <div className="mt-4">
                 <div className="flex items-center justify-between">
                   <p className="text-sm font-bold text-[var(--fg)]">Course Categories</p>
-                  {subject && <button onClick={() => setSubject(null)} className="text-xs font-semibold text-brand-500 hover:underline">Clear filter</button>}
+                  {subject && <button onClick={() => setSubject(null)} className="text-xs font-semibold text-[var(--lime-text)] hover:underline">Clear filter</button>}
                 </div>
                 <div className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
                   {categories.map((c) => (
@@ -283,7 +285,7 @@ export function PracticeTests() {
             {/* Score trend — real submitted-score series, not part of the spec but kept since it's real data already computed */}
             {trend.length > 1 && (
               <div className="card mt-4 rounded-[18px] p-5">
-                <p className="flex items-center gap-1.5 text-sm font-bold text-[var(--fg)]"><LineChartIcon className="h-4 w-4 text-brand-400" /> Score Trend</p>
+                <p className="flex items-center gap-1.5 text-sm font-bold text-[var(--fg)]"><LineChartIcon className="h-4 w-4 text-[var(--lime-text)]" /> Score Trend</p>
                 <p className="text-[11px] text-[var(--muted)]">Your last {trend.length} scored attempts</p>
                 <div className="mt-3 h-32 w-full">
                   <ResponsiveContainer width="100%" height="100%">
@@ -360,7 +362,7 @@ export function PracticeTests() {
             {/* Recent history — real submitted attempts, most recent first */}
             {history && history.length > 0 && (
               <div className="card mt-4 rounded-[22px] p-5">
-                <p className="flex items-center gap-1.5 text-sm font-bold text-[var(--fg)]"><HistoryIcon className="h-4 w-4 text-brand-400" /> Recent History</p>
+                <p className="flex items-center gap-1.5 text-sm font-bold text-[var(--fg)]"><HistoryIcon className="h-4 w-4 text-[var(--lime-text)]" /> Recent History</p>
                 <div className="mt-3 divide-y divide-[var(--border)]">
                   {history.map((h) => (
                     <div key={h.id} className="flex items-center gap-3 py-2.5 text-sm">

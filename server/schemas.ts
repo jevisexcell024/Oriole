@@ -38,6 +38,9 @@ async function isPasswordBreached(password: string): Promise<boolean> {
 export const loginSchema = z.object({
   email: z.string().trim().email().max(254),
   password: z.string().min(1).max(200),
+  remember: z.boolean().optional(),
+  /** Which sign-in page the request came from. Omitted = staff (/login). */
+  portal: z.enum(["student", "staff"]).optional(),
 });
 
 // Policy for NEW / changed passwords: length over composition (NIST 800-63B), a
@@ -65,6 +68,10 @@ export const passwordChangeSchema = z.object({
 export const passwordSetupSchema = z.object({
   token: z.string().min(1),
   password: strongPassword,
+});
+
+export const forgotPasswordSchema = z.object({
+  email: z.string().trim().email().max(254),
 });
 
 export const passwordResetSchema = z.object({
@@ -162,6 +169,7 @@ export const tenantBrandColorSchema = z.object({ brandColor: hexColor.nullable()
 // disable accepts either the current password or a current code.
 export const twoFaCodeSchema = z.object({
   code: z.string().trim().min(1).max(20),
+  remember: z.boolean().optional(),
 });
 
 export const twoFaDisableSchema = z.object({

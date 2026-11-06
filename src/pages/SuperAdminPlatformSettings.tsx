@@ -6,6 +6,7 @@ import { ErrorBanner } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { clsx } from "clsx";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 interface PlatformSettings {
   environment: string;
@@ -62,7 +63,7 @@ export function SuperAdminPlatformSettings() {
         <PageHeader eyebrow={t("sad.dashEyebrow")} title={t("sad.settingsTitle")} subtitle={t("sad.settingsSubtitle")} />
 
         {error && <ErrorBanner className="mt-6">{error}</ErrorBanner>}
-        {!data && !error && <div className="mt-8 flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div>}
+        {!data && !error && <ContentSkeleton variant="form" />}
 
         {data && (
           <>

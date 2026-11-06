@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Loader2, CalendarDays } from "lucide-react";
 import { Shell } from "@/components/Shell";
@@ -8,6 +8,7 @@ import { MonthCalendar, type CalEvent } from "@/components/MonthCalendar";
 import { api } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import type { Exam, ExamListItem } from "@shared/types";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 const fmtTime = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
@@ -38,7 +39,7 @@ export function StudentCalendar() {
       <div className="fade-in max-w-[1000px]">
         <PageHeader title={t("cal.title")} subtitle={t("cal.subtitle")} />
         {!items ? (
-          <div className="mt-8 flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div>
+          <ContentSkeleton variant="calendar" />
         ) : (
           <div className="mt-6"><MonthCalendar events={events} empty={t("cal.noneDay")} /></div>
         )}
@@ -77,7 +78,7 @@ export function AdminCalendar() {
         <PageHeader title={t("cal.title")} subtitle={t("acal.subtitle")}
           actions={<button onClick={() => navigate("/admin/scheduler")} className="btn btn-on-teal"><CalendarDays className="h-4 w-4" /> {t("acal.openScheduler")}</button>} />
         {!items ? (
-          <div className="mt-8 flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div>
+          <ContentSkeleton variant="calendar" />
         ) : (
           <>
             {unscheduled > 0 && (

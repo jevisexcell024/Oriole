@@ -12,6 +12,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { useT } from "@/lib/i18n";
 import { timeAgo } from "@/lib/format";
 import { clsx } from "clsx";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface Overview {
@@ -204,9 +205,7 @@ export function AdminResults() {
           <ErrorBanner className="mt-6">{error}</ErrorBanner>
         )}
         {!data && !error && (
-          <div className="mt-10 flex items-center gap-2 text-[var(--muted)]">
-            <Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}
-          </div>
+          <ContentSkeleton variant="stats-table" />
         )}
 
         {data && (

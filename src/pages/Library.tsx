@@ -3,6 +3,7 @@ import {
   Filter, Search, X, Download, Eye, Bookmark, BookmarkCheck, Share2, Star, History, BookOpenCheck, Loader2,
   BookOpen, NotebookPen, FileQuestion, Video, Music, ClipboardList, FlaskConical, GraduationCap, Newspaper,
   Presentation, Code2, FolderArchive, Link2, Library as LibraryIcon, ScrollText, ListTree, MoreHorizontal,
+  LayoutGrid, ChevronDown, Check,
 } from "lucide-react";
 import DOMPurify from "dompurify";
 import { Shell } from "@/components/Shell";
@@ -13,8 +14,11 @@ import { useExamLock } from "@/lib/examLock";
 import type { Book, ResourceType, ResourceVersion } from "@shared/types";
 import { RESOURCE_TYPES } from "@shared/types";
 import { clsx } from "clsx";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 const LIME = "var(--color-brand-500)";
+// Lime as text/icon colour: deeper olive in light mode (see --lime-text in index.css).
+const LIME_TEXT = "var(--lime-text)";
 const LIME_TINT = "color-mix(in oklch, var(--color-brand-500) 45%, transparent)";
 
 const TYPE_ICON: Record<ResourceType, typeof BookOpen> = {
@@ -24,6 +28,84 @@ const TYPE_ICON: Record<ResourceType, typeof BookOpen> = {
   "eBook": LibraryIcon, "Policy Document": ScrollText, "Course Outline": ListTree, "Other": MoreHorizontal,
 };
 
+/** Accent hue (oklch) per category, so the rail reads at a glance instead of
+ *  as one run of identical pills. Icon colour is the same hue at a readable
+ *  lightness on both themes; the tile fill is a faint wash of it. */
+const TYPE_HUE: Record<ResourceType, number> = {
+  "Textbook": 250, "Lecture Notes": 200, "Past Questions": 30, "Video": 15, "Audio": 310,
+  "Assignment Guide": 75, "Lab Manual": 160, "Research Paper": 285, "Journal": 55,
+  "Presentation": 45, "Source Code": 145, "ZIP Resources": 95, "External Link": 220,
+  "eBook": 270, "Policy Document": 350, "Course Outline": 180, "Other": 110,
+};
+const COLLAPSED_CATEGORIES = 7;
+
+/** Category browser: one card per resource type with its icon and live count.
+ *  Empty categories are hidden (the active one always stays), and the rail
+ *  collapses to the first row until "Show all" is pressed. */
+function CategoryRail({ value, onChange, counts, total }: {
+  value: ResourceType | "All"; onChange: (v: ResourceType | "All") => void;
+  counts: Partial<Record<ResourceType, number>> | null; total: number | null;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const types = useMemo(
+    () => (RESOURCE_TYPES as readonly ResourceType[])
+      .filter((rt) => !counts || (counts[rt] ?? 0) > 0 || rt === value)
+      .sort((a, b) => (counts?.[b] ?? 0) - (counts?.[a] ?? 0)),
+    [counts, value],
+  );
+  const needsToggle = types.length > COLLAPSED_CATEGORIES;
+  // Keep the selected category visible even while collapsed.
+  const visible = useMemo(() => {
+    if (expanded || !needsToggle) return types;
+    const head = types.slice(0, COLLAPSED_CATEGORIES);
+    if (value !== "All" && !head.includes(value)) head[COLLAPSED_CATEGORIES - 1] = value;
+    return head;
+  }, [expanded, needsToggle, types, value]);
+
+  const Tile = ({ k, label, Icon, hue, count }: { k: ResourceType | "All"; label: string; Icon: typeof BookOpen; hue: number | null; count: number | null }) => {
+    const on = value === k;
+    const ink = hue === null ? "var(--lime-text)" : `oklch(0.58 0.16 ${hue})`;
+    const wash = hue === null ? "color-mix(in oklch, var(--color-brand-500) 18%, transparent)" : `oklch(0.72 0.14 ${hue} / 0.16)`;
+    return (
+      <button type="button" onClick={() => onChange(k)} aria-pressed={on}
+        className="group relative flex items-center gap-3 rounded-2xl border p-3 text-left transition hover:-translate-y-0.5 hover:border-[var(--border-strong)]"
+        style={{
+          background: on ? "color-mix(in oklch, var(--color-brand-500) 12%, var(--card))" : "var(--card)",
+          borderColor: on ? LIME : "var(--border)",
+        }}>
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl" style={{ background: wash, color: ink }}>
+          <Icon className="h-5 w-5" />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[13px] font-semibold text-[var(--fg)]">{label}</span>
+          <span className="block text-[11px] text-[var(--muted)]">{count === null ? " " : `${count} ${count === 1 ? "resource" : "resources"}`}</span>
+        </span>
+        {on && <span className="absolute right-2 top-2 flex h-4 w-4 items-center justify-center rounded-full" style={{ background: LIME, color: "var(--brand-ink)" }}><Check className="h-3 w-3" /></span>}
+      </button>
+    );
+  };
+
+  return (
+    <div className="mt-5">
+      <div className="mb-2.5 flex items-center justify-between">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">Browse by category</p>
+        {needsToggle && (
+          <button type="button" onClick={() => setExpanded((e) => !e)}
+            className="inline-flex items-center gap-1 text-xs font-semibold" style={{ color: LIME_TEXT }}>
+            {expanded ? "Show less" : `Show all ${types.length}`}
+            <ChevronDown className={clsx("h-3.5 w-3.5 transition-transform", expanded && "rotate-180")} />
+          </button>
+        )}
+      </div>
+      <div className="grid gap-2.5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 200px), 1fr))" }}>
+        <Tile k="All" label="All resources" Icon={LayoutGrid} hue={null} count={total} />
+        {visible.map((rt) => (
+          <Tile key={rt} k={rt} label={rt} Icon={TYPE_ICON[rt] ?? MoreHorizontal} hue={TYPE_HUE[rt] ?? 110} count={counts ? (counts[rt] ?? 0) : null} />
+        ))}
+      </div>
+    </div>
+  );
+}
 function fmtBytes(n?: number | null) {
   if (!n) return null;
   if (n < 1024) return `${n} B`;
@@ -70,6 +152,15 @@ export function Library() {
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<"newest" | "popular" | "downloads" | "rating">("newest");
   const [active, setActive] = useState<Item | null>(null);
+  // Per-category counts come from one unfiltered request, so they stay put while a filter is applied.
+  const [counts, setCounts] = useState<{ byType: Partial<Record<ResourceType, number>>; total: number } | null>(null);
+  useEffect(() => {
+    api.get<{ items: Item[] }>("/books").then((d) => {
+      const byType: Partial<Record<ResourceType, number>> = {};
+      for (const it of d.items) byType[it.book.resourceType] = (byType[it.book.resourceType] ?? 0) + 1;
+      setCounts({ byType, total: d.items.length });
+    }).catch(() => {});
+  }, []);
 
   const load = () => {
     const params = new URLSearchParams();
@@ -142,7 +233,7 @@ export function Library() {
             {/* Section 2 — Library */}
             <div style={{ padding: "24px 32px" }}>
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: 20, fontWeight: 600 }} className="text-[var(--fg)]">Library</h2>
+                <h2 style={{ fontFamily: "'Manrope', sans-serif", fontSize: 20, fontWeight: 600 }} className="text-[var(--fg)]">Library</h2>
                 <div className="flex items-center gap-2">
                   <div className="flex items-center gap-1.5 rounded-full px-3 py-1.5" style={{ background: "var(--card-2)" }}>
                     <Search className="h-3.5 w-3.5 text-[var(--muted)]" />
@@ -159,24 +250,8 @@ export function Library() {
                 </div>
               </div>
 
-              {/* Type tabs */}
-              <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
-                {(["All", ...RESOURCE_TYPES] as const).map((rt) => {
-                  const isActive = type === rt;
-                  return (
-                    <button key={rt} onClick={() => setType(rt)}
-                      className="flex shrink-0 items-center gap-1 rounded-full text-xs font-medium transition"
-                      style={{
-                        padding: "6px 14px",
-                        background: isActive ? LIME_TINT : "var(--card-2)",
-                        color: isActive ? LIME : "var(--muted)",
-                        border: isActive ? `1px solid ${LIME}` : "1px solid transparent",
-                      }}>
-                      {rt}
-                    </button>
-                  );
-                })}
-              </div>
+              {/* Category browser */}
+              <CategoryRail value={type} onChange={setType} counts={counts?.byType ?? null} total={counts?.total ?? null} />
 
               {/* Grid */}
               {items.length === 0 ? (
@@ -230,7 +305,7 @@ function ResourceCard({ item, onOpen, onChanged }: { item: Item; onOpen: () => v
         </div>
         <button onClick={toggleBookmark} disabled={busy}
           className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-black/60 text-[var(--muted)] opacity-0 transition group-hover:opacity-100 hover:text-[var(--fg)]">
-          {bookmarked ? <BookmarkCheck className="h-3.5 w-3.5" style={{ color: LIME }} /> : <Bookmark className="h-3.5 w-3.5" />}
+          {bookmarked ? <BookmarkCheck className="h-3.5 w-3.5" style={{ color: LIME_TEXT }} /> : <Bookmark className="h-3.5 w-3.5" />}
         </button>
       </div>
       <div className="mt-2 flex items-center gap-1">
@@ -243,7 +318,7 @@ function ResourceCard({ item, onOpen, onChanged }: { item: Item; onOpen: () => v
         {fmtBytes(book.fileSize) && <span>{fmtBytes(book.fileSize)}</span>}
         <span className="inline-flex items-center gap-0.5"><Eye className="h-2.5 w-2.5" /> {book.viewCount}</span>
         <span className="inline-flex items-center gap-0.5"><Download className="h-2.5 w-2.5" /> {book.downloadCount}</span>
-        {item.ratingCount > 0 && <span className="inline-flex items-center gap-0.5"><Star className="h-2.5 w-2.5 fill-current" style={{ color: LIME }} /> {item.avgRating}</span>}
+        {item.ratingCount > 0 && <span className="inline-flex items-center gap-0.5"><Star className="h-2.5 w-2.5 fill-current" style={{ color: LIME_TEXT }} /> {item.avgRating}</span>}
         <button onClick={share} className="ml-auto text-[var(--muted)] hover:text-[var(--muted)]"><Share2 className="h-2.5 w-2.5" /></button>
       </div>
     </div>
@@ -334,7 +409,7 @@ function ResourceDetailModal({ item, onClose, onChanged }: { item: Item; onClose
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/60 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/60 p-4">
       <div onClick={(e) => e.stopPropagation()} className="w-full max-w-lg rounded-2xl p-6" style={{ background: "var(--card)", border: "1px solid var(--border)" }}>
         <div className="flex items-start justify-between">
           <div className="flex items-start gap-4">
@@ -373,7 +448,7 @@ function ResourceDetailModal({ item, onClose, onChanged }: { item: Item; onClose
             </a>
           )}
           <button onClick={toggleBookmark} className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-[var(--muted)]" style={{ background: "var(--card-2)" }}>
-            {detail?.bookmarked ? <BookmarkCheck className="h-3.5 w-3.5" style={{ color: LIME }} /> : <Bookmark className="h-3.5 w-3.5" />} {detail?.bookmarkCount ?? item.bookmarkCount}
+            {detail?.bookmarked ? <BookmarkCheck className="h-3.5 w-3.5" style={{ color: LIME_TEXT }} /> : <Bookmark className="h-3.5 w-3.5" />} {detail?.bookmarkCount ?? item.bookmarkCount}
           </button>
           <button onClick={toggleVersions} className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-[var(--muted)]" style={{ background: "var(--card-2)" }}>
             <History className="h-3.5 w-3.5" /> v{book.version}
@@ -412,7 +487,7 @@ function ResourceDetailModal({ item, onClose, onChanged }: { item: Item; onClose
           <div className="flex items-center gap-1">
             {[1, 2, 3, 4, 5].map((n) => (
               <button key={n} onClick={() => rate(n)}>
-                <Star className={clsx("h-4 w-4", n <= myScore ? "fill-current" : "text-[var(--muted)]")} style={n <= myScore ? { color: LIME } : undefined} />
+                <Star className={clsx("h-4 w-4", n <= myScore ? "fill-current" : "text-[var(--muted)]")} style={n <= myScore ? { color: LIME_TEXT } : undefined} />
               </button>
             ))}
             {detail && detail.ratingCount > 0 && <span className="ml-2 text-[11px] text-[var(--muted)]">{detail.avgRating} avg · {detail.ratingCount} rating{detail.ratingCount === 1 ? "" : "s"}</span>}
@@ -495,7 +570,7 @@ function ResourceReaderOverlay({ book, kind, onClose }: { book: Book; kind: Read
             {docxError ? (
               <p className="text-sm text-rose-400">{docxError}</p>
             ) : docxHtml === null ? (
-              <div className="flex items-center gap-2 text-sm text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> Loading document…</div>
+              <ContentSkeleton variant="lines" />
             ) : (
               <>
                 <style>{`

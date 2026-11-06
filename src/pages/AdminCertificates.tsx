@@ -5,6 +5,7 @@ import { api } from "@/lib/api";
 import { PageHeader } from "@/components/PageHeader";
 import { DataTable, type Column } from "@/components/DataTable";
 import { useT } from "@/lib/i18n";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 interface Cert { certNumber: string; score: number; issuedAt: string; examTitle: string; candidateName: string; }
 
@@ -31,7 +32,7 @@ export function AdminCertificates() {
         <PageHeader title={t("acert.title")} subtitle={t("acert.subtitle")} />
 
         {!certs ? (
-          <div className="mt-10 flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div>
+          <ContentSkeleton variant="table" />
         ) : (
           <div className="mt-6">
             <DataTable

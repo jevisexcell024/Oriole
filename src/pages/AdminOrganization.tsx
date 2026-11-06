@@ -10,6 +10,7 @@ import { invalidateLearningStructureCache } from "@/lib/learningStructure";
 import type { LearningStructureConfig, LearningStructureMode } from "@shared/types";
 import { LEARNING_STRUCTURE_MODES, DEFAULT_LEARNING_STRUCTURE } from "@shared/types";
 import { clsx } from "clsx";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 interface Settings {
   id: string; name: string; type?: string; accreditation?: string; website: string; phone?: string; address?: string; plan?: string;
@@ -116,7 +117,7 @@ export function AdminOrganization() {
         </div>
 
         {!data ? (
-          <div className="mt-8 flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div>
+          <ContentSkeleton variant="form" />
         ) : tab === "overview" ? (
           <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-[340px_1fr]">
             {/* Stat cards */}

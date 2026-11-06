@@ -32,27 +32,33 @@ function mockRes() {
 function mockReq(cookies: Record<string, string>): Request {
   return { cookies } as unknown as Request;
 }
+// issueSession() now also records a real AuthSession row (server/sessions.ts),
+// which needs req.ip and req.get("user-agent") — a bare {cookies} object (fine
+// for currentUser(), which only reads cookies) isn't enough to issue with.
+function mockIssueReq(): Request {
+  return { ip: "127.0.0.1", get: () => "vitest" } as unknown as Request;
+}
 
 describe("Tenant suspension — real enforcement via currentUser() (server/auth.ts)", () => {
-  it("a session for an active tenant resolves normally", () => {
+  it("a session for an active tenant resolves normally", async () => {
     const tenant: Tenant = { id: "t_active_" + Math.random().toString(36).slice(2), name: "Active School", status: "active", createdAt: new Date().toISOString() };
     db.data!.tenants.push(tenant);
     const user: User = { id: "u_" + Math.random().toString(36).slice(2), tenantId: tenant.id, email: "admin@active.test", passwordHash: "x", name: "Admin", role: "admin" };
     db.data!.users.push(user);
 
     const { res, cookies } = mockRes();
-    issueSession(res, user);
+    await issueSession(mockIssueReq(), res, user);
     expect(currentUser(mockReq(cookies))?.id).toBe(user.id);
   });
 
-  it("suspending a tenant immediately invalidates every session already issued for it", () => {
+  it("suspending a tenant immediately invalidates every session already issued for it", async () => {
     const tenant: Tenant = { id: "t_susp_" + Math.random().toString(36).slice(2), name: "Suspend Me School", status: "active", createdAt: new Date().toISOString() };
     db.data!.tenants.push(tenant);
     const user: User = { id: "u_" + Math.random().toString(36).slice(2), tenantId: tenant.id, email: "admin@suspendme.test", passwordHash: "x", name: "Admin", role: "admin" };
     db.data!.users.push(user);
 
     const { res, cookies } = mockRes();
-    issueSession(res, user);
+    await issueSession(mockIssueReq(), res, user);
     // Session is valid before suspension...
     expect(currentUser(mockReq(cookies))?.id).toBe(user.id);
 
@@ -66,14 +72,14 @@ describe("Tenant suspension — real enforcement via currentUser() (server/auth.
     expect(currentUser(mockReq(cookies))?.id).toBe(user.id);
   });
 
-  it("a user with no tenantId (not yet possible in practice, but defensively) is unaffected by any tenant's suspension", () => {
+  it("a user with no tenantId (not yet possible in practice, but defensively) is unaffected by any tenant's suspension", async () => {
     const tenant: Tenant = { id: "t_other_" + Math.random().toString(36).slice(2), name: "Some Other School", status: "suspended", createdAt: new Date().toISOString() };
     db.data!.tenants.push(tenant);
     const user: User = { id: "u_" + Math.random().toString(36).slice(2), email: "noTenant@test.test", passwordHash: "x", name: "No Tenant", role: "admin" };
     db.data!.users.push(user);
 
     const { res, cookies } = mockRes();
-    issueSession(res, user);
+    await issueSession(mockIssueReq(), res, user);
     expect(currentUser(mockReq(cookies))?.id).toBe(user.id);
   });
 });

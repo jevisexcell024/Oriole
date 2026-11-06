@@ -432,6 +432,10 @@ export const messages: Record<string, Record<Lang, string>> = {
   "auth.ssoNoUser": { en: "No Oriole account found for that Microsoft account. Ask your administrator.", fr: "Aucun compte Oriole trouvé pour ce compte Microsoft. Contactez votre administrateur.", es: "No se encontró una cuenta de Oriole para esa cuenta de Microsoft. Pregunta a tu administrador.", pt: "Nenhuma conta Oriole encontrada para essa conta Microsoft. Fale com o administrador.", ar: "لا يوجد حساب Oriole مرتبط بحساب Microsoft هذا. تواصل مع المسؤول." },
   "auth.ssoError": { en: "Microsoft sign-in failed. Please try again.", fr: "La connexion Microsoft a échoué. Veuillez réessayer.", es: "Error al iniciar sesión con Microsoft. Inténtalo de nuevo.", pt: "Falha ao entrar com a Microsoft. Tente novamente.", ar: "فشل تسجيل الدخول عبر Microsoft. حاول مرة أخرى." },
   "auth.heroHeadline": { en: "Secure exams, wherever your students are.", fr: "Des examens sécurisés, où que soient vos étudiants.", es: "Exámenes seguros, estén donde estén tus estudiantes.", pt: "Exames seguros, onde quer que seus alunos estejam.", ar: "امتحانات آمنة، أينما كان طلابك." },
+  "auth.rememberMe": { en: "Remember me", fr: "Se souvenir de moi", es: "Recuérdame", pt: "Lembrar de mim", ar: "تذكّرني" },
+  "auth.noAccount": { en: "Don't have an account?", fr: "Vous n'avez pas de compte ?", es: "¿No tienes una cuenta?", pt: "Não tem uma conta?", ar: "ليس لديك حساب؟" },
+  "auth.invalidEmail": { en: "Enter a valid email address.", fr: "Saisissez une adresse e-mail valide.", es: "Introduce un correo electrónico válido.", pt: "Insira um e-mail válido.", ar: "أدخل بريدًا إلكترونيًا صالحًا." },
+  "auth.loginFailed": { en: "Unable to sign in. Please check your email and password.", fr: "Connexion impossible. Vérifiez votre e-mail et votre mot de passe.", es: "No se pudo iniciar sesión. Verifica tu correo y contraseña.", pt: "Não foi possível entrar. Verifique seu e-mail e senha.", ar: "تعذّر تسجيل الدخول. تحقّق من بريدك الإلكتروني وكلمة المرور." },
 
   // ── Greeting ──
   "greeting.morning": { en: "Good morning", fr: "Bonjour", es: "Buenos días", pt: "Bom dia", ar: "صباح الخير" },

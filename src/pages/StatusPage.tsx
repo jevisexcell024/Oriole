@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Activity, CheckCircle2, AlertTriangle, XCircle, Loader2 } from "lucide-react";
 import { ErrorBanner } from "@/components/ui";
 import { clsx } from "clsx";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 type StatusValue = "operational" | "degraded" | "down";
 
@@ -63,7 +64,7 @@ export function StatusPage() {
 
       <div className="mx-auto max-w-3xl px-5 py-12 fade-in">
         {error && <ErrorBanner>{error}</ErrorBanner>}
-        {!summary && !error && <div className="flex items-center justify-center gap-2 py-16 text-[var(--muted)]"><Loader2 className="h-5 w-5 animate-spin" /> Loading…</div>}
+        {!summary && !error && <ContentSkeleton variant="cards" />}
 
         {summary && meta && (
           <>

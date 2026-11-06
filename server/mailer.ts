@@ -41,7 +41,9 @@ async function getTransporter(): Promise<Transporter | null> {
         // Reuse SMTP connections instead of a fresh handshake per message — a bulk
         // student import can send dozens/hundreds of invitation emails back to back.
         pool: true,
-        maxConnections: 5,
+        // 2 connections: enough for a class-sized batch (they are sent one after another
+        // anyway) without opening five simultaneous sessions on the mail server.
+        maxConnections: 2,
         maxMessages: 100,
       }) as unknown as Transporter;
     })().catch((e: unknown) => { lastError = (e as Error).message; return null; });

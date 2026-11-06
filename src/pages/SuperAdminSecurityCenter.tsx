@@ -7,6 +7,7 @@ import { DataTable, type Column, type TableFilter } from "@/components/DataTable
 import { api } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { clsx } from "clsx";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 interface Log { id: string; at: string; actorId: string; actorName: string; action: string; target: string; }
 interface RateLimit { windowMinutes: number; max: number; }
@@ -60,7 +61,7 @@ export function SuperAdminSecurityCenter() {
         <PageHeader eyebrow={t("sad.dashEyebrow")} title={t("sad.securityTitle")} subtitle={t("sad.securitySubtitle")} />
 
         {error && <ErrorBanner className="mt-6">{error}</ErrorBanner>}
-        {!data && !error && <div className="mt-8 flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div>}
+        {!data && !error && <ContentSkeleton variant="cards" />}
 
         {data && (
           <>

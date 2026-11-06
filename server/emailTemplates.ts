@@ -35,6 +35,14 @@ export const EMAIL_TEMPLATE_DEFS: EmailTemplateDef[] = [
     variables: ["name"],
   },
   {
+    key: "account.password_reset",
+    label: "Password reset link",
+    description: "Sent when a student asks to reset their password from the portal sign-in page.",
+    defaultSubject: "Reset your Oriole password",
+    defaultIntro: "We received a request to reset the password for your Oriole account. Use the button below to choose a new one.",
+    variables: ["name"],
+  },
+  {
     key: "results.released",
     label: "Result released",
     description: "Sent when a candidate's exam result becomes available.",

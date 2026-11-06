@@ -14,6 +14,7 @@ import { DataTable, type Column } from "@/components/DataTable";
 import { api } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { clsx } from "clsx";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 const LIME = "var(--color-brand-500)";
 const CYAN = "#22d3ee";
@@ -160,7 +161,7 @@ export function AdminReliability() {
         />
 
         {error && <ErrorBanner className="mb-4">{error}</ErrorBanner>}
-        {loading && !error && <div className="mt-8 flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div>}
+        {loading && !error && <ContentSkeleton variant="chart" />}
 
         {summary && subsystems && score && incidents && (
           <>
@@ -274,7 +275,7 @@ export function AdminReliability() {
                     <LiveStat label={t("relc.cpuLoad")} value={live.loadavg1.toFixed(2)} />
                     <LiveStat label={t("relc.cpuCores")} value={String(live.cpuCount)} />
                   </div>
-                ) : <div className="mt-3 text-xs text-[var(--muted)]">{t("common.loading")}</div>}
+                ) : <ContentSkeleton variant="lines" className="mt-3" />}
               </div>
 
               <div className="card p-5">

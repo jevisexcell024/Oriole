@@ -8,6 +8,7 @@ import { api } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { clsx } from "clsx";
 import { SeverityBadge } from "@/pages/AdminReliability";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 interface ExamImpact { affectedExamIds: string[]; attemptsOverlapping: number; attemptsInterrupted: number; attemptsAutoRecovered: number; attemptsRequiringManualRecovery: number; attemptsLost: number; studentsAffected: number; examIntegrityVerdict: "maintained" | "review_recommended"; examIntegrityBasis: string; }
 interface IncidentEvent { id: string; at: string; type: string; message: string; }
@@ -48,7 +49,7 @@ export function AdminReliabilityIncident() {
         </button>
 
         {error && <ErrorBanner>{error}</ErrorBanner>}
-        {!incident && !error && <div className="mt-8 flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div>}
+        {!incident && !error && <ContentSkeleton variant="detail" />}
 
         {incident && (
           <>

@@ -11,6 +11,7 @@ import { useGeofence } from "@/lib/geofence";
 import { detectIncognito } from "@/lib/incognito";
 import { isRunningInSeb, sebLaunchHref } from "@/lib/seb";
 import type { Attempt, Exam, PublicQuestion, Registration } from "@shared/types";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 type CheckState = "pending" | "ok" | "fail";
 
@@ -192,7 +193,7 @@ export function Checkin() {
     return <Shell><p className="text-sm text-rose-400">{error}</p></Shell>;
   }
   if (!data) {
-    return <Shell><div className="flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div></Shell>;
+    return <Shell><ContentSkeleton variant="detail" /></Shell>;
   }
 
   // ---- Agreement block (shared) ----
@@ -359,7 +360,7 @@ export function Checkin() {
             {agreementBlock}
 
             <div className="rounded-xl border border-brand-500/30 bg-brand-500/15 p-4">
-              <p className="flex items-center gap-1.5 text-xs font-semibold text-brand-400"><ShieldAlert className="h-3.5 w-3.5" /> Active lockdown rules</p>
+              <p className="flex items-center gap-1.5 text-xs font-semibold text-[var(--lime-text)]"><ShieldAlert className="h-3.5 w-3.5" /> Active lockdown rules</p>
               <ul className="mt-2 grid grid-cols-1 gap-1 text-xs text-[var(--muted)]">
                 {ld?.fullscreen && <li>• Fullscreen is enforced; exiting is flagged</li>}
                 {ld?.blockCopyPaste && <li>• Copy, paste and text selection are disabled</li>}
@@ -367,7 +368,7 @@ export function Checkin() {
                 <li>• Screenshot / screen-capture shortcuts are blocked and logged</li>
                 {ld?.tabSwitchDetection && <li>• Switching tabs, apps or desktops is detected and logged</li>}
                 <li>• Private/incognito windows are not permitted</li>
-                {ld?.requireSafeExamBrowser && <li className="font-medium text-brand-400">• Safe Exam Browser is required — full OS-level lockdown (no screenshots or recording)</li>}
+                {ld?.requireSafeExamBrowser && <li className="font-medium text-[var(--lime-text)]">• Safe Exam Browser is required — full OS-level lockdown (no screenshots or recording)</li>}
                 {(ld?.violationLimit ?? 0) > 0
                   ? <li>• Exam auto-submits after {ld?.violationLimit} violations</li>
                   : <li className="font-medium text-rose-400">• Zero tolerance — any violation submits your exam immediately</li>}
@@ -387,7 +388,7 @@ export function Checkin() {
 
           <div className="card overflow-hidden">
             <div className="flex items-center gap-2 border-b border-[var(--border)] px-4 py-3 text-sm font-semibold">
-              <ShieldCheck className="h-4 w-4 text-brand-400" /> {t("chk.cameraPreview")}
+              <ShieldCheck className="h-4 w-4 text-[var(--lime-text)]" /> {t("chk.cameraPreview")}
             </div>
             <div className="relative aspect-video bg-black">
               <video ref={videoRef} autoPlay muted playsInline className="h-full w-full object-cover" />

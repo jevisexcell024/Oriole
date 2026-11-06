@@ -11,11 +11,14 @@ import { useAuth } from "@/lib/auth";
 import { MathText } from "@/lib/richtext";
 import { useT, type TFn } from "@/lib/i18n";
 import type { Attempt, Certificate, Exam, GradingStatus, ProctorEvent } from "@shared/types";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 // ── Design tokens ── theme-aware: these track the app's light/dark CSS
 // variables (src/index.css) instead of a fixed dark palette. RED/ORANGE stay
 // fixed — universal semantic colors regardless of theme. ──
 const LIME = "var(--color-brand-500)";
+// Lime as text/icon colour: deeper olive in light mode (see --lime-text in index.css).
+const LIME_TEXT = "var(--lime-text)";
 const RED = "#ef4444";
 const ORANGE = "#fb923c";
 const CARD = "var(--card)";
@@ -26,7 +29,7 @@ const INK = "var(--brand-ink)";
 // Fluent-style system font stack (Segoe UI Variable → Segoe UI → platform
 // sans) — no new font dependency, this is just the OS-native stack Microsoft's
 // own web apps use.
-const FLUENT_FONT = "'Segoe UI Variable Text', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif";
+const FLUENT_FONT = "'Manrope', 'Segoe UI', ui-sans-serif, system-ui, sans-serif";
 // Fluent's low-elevation card shadow ("shadow4"), plus its tighter 8px card
 // radius and 1px neutral border — flatter and crisper than the rest of the
 // app's deep rounded/gradient cards, deliberately, for this Microsoft-style page.
@@ -65,7 +68,7 @@ export function Result() {
   useEffect(() => { api.get<ResultResp>(`/attempts/${attemptId}/result`).then(setData).catch((e) => setError(e.message)); }, [attemptId]);
 
   if (error) return <Shell><p className="text-sm text-rose-400">{error}</p></Shell>;
-  if (!data) return <Shell><div className="flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div></Shell>;
+  if (!data) return <Shell><ContentSkeleton variant="detail" /></Shell>;
 
   const { attempt, exam, gradingStatus } = data;
   const held = data.held ?? false;
@@ -75,7 +78,7 @@ export function Result() {
 
   return (
     <Shell>
-      <div className="print:hidden" style={{ minHeight: "100vh", backgroundColor: BG, fontFamily: resolved ? FLUENT_FONT : "Inter, sans-serif", scrollbarWidth: "none" }}>
+      <div className="print:hidden" style={{ minHeight: "100vh", backgroundColor: BG, fontFamily: resolved ? FLUENT_FONT : "Manrope, sans-serif", scrollbarWidth: "none" }}>
         <div style={{ maxWidth: 860, margin: "0 auto", paddingBottom: 48 }}>
           {resolved ? <FluentCommandBar t={t} examTitle={exam.title} /> : <Breadcrumb examTitle={exam.title} />}
           {showConfirmation ? (
@@ -178,13 +181,13 @@ function SubmissionConfirmation({ t, data, pending, onContinue }: { t: TFn; data
     <div className="mx-6">
       <div className="flex flex-col items-center pb-6 pt-4 text-center">
         <div className="relative flex h-14 w-14 items-center justify-center rounded-full" style={{ background: "color-mix(in oklch, var(--color-brand-500) 14%, var(--card))" }}>
-          <CheckCircle2 className="h-7 w-7" style={{ color: LIME }} />
+          <CheckCircle2 className="h-7 w-7" style={{ color: LIME_TEXT }} />
         </div>
         <h1 className="mt-4 text-2xl font-extrabold" style={{ color: "var(--fg)" }}>{t("subc.title")}</h1>
         <p className="mt-1.5 max-w-md text-sm" style={{ color: DIM }}>{t("subc.subtitle")}</p>
         <button onClick={copyId} className="mt-3 inline-flex items-center gap-2 rounded-full transition hover:opacity-80"
           style={{ padding: "6px 14px", fontSize: 11, fontFamily: "monospace", color: DIM, background: INNER, border: "1px solid var(--border)" }}>
-          {t("subc.submissionId")}: {attempt.id} {copied ? <Check className="h-3 w-3" style={{ color: LIME }} /> : <Copy className="h-3 w-3" />}
+          {t("subc.submissionId")}: {attempt.id} {copied ? <Check className="h-3 w-3" style={{ color: LIME_TEXT }} /> : <Copy className="h-3 w-3" />}
         </button>
       </div>
 
@@ -248,7 +251,7 @@ function SubmissionConfirmation({ t, data, pending, onContinue }: { t: TFn; data
       {/* What happens next */}
       <div className="mt-4 rounded-2xl p-5" style={{ background: CARD, border: "1px solid var(--border)" }}>
         <div className="mb-3 flex items-center gap-2">
-          <Info className="h-4 w-4" style={{ color: LIME }} />
+          <Info className="h-4 w-4" style={{ color: LIME_TEXT }} />
           <h2 style={{ fontSize: 13, fontWeight: 600, color: "var(--fg)" }}>{t("subc.whatsNext")}</h2>
         </div>
         <div className="flex flex-col gap-3">
@@ -287,7 +290,7 @@ function InfoCard({ icon: Icon, title, children, wide }: { icon: typeof Clipboar
   return (
     <div className="rounded-2xl p-4" style={{ background: CARD, border: "1px solid var(--border)", gridColumn: wide ? "1 / -1" : undefined }}>
       <div className="mb-2.5 flex items-center gap-2">
-        <Icon className="h-3.5 w-3.5" style={{ color: LIME }} />
+        <Icon className="h-3.5 w-3.5" style={{ color: LIME_TEXT }} />
         <h3 style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: DIM }}>{title}</h3>
       </div>
       <div className="flex flex-col gap-2">{children}</div>
@@ -299,7 +302,7 @@ function InfoRow({ label, value, good }: { label: string; value: string; good?: 
   return (
     <div className="flex items-center justify-between gap-3">
       <span style={{ fontSize: 11, color: DIM }}>{label}</span>
-      <span className="truncate text-right" style={{ fontSize: 12, fontWeight: 600, color: good === undefined ? "var(--fg)" : good ? LIME : ORANGE }}>{value}</span>
+      <span className="truncate text-right" style={{ fontSize: 12, fontWeight: 600, color: good === undefined ? "var(--fg)" : good ? LIME_TEXT : ORANGE }}>{value}</span>
     </div>
   );
 }
@@ -308,7 +311,7 @@ function NextItem({ icon: Icon, title, desc }: { icon: typeof Lock; title: strin
   return (
     <div className="flex items-start gap-3">
       <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg" style={{ background: "color-mix(in oklch, var(--color-brand-500) 10%, transparent)" }}>
-        <Icon className="h-[14px] w-[14px]" style={{ color: LIME }} />
+        <Icon className="h-[14px] w-[14px]" style={{ color: LIME_TEXT }} />
       </span>
       <div>
         <p style={{ fontSize: 12, fontWeight: 600, color: "var(--fg)" }}>{title}</p>
@@ -390,7 +393,7 @@ function HeroCard({ t, exam, attempt, accent, passed, studentName, durationMin, 
   const offset = circumference - (score / 100) * circumference;
 
   const breakdown = [
-    { label: t("result.correctLabel"), value: correctCountAll, color: LIME },
+    { label: t("result.correctLabel"), value: correctCountAll, color: LIME_TEXT },
     { label: t("result.incorrectLabel"), value: incorrectCount, color: RED },
     { label: t("result.blankLabel"), value: blankCount, color: DIM },
     { label: t("result.totalPtsLabel"), value: `${earnedPts}/${totalPts}`, color: "var(--fg)" },
@@ -424,7 +427,7 @@ function HeroCard({ t, exam, attempt, accent, passed, studentName, durationMin, 
 
           <div>
             <div className="flex items-center gap-1.5">
-              {passed ? <CheckCircle2 className="h-4 w-4" style={{ color: LIME }} /> : <XCircle className="h-4 w-4" style={{ color: RED }} />}
+              {passed ? <CheckCircle2 className="h-4 w-4" style={{ color: LIME_TEXT }} /> : <XCircle className="h-4 w-4" style={{ color: RED }} />}
               <span style={{ fontSize: 15, fontWeight: 600, color: "var(--fg)" }}>{passed ? t("result.passed") : t("result.failed")}</span>
             </div>
             <p className="mt-1" style={{ fontSize: 12.5, color: DIM }}>
@@ -470,7 +473,7 @@ function ProctoringPanel({ t, events }: { t: TFn; events: ProctorEvent[] }) {
       </div>
 
       {events.length === 0 ? (
-        <p style={{ fontSize: 12, color: LIME }}>{t("result.cleanSession")}</p>
+        <p style={{ fontSize: 12, color: LIME_TEXT }}>{t("result.cleanSession")}</p>
       ) : (
         <div className="flex flex-col" style={{ gap: 1 }}>
           {events.map((e) => {
@@ -518,7 +521,7 @@ function ResultReviewPanel({ t, data, attemptId, spanFull }: { t: TFn; data: Res
   return (
     <div style={{ ...FLUENT_CARD, padding: 18, fontFamily: FLUENT_FONT, gridColumn: spanFull ? "1 / -1" : undefined }}>
       <div className="mb-3.5 flex items-center gap-2 pb-3" style={{ borderBottom: "1px solid var(--border)" }}>
-        <MessageSquare className="h-4 w-4" style={{ color: LIME }} />
+        <MessageSquare className="h-4 w-4" style={{ color: LIME_TEXT }} />
         <h2 style={{ fontSize: 13, fontWeight: 600, color: "var(--fg)" }}>{t("result.resultReview")}</h2>
       </div>
 
@@ -526,8 +529,8 @@ function ResultReviewPanel({ t, data, attemptId, spanFull }: { t: TFn; data: Res
 
       {reviewSent ? (
         <div className="flex items-center gap-2" style={{ padding: 11, borderRadius: 4, backgroundColor: "color-mix(in oklch, var(--color-brand-500) 8%, transparent)", border: "1px solid color-mix(in oklch, var(--color-brand-500) 15%, transparent)" }}>
-          <CheckCircle2 className="h-[14px] w-[14px]" style={{ color: LIME }} />
-          <span style={{ fontSize: 12, fontWeight: 500, color: LIME }}>{t("result.reviewSubmitted")}</span>
+          <CheckCircle2 className="h-[14px] w-[14px]" style={{ color: LIME_TEXT }} />
+          <span style={{ fontSize: 12, fontWeight: 500, color: LIME_TEXT }}>{t("result.reviewSubmitted")}</span>
         </div>
       ) : !canRequest ? null : open ? (
         <div>
@@ -592,11 +595,11 @@ function AnswerRow({ t, q, index, last }: { t: TFn; q: ReviewItem; index: number
   return (
     <div style={{ borderLeft: `3px solid ${accent}`, borderBottom: last ? undefined : "1px solid var(--border)" }}>
       <div className="flex items-start gap-3" style={{ padding: "16px 18px 14px" }}>
-        {passed ? <CheckCircle2 className="mt-0.5 h-[16px] w-[16px] shrink-0" style={{ color: LIME }} /> : <XCircle className="mt-0.5 h-[16px] w-[16px] shrink-0" style={{ color: RED }} />}
+        {passed ? <CheckCircle2 className="mt-0.5 h-[16px] w-[16px] shrink-0" style={{ color: LIME_TEXT }} /> : <XCircle className="mt-0.5 h-[16px] w-[16px] shrink-0" style={{ color: RED }} />}
         <div className="min-w-0 flex-1">
           <div className="mb-1.5 flex items-center justify-between gap-4">
             <span style={{ fontSize: 11, fontWeight: 600, color: DIM }}>{t("result.questionLabel", { n: index + 1 })}</span>
-            <span className="tabular-nums" style={{ fontSize: 11, fontWeight: 600, color: passed ? LIME : RED }}>{q.awardedPoints ?? 0}/{q.points} {t("result.pts")}</span>
+            <span className="tabular-nums" style={{ fontSize: 11, fontWeight: 600, color: passed ? LIME_TEXT : RED }}>{q.awardedPoints ?? 0}/{q.points} {t("result.pts")}</span>
           </div>
           <p className="leading-relaxed" style={{ fontSize: 13, fontWeight: 500, color: "var(--fg)" }}><MathText>{q.prompt}</MathText></p>
 
@@ -608,7 +611,7 @@ function AnswerRow({ t, q, index, last }: { t: TFn; q: ReviewItem; index: number
             {!passed && q.correctAnswer && (
               <div className="flex items-baseline gap-2">
                 <span style={{ fontSize: 11, fontWeight: 600, color: DIM, minWidth: 90 }}>{t("result.correctAnswerLabel")}</span>
-                <span className="font-mono" style={{ fontSize: 12.5, color: LIME }}>{q.correctAnswer}</span>
+                <span className="font-mono" style={{ fontSize: 12.5, color: LIME_TEXT }}>{q.correctAnswer}</span>
               </div>
             )}
           </div>

@@ -173,7 +173,7 @@ export function Timetable() {
                     {dayList.map((d, i) => (
                       <div key={i} className={clsx("border-l border-[var(--border)] px-2 py-2.5 text-center", sameDay(d, new Date()) && "bg-[color-mix(in_oklch,var(--color-brand-500)_8%,transparent)]")}>
                         <p className="text-[10px] font-semibold uppercase tracking-wide text-[var(--muted)]">{d.toLocaleDateString(undefined, { weekday: "short" })}</p>
-                        <p className={clsx("mt-0.5 text-sm font-bold", sameDay(d, new Date()) ? "text-brand-500" : "text-[var(--fg)]")}>{d.getDate()}</p>
+                        <p className={clsx("mt-0.5 text-sm font-bold", sameDay(d, new Date()) ? "text-[var(--lime-text)]" : "text-[var(--fg)]")}>{d.getDate()}</p>
                       </div>
                     ))}
                   </div>
@@ -257,8 +257,8 @@ export function Timetable() {
 
               <div className="card p-4">
                 <div className="flex items-center justify-between">
-                  <p className="flex items-center gap-1.5 text-sm font-bold"><Megaphone className="h-4 w-4 text-brand-400" /> Announcements</p>
-                  <Link to="/announcements" className="text-[11px] font-semibold text-brand-500 hover:underline">View all</Link>
+                  <p className="flex items-center gap-1.5 text-sm font-bold"><Megaphone className="h-4 w-4 text-[var(--lime-text)]" /> Announcements</p>
+                  <Link to="/announcements" className="text-[11px] font-semibold text-[var(--lime-text)] hover:underline">View all</Link>
                 </div>
                 <div className="mt-3 space-y-2.5">
                   {anns && anns.length === 0 && <p className="text-xs text-[var(--muted)]">No announcements yet.</p>}
@@ -303,7 +303,7 @@ function EventModal({ it, onClose, onNavigate }: { it: ExamListItem; onClose: ()
     : { label: "Setup needed", bg: "rgba(233,185,73,0.15)", color: "#E9B949" };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
       <div className="w-full max-w-lg overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--card)] shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between gap-3 p-5" style={{ background: `color-mix(in oklch, ${color} 10%, transparent)`, borderBottom: `1px solid color-mix(in oklch, ${color} 25%, transparent)` }}>
           <div className="min-w-0">

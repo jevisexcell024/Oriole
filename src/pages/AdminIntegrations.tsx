@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Webhook as WebhookIcon, KeyRound, Plus, Trash2, Loader2, Copy, Check, Send, Power } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
 import { ErrorBanner } from "@/components/ui";
@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import { PageHeader } from "@/components/PageHeader";
 import { useT } from "@/lib/i18n";
 import { clsx } from "clsx";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 interface Hook { id: string; url: string; events: string[]; secret: string; active: boolean; createdAt: string; lastStatus: number | null; lastAt: string | null; }
 interface ApiKey { id: string; name: string; prefix: string; createdAt: string; lastUsedAt: string | null; }
@@ -48,7 +49,7 @@ export function AdminIntegrations() {
       <div className="fade-in max-w-4xl">
         <PageHeader title={t("aintg.title")} subtitle={t("aintg.subtitle")} />
         {error && <ErrorBanner className="mt-6">{error}</ErrorBanner>}
-        {!data ? <div className="mt-8 flex items-center gap-2 text-[var(--muted)]"><Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}</div> : (
+        {!data ? <ContentSkeleton variant="cards" /> : (
           <>
             <h2 className="mt-6 flex items-center gap-2 text-sm font-semibold"><WebhookIcon className="h-4 w-4 text-brand-400" /> {t("aintg.webhooks")}</h2>
             <p className="text-xs text-[var(--muted)]">{t("aintg.webhookDesc1")}<code className="rounded bg-[var(--card-2)] px-1">x-orcalis-signature</code>{t("aintg.webhookDesc2")}</p>

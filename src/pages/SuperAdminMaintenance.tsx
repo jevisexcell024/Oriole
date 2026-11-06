@@ -11,6 +11,7 @@ import { api } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { clsx } from "clsx";
 import type { MaintenanceWindow } from "@shared/types";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 interface MaintenanceState { id: string; enabled: boolean; message: string; updatedAt: string | null; updatedBy: string | null; }
 interface AuditEntry { id: string; at: string; actorName: string; action: string; target: string; }
@@ -261,7 +262,7 @@ export function SuperAdminMaintenance() {
 
             <div className="card mt-3 overflow-hidden">
               {!windows ? (
-                <div className="p-5 text-sm text-[var(--muted)]">{t("common.loading")}</div>
+                <ContentSkeleton variant="lines" className="p-5" />
               ) : filtered.length === 0 ? (
                 <p className="px-4 py-10 text-center text-sm text-[var(--muted)]">{search ? "No maintenance matches your search." : "Nothing here yet."}</p>
               ) : (
@@ -341,7 +342,7 @@ export function SuperAdminMaintenance() {
                 </div>
                 <div className="card mt-3 overflow-hidden">
                   {!history ? (
-                    <div className="p-5 text-sm text-[var(--muted)]">{t("common.loading")}</div>
+                    <ContentSkeleton variant="lines" className="p-5" />
                   ) : visibleHistory.length === 0 ? (
                     <p className="px-4 py-6 text-center text-sm text-[var(--muted)]">{historyFilter === "all" ? "No maintenance activity yet." : "Nothing in this filter."}</p>
                   ) : (

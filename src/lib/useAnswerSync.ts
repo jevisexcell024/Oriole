@@ -27,6 +27,7 @@ export function useAnswerSync(attemptId: string | undefined) {
   const inFlight = useRef(false);
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retry = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const failedPasses = useRef(0); // consecutive failed flushes — drives the retry back-off
   const onClosedRef = useRef<(() => void) | null>(null);
   const [state, setState] = useState<SaveState>(
     typeof navigator !== "undefined" && !navigator.onLine ? "offline" : "saved",
@@ -69,9 +70,14 @@ export function useAnswerSync(attemptId: string | undefined) {
       } else {
         setState("error");
         if (retry.current) clearTimeout(retry.current);
-        retry.current = setTimeout(() => { void flush(); }, 3000);
+        // 3s, 6s, 12s … up to 30s, randomised ±20%: a struggling server gets breathing
+        // room instead of every candidate retrying at the same fixed moment.
+        const wait = Math.min(30_000, 3_000 * 2 ** failedPasses.current) * (0.8 + Math.random() * 0.4);
+        failedPasses.current += 1;
+        retry.current = setTimeout(() => { void flush(); }, wait);
       }
     } else {
+      failedPasses.current = 0;
       setState("saved");
     }
   }, [attemptId, persist]);

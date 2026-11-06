@@ -9,6 +9,7 @@ import { SegmentDonut } from "@/components/Charts";
 import { api } from "@/lib/api";
 import { useT, type TFn } from "@/lib/i18n";
 import type { Exam } from "@shared/types";
+import { ContentSkeleton } from "@/components/Skeletons";
 
 /* ── Brand palette — three solid colors ─────────────────────────────────────── */
 const C = {
@@ -19,8 +20,8 @@ const C = {
 const DARK = "#111110";
 
 /* ── Fonts — matches the rest of the admin shell ─────────────────────────────── */
-const DISPLAY = "'Space Grotesk', 'Segoe UI', sans-serif";
-const SANS    = "'DM Sans', 'Segoe UI', sans-serif";
+const DISPLAY = "'Manrope', 'Segoe UI', sans-serif";
+const SANS    = "'Manrope', 'Segoe UI', sans-serif";
 
 const STATUS_KEY: Record<string, string> = { published: "aex.statusPublished", draft: "aex.statusDraft" };
 
@@ -111,9 +112,7 @@ export function AdminExams() {
         </div>
 
         {!data ? (
-          <div className="flex items-center gap-2 py-16 text-[var(--muted)]">
-            <Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}
-          </div>
+          <ContentSkeleton variant="cards" />
         ) : (
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.55fr_1fr]">
 
@@ -241,7 +240,7 @@ export function AdminExams() {
 
       {/* ── Delete confirmation ── */}
       {confirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => !deleting && setConfirm(null)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-2xl bg-[var(--card)] p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-2.5">
               <div className="flex h-10 w-10 items-center justify-center rounded-full" style={{ background: `${C.pink}20` }}>

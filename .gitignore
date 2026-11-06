@@ -27,3 +27,9 @@ backups/
 # Logs & OS cruft
 *.log
 .DS_Store
+
+# Local demo credentials
+*.local.txt
+
+# Database backups (contain student data)
+data/
