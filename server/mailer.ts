@@ -68,6 +68,7 @@ export async function verifySmtp(): Promise<{ ok: boolean; error: string | null 
     const t = await getTransporter();
     if (!t) return { ok: false, error: "Transporter failed to initialise" };
     if (typeof t.verify === "function") await t.verify();
+    lastError = null;
     return { ok: true, error: null };
   } catch (e) {
     const msg = (e as Error).message;
@@ -165,6 +166,7 @@ export async function sendMail(
     try {
       const info = await attempt();
       delivery = "sent";
+      lastError = null; // recovered — don't keep reporting an old failure as "down"
       const nodemailer = (await import("nodemailer")).default;
       previewUrl = nodemailer.getTestMessageUrl(info as never) || null;
     } catch (e) {
@@ -173,6 +175,7 @@ export async function sendMail(
       try {
         const info = await attempt();
         delivery = "sent";
+        lastError = null;
         const nodemailer = (await import("nodemailer")).default;
         previewUrl = nodemailer.getTestMessageUrl(info as never) || null;
       } catch (e2) {

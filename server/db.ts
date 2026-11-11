@@ -970,11 +970,33 @@ async function restoreFromDump(data: Record<string, unknown[]>) {
  *  in-place backfill SQL. Safe to call again against a freshly recreated,
  *  empty backend after a corruption quarantine. */
 async function ensureSchema() {
-  await be().exec(TABLES.map((t) => `CREATE TABLE IF NOT EXISTS ${t.table} (id text primary key, doc jsonb not null);`).join("\n"));
+  // Two copies of the app starting at once (a host restart overlapping the old process, or the
+  // host spawning more than one) used to run these DDL statements concurrently, take table locks
+  // in opposite order, and one of them crashed with "deadlock detected" (40P01). On managed
+  // Postgres, run the whole thing under one advisory lock so the second copy waits its turn
+  // (the work is idempotent, so it then finds nothing left to do), and retry if the deadlock
+  // still happens against an older copy that doesn't take the lock.
+  if (be().kind !== "postgres") return ensureSchemaSql((sql) => be().exec(sql));
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await be().transaction(async (tx) => {
+        await tx.query("select pg_advisory_xact_lock(727002)");
+        await ensureSchemaSql(async (sql) => { await tx.query(sql); });
+      });
+      return;
+    } catch (e) {
+      if ((e as { code?: string }).code !== "40P01" || attempt >= 4) throw e;
+      await new Promise((r) => setTimeout(r, 500 * (attempt + 1) + Math.random() * 500));
+    }
+  }
+}
+
+async function ensureSchemaSql(exec: (sql: string) => Promise<void>) {
+  await exec(TABLES.map((t) => `CREATE TABLE IF NOT EXISTS ${t.table} (id text primary key, doc jsonb not null);`).join("\n"));
 
   // Dedicated, indexed snapshots table (not part of the mirror). The ALTER/UPDATE
   // steps migrate a pre-existing generic (id, doc) snapshots table in place.
-  await be().exec([
+  await exec([
     "CREATE TABLE IF NOT EXISTS snapshots (id text primary key, attempt_id text, at text, doc jsonb not null);",
     "ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS attempt_id text;",
     "ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS at text;",
@@ -985,7 +1007,7 @@ async function ensureSchema() {
 
   // Append-only log tables (also off-mirror). Migrate any pre-existing generic
   // (id, doc) table in place by adding/backfilling the ordering column.
-  await be().exec([
+  await exec([
     "CREATE TABLE IF NOT EXISTS audit_logs (id text primary key, at text, doc jsonb not null);",
     "ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS at text;",
     "UPDATE audit_logs SET at = doc->>'at' WHERE at IS NULL;",
@@ -1041,7 +1063,7 @@ async function ensureSchema() {
   // too, restoring rows written by tenant-aware store code (e.g. emailStore,
   // which writes a tenant_id column) fails outright on the very first row.
   // Runs last, after every one of these tables has just been created above.
-  await be().exec(TENANT_ID_TABLES.map((t) => `ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS tenant_id text;`).join("\n"));
+  await exec(TENANT_ID_TABLES.map((t) => `ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS tenant_id text;`).join("\n"));
 }
 
 // Off-mirror tables that need a tenant_id column — unlike the ensureSchema()

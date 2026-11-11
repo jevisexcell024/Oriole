@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
-  Clock, Loader2, CheckCircle2, XCircle, ShieldCheck, MonitorCheck, Play,
+  Clock, CheckCircle2, XCircle, ShieldCheck, Play,
   CalendarClock, Filter, Hourglass, ListChecks, Eye, BookOpen, History, Award,
   User, Camera, Mic, Wifi, Globe, BadgeCheck,
 } from "lucide-react";
@@ -154,6 +154,7 @@ export function Exams() {
   );
 }
 
+
 function ExamDetail({ it, now, user, perm, tab, setTab }: {
   it: ExamListItem; now: number; user: ReturnType<typeof useAuth>["user"];
   perm: { camera?: string; microphone?: string }; tab: string; setTab: (t: string) => void;
@@ -192,7 +193,7 @@ function ExamDetail({ it, now, user, perm, tab, setTab }: {
   const TAB_LABEL: Record<string, string> = { overview: "Overview", instructions: "Instructions", requirements: "Requirements", proctoring: "Proctoring Rules", resources: "Resources" };
 
   return (
-    <div className="card rounded-2xl p-6">
+    <div className="card rounded-2xl p-6 !shadow-none">
       {/* Header row: availability + countdown */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <span className={clsx("inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold", s.cls)}>
@@ -227,15 +228,9 @@ function ExamDetail({ it, now, user, perm, tab, setTab }: {
         ) : r.approval !== "confirmed" ? (
           <span className="btn h-11 cursor-not-allowed px-5 opacity-60" style={{ background: "var(--card-2)", color: "var(--muted)" }}><Hourglass className="h-4 w-4" /> Awaiting confirmation</span>
         ) : !isOpen ? (
-          <>
-            <span className="btn h-11 cursor-not-allowed px-5 opacity-60" style={{ background: "var(--card-2)", color: "var(--muted)" }}><Hourglass className="h-4 w-4" /> {opens ? relFuture(opens, now) : "Not available"}</span>
-            <Link to={checkinTo} className="btn btn-outline h-11 px-5"><MonitorCheck className="h-4 w-4" /> Run System Check</Link>
-          </>
+          <span className="btn h-11 cursor-not-allowed px-5 opacity-60" style={{ background: "var(--card-2)", color: "var(--muted)" }}><Hourglass className="h-4 w-4" /> {opens ? relFuture(opens, now) : "Not available"}</span>
         ) : (
-          <>
-            <Link to={checkinTo} className="btn btn-primary h-11 px-5"><Play className="h-4 w-4" /> Start Examination</Link>
-            <Link to={checkinTo} className="btn btn-outline h-11 px-5"><MonitorCheck className="h-4 w-4" /> Run System Check</Link>
-          </>
+          <Link to={checkinTo} className="btn btn-primary h-11 px-5 !shadow-none"><Play className="h-4 w-4" /> Start Examination</Link>
         )}
       </div>
 
@@ -255,7 +250,7 @@ function ExamDetail({ it, now, user, perm, tab, setTab }: {
             ))}
           </div>
           {readyPassed < ready.length && proctored && (
-            <p className="mt-3 text-[11px] text-[var(--muted)]">Run the system check to grant camera/microphone access and complete the remaining items.</p>
+            <p className="mt-3 text-[11px] text-[var(--muted)]">Camera and microphone access is requested when you start the exam.</p>
           )}
         </div>
 

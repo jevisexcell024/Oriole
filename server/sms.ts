@@ -66,6 +66,7 @@ export async function sendSms(to: string, body: string): Promise<{ delivery: Sms
         throw new Error(`Twilio ${res.status}: ${text.slice(0, 200)}`);
       }
       delivery = "sent";
+      lastError = null; // recovered — don't keep reporting an old failure as "down"
     } catch (e) {
       delivery = "failed";
       error = (e as Error).message;
