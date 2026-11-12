@@ -200,6 +200,9 @@ export interface User {
    *  successfully logged in from before, newest first, capped at 10. A login
    *  from an unrecognized fingerprint triggers a "new sign-in" email alert. */
   knownDevices?: { fingerprint: string; lastSeenAt: string }[];
+  /** Microsoft account this user signed in with ("<tenant>:<object id>"), linked on their first SSO
+   *  sign-in. After that only this exact Microsoft identity can use SSO for the account. */
+  ssoSubject?: string;
   /** Set whenever a student is issued a password they didn't choose (initial
    *  invite, bulk import, resend, or an admin-driven reset) — forces them
    *  through a one-time password-setup screen on their next login before they

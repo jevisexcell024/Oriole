@@ -12,6 +12,7 @@ import { createHmac, createHash, randomBytes } from "node:crypto";
 import { db, initDb, claimInstanceLock, releaseInstanceLock, hasInstanceConflict, snapshotStore, proctorStore, answerStore, auditStore, superAdminAuditStore, emailStore, geofenceStore, reliabilityStore, reliabilityRollupStore, mediaAssetStore, exportTenantData, deleteTenantData } from "./db.ts";
 import { currentTenantId, tenantExams, getOrgSettings, effectiveBrandColor } from "./tenant.ts";
 import { sendMail, mailerStatus, verifySmtp, buildHtml, ctaButton, esc } from "./mailer.ts";
+import { microsoftConfig, beginMicrosoftSignIn, readSignInTxn, clearSignInTxn, exchangeMicrosoftCode, verifyMicrosoftIdToken } from "./sso.ts";
 import { renderEmailTemplate, EMAIL_TEMPLATE_DEFS } from "./emailTemplates.ts";
 import { sendSms, smsEnabled, smsStatus, recentSms } from "./sms.ts";
 import {
@@ -27,7 +28,6 @@ import {
 import { listSessions, revokeSession, revokeAllSessions, pruneAuthSessions } from "./sessions.ts";
 import { notifyAllTenantAdmins, notifyAllSuperAdmins, listNotificationsFor, markNotificationRead } from "./notifications.ts";
 import { generateSecret, verifyTotp, verifyTotpStep, otpauthUrl, generateBackupCodes } from "./totp.ts";
-import { microsoftEnabled, authorizeUrl, exchangeCode } from "./sso.ts";
 import { tryEvalExpr } from "../shared/expr.ts";
 import { env, assertProductionEnv, BCRYPT_COST } from "./env.ts";
 import { securityHeaders, permissionsPolicy, authLimiter, apiLimiter, twoFaLimiter, superAdminAuthLimiter, tenantRequestLimiter, assertSafeWebhookUrl, isMaintenanceExempt } from "./security.ts";
@@ -396,6 +396,52 @@ app.post("/api/auth/login", validate(loginSchema), async (req, res) => {
   // would otherwise queue behind the mail transport's connection pool and stall.
   checkNewDeviceAndAlert(req, user).catch(() => { /* best-effort */ });
   res.json({ user: toSafeUser(user), brandColor: effectiveBrandColor(user.tenantId ?? null) });
+});
+
+// ── Microsoft SSO (student portal only) ───────────────────────────────────────
+// Signs in EXISTING student accounts only — nobody is created here. First sign-in matches the
+// Microsoft account's email to the student's email and links it (ssoSubject); from then on only
+// that Microsoft identity works for the account. Staff accounts are refused, same as the
+// password door. Microsoft handles any MFA, so the app's own 2FA step is not repeated.
+app.get("/api/auth/sso/config", (_req, res) => res.json({ microsoft: !!microsoftConfig() }));
+
+app.get("/api/auth/sso/microsoft/start", (_req, res) => {
+  const cfg = microsoftConfig();
+  if (!cfg) return res.redirect("/portal?sso_error=unavailable");
+  res.redirect(beginMicrosoftSignIn(res, cfg));
+});
+
+app.get("/api/auth/sso/microsoft/callback", async (req, res) => {
+  const fail = (code: string) => { clearSignInTxn(res); res.redirect(`/portal?sso_error=${code}`); };
+  const cfg = microsoftConfig();
+  if (!cfg) return fail("unavailable");
+  const txn = readSignInTxn(req);
+  const { code, state, error } = req.query as Record<string, string | undefined>;
+  if (error) return fail(error === "access_denied" ? "cancelled" : "failed");
+  if (!txn || !code || !state || state !== txn.state) return fail("expired");
+  try {
+    const who = await verifyMicrosoftIdToken(cfg, await exchangeMicrosoftCode(cfg, code, txn.verifier), txn.nonce);
+    const users = db.data!.users;
+    const user = users.find((u) => u.ssoSubject === who.subject) ?? users.find((u) => !u.ssoSubject && u.email.toLowerCase() === who.email);
+    if (!user) { await recordAuthAudit(req, "auth.sso_no_account", who.email); return fail("no_account"); }
+    if (user.role !== "candidate") { await recordAuthAudit(req, "auth.login_wrong_portal", user.email); return fail("staff"); }
+    const tenant = user.tenantId ? db.data!.tenants.find((t) => t.id === user.tenantId) : null;
+    const trialOver = tenant?.licenseStatus === "trial" && !!tenant.licenseExpiresAt && new Date(tenant.licenseExpiresAt).getTime() < Date.now();
+    if (tenant?.status === "suspended" || trialOver) { await recordAuthAudit(req, "auth.sso_blocked_tenant", user.email); return fail("blocked"); }
+    if (!user.ssoSubject || user.mustChangePassword) {
+      user.ssoSubject = who.subject;
+      user.mustChangePassword = false; // they sign in with Microsoft; there is no password for them to choose
+      await db.upsert("users", user);
+    }
+    clearSignInTxn(res);
+    await issueSession(req, res, user);
+    checkNewDeviceAndAlert(req, user).catch(() => { /* best-effort */ });
+    await recordAuthAudit(req, "auth.sso_login", user.email);
+    res.redirect("/portal");
+  } catch (e) {
+    logger.warn({ err: (e as Error).message }, "Microsoft SSO sign-in failed");
+    fail("failed");
+  }
 });
 
 // Step 2 of a 2FA login: verify the authenticator code (or a backup code).
@@ -1778,41 +1824,6 @@ app.post("/api/super-admin/tenants/:id/redeem-license", requireSuperAdminOwner, 
   await db.upsert("licenseKeys", result.key);
   await recordSuperAdminAudit(req, "superadmin.license_key.redeemed", `${result.key.code} → ${tenant.name} (${result.plan.name})`);
   res.json({ tenant, plan: result.plan });
-});
-
-// ---- Single Sign-On (Microsoft / Entra) ----
-app.get("/api/auth/sso", (_req, res) => res.json({ microsoft: microsoftEnabled() }));
-
-function ssoRedirectUri(req: Request): string {
-  if (process.env.MS_REDIRECT_URI) return process.env.MS_REDIRECT_URI;
-  const proto = (req.headers["x-forwarded-proto"] as string) || req.protocol;
-  return `${proto}://${req.headers.host}/api/auth/sso/microsoft/callback`;
-}
-
-app.get("/api/auth/sso/microsoft/start", (req, res) => {
-  if (!microsoftEnabled()) return res.status(404).send("Microsoft sign-in is not configured.");
-  const state = randomBytes(16).toString("hex");
-  res.cookie("orcalis_sso_state", state, { httpOnly: true, sameSite: "lax", secure: env.isProd, maxAge: 10 * 60 * 1000 });
-  res.redirect(authorizeUrl(ssoRedirectUri(req), state));
-});
-
-app.get("/api/auth/sso/microsoft/callback", async (req, res) => {
-  try {
-    const { code, state } = req.query as { code?: string; state?: string };
-    const cookieState = req.cookies?.orcalis_sso_state;
-    res.clearCookie("orcalis_sso_state");
-    if (!code || !state || !cookieState || state !== cookieState) return res.redirect("/login?sso=error");
-    const info = await exchangeCode(String(code), ssoRedirectUri(req));
-    if (!info) return res.redirect("/login?sso=error");
-    // Only sign in an account that already exists — SSO never creates accounts.
-    const user = db.data!.users.find((u) => u.email.toLowerCase() === info.email);
-    if (!user) return res.redirect("/login?sso=nouser");
-    await issueSession(req, res, user);
-    await recordAudit(req, "auth.sso", `${user.name} <${user.email}> (Microsoft)`);
-    res.redirect("/");
-  } catch {
-    res.redirect("/login?sso=error");
-  }
 });
 
 // ---------------------------------------------------------------- EXAMS (candidate)

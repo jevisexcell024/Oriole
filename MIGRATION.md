@@ -137,6 +137,8 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 ### SSO — Microsoft Entra (optional)
 `MS_TENANT`, `MS_CLIENT_ID`, `MS_CLIENT_SECRET`, `MS_REDIRECT_URI`.
 **SSO only signs in users that already exist (matched by email); it must NOT auto-create accounts.**
+Instead of `MS_CLIENT_SECRET`, a school that bans secrets can use a certificate: `MS_CLIENT_CERT_KEY_PATH` (private key PEM on the server) + `MS_CLIENT_CERT_THUMBPRINT`.
+`MS_TENANT` must be the directory's GUID (not `organizations`/`common`). SSO is for students on `/portal` only; staff use `/login`.
 
 ### Code execution (optional)
 `CODE_RUNNER_ENABLED`, `PISTON_URL`, `PISTON_AUTH`.

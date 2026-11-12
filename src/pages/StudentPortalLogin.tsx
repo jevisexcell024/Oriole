@@ -10,6 +10,26 @@ import { useT } from "@/lib/i18n";
 
 const ART = "/book.png";
 
+// Why a Microsoft sign-in bounced back to /portal (?sso_error=<code> from the server).
+const SSO_ERRORS: Record<string, string> = {
+  no_account: "We couldn't find a student account for that Microsoft account. Ask your administrator to add your school email.",
+  staff: "That account belongs to staff. Staff sign in from the staff sign-in page.",
+  blocked: "Your school's access is currently unavailable. Contact your administrator.",
+  cancelled: "Microsoft sign-in was cancelled.",
+  expired: "That sign-in took too long or was interrupted. Please try again.",
+  unavailable: "Microsoft sign-in isn't available right now.",
+  failed: "Microsoft sign-in didn't work. Please try again, or use your password.",
+};
+
+function MicrosoftMark() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 21 21" aria-hidden="true">
+      <rect x="1" y="1" width="9" height="9" fill="#F25022" /><rect x="11" y="1" width="9" height="9" fill="#7FBA00" />
+      <rect x="1" y="11" width="9" height="9" fill="#00A4EF" /><rect x="11" y="11" width="9" height="9" fill="#FFB900" />
+    </svg>
+  );
+}
+
 /** Student portal sign-in — its own URL (/portal) and its own page, separate
  *  from the staff sign-in at /login. The server only accepts candidate accounts
  *  here (and only staff on /login), so the two audiences never share a door. */
@@ -27,6 +47,17 @@ export function StudentPortalLogin() {
   const [sent, setSent] = useState(false);
   const [twoFA, setTwoFA] = useState(false);
   const [code, setCode] = useState("");
+  const [msSso, setMsSso] = useState(false);
+
+  // Is Microsoft sign-in switched on? And did we just come back from a failed attempt?
+  useEffect(() => {
+    api.get<{ microsoft: boolean }>("/auth/sso/config").then((d) => setMsSso(d.microsoft)).catch(() => {});
+    const code = new URLSearchParams(window.location.search).get("sso_error");
+    if (code) {
+      setError(SSO_ERRORS[code] ?? SSO_ERRORS.failed);
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, []);
 
   // Already signed in (any role) — just send them to their own landing page.
   useEffect(() => {
@@ -186,6 +217,15 @@ export function StudentPortalLogin() {
                     {busy ? <><Loader2 className="h-4 w-4 animate-spin" /> {t("auth.signingIn")}</> : <>{t("auth.signIn")} <ArrowRight className="h-4 w-4" /></>}
                   </button>
                 </form>
+
+                {msSso && (
+                  <>
+                    <div className="my-5 flex items-center gap-3 text-xs text-[#565B47]"><span className="h-px flex-1 bg-[#DAD8CE]" /> or <span className="h-px flex-1 bg-[#DAD8CE]" /></div>
+                    <a href="/api/auth/sso/microsoft/start" className="btn h-12 w-full rounded-full bg-[#ECEAE3] text-[#1B1D12] shadow-none hover:bg-[#E3E1D8]">
+                      <MicrosoftMark /> Continue with Microsoft
+                    </a>
+                  </>
+                )}
               </>
             )}
           </div>
