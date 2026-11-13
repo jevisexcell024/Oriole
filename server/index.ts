@@ -66,7 +66,7 @@ import type {
   Answer, Attempt, Certificate, Exam, ExamListItem, ProctorEvent, PublicQuestion, Question, Registration, RubricCriterion, RegradeRequest, WebhookEvent,
   Book, BookGenre, ReadingProgress, ResourceType, ResourceDifficulty, ResourceVersion, ResourceBookmark, ResourceRating, ResourceDownloadLog, User,
   LearningStructureMode, AnnouncementRead, CustomRole, ReliabilitySubsystemKey, ReliabilityIncident, MediaAsset,
-  SuperAdminSummary, SuperAdmin, SupportTicket, Tenant, OrgSettings, Plan, LicenseKey, MaintenanceWindow, TenantRequest,
+  SuperAdminSummary, SuperAdmin, SupportTicket, Tenant, OrgSettings, Plan, LicenseKey, MaintenanceWindow, TenantRequest, SsoRosterEntry,
 } from "../shared/types.ts";
 import { PERMISSIONS, PERMISSION_KEYS, isPermissionKey, SYSTEM_ROLE_PERMISSIONS, systemParentId, parseSystemParentId, type PermissionKey } from "../shared/permissions.ts";
 import {
@@ -449,24 +449,48 @@ app.get("/api/auth/sso/microsoft/callback", async (req, res) => {
         }
       }
 
+      // Check roster restrictions if enabled and get profile data
+      let rosterEntry: SsoRosterEntry | undefined;
+      if (orgSettings.ssoRosterEnabled && orgSettings.ssoRoster?.length) {
+        rosterEntry = orgSettings.ssoRoster.find((r) => r.email === who.email.toLowerCase());
+        if (!rosterEntry) {
+          await recordAuthAudit(req, "auth.sso_not_in_roster", who.email);
+          return fail("not_in_roster");
+        }
+      }
+
       // Check tenant status
       const tenant = db.data!.tenants.find((t) => t.id === targetTenantId);
       const trialOver = tenant?.licenseStatus === "trial" && !!tenant.licenseExpiresAt && new Date(tenant.licenseExpiresAt).getTime() < Date.now();
       if (tenant?.status === "suspended" || trialOver) { await recordAuthAudit(req, "auth.sso_blocked_tenant", who.email); return fail("blocked"); }
 
-      // Create the new user
+      // Build full name from roster data or fallback to Microsoft name
+      const buildName = () => {
+        if (rosterEntry?.firstName || rosterEntry?.lastName) {
+          const parts = [rosterEntry.firstName, rosterEntry.middleName, rosterEntry.lastName].filter(Boolean);
+          return parts.join(" ") || who.name || who.email.split("@")[0];
+        }
+        return who.name || who.email.split("@")[0];
+      };
+
+      // Create the new user with roster profile data
       user = {
         id: nanoid(),
         tenantId: targetTenantId,
         email: who.email,
-        name: who.name || who.email.split("@")[0],
+        name: buildName(),
         role: "candidate",
         passwordHash: "", // SSO users don't have a password
         ssoSubject: who.subject,
+        // Profile fields from roster
+        gender: rosterEntry?.gender || undefined,
+        studentClass: rosterEntry?.studentClass || undefined,
       };
+      // Store studentId in a way the app expects (check if there's a studentRef or similar field)
+      // For now we'll use a custom approach - the studentId can be stored and shown in profile
       await db.upsert("users", user);
       await recordAuthAudit(req, "auth.sso_provisioned", who.email);
-      logger.info({ email: who.email, tenantId: targetTenantId }, "Auto-provisioned new user via Microsoft SSO");
+      logger.info({ email: who.email, tenantId: targetTenantId, rosterMatch: !!rosterEntry }, "Auto-provisioned new user via Microsoft SSO");
     } else {
       // Existing user flow
       const existingUser = user; // Capture for type narrowing in callbacks
@@ -7001,9 +7025,132 @@ app.patch("/api/admin/settings", requirePermission("system.settings"), async (re
       .filter((v): v is string => typeof v === "string" && v.trim().length > 0)
       .map((v) => v.trim().toLowerCase());
   }
+  if (typeof b.ssoRosterEnabled === "boolean") s.ssoRosterEnabled = b.ssoRosterEnabled;
   await db.upsert("settings", s);
   await recordAudit(req, "settings.updated", "Updated organization settings");
   res.json({ settings: s });
+});
+
+// ── SSO Roster Management ──
+// Upload a CSV of allowed students with profile data for SSO auto-provisioning.
+app.get("/api/admin/sso-roster", requirePermission("system.settings"), (req, res) => {
+  const s = getOrgSettings(currentTenantId(req)!);
+  res.json({ roster: s.ssoRoster ?? [], enabled: s.ssoRosterEnabled ?? false });
+});
+
+app.post("/api/admin/sso-roster/upload", requirePermission("system.settings"), async (req, res) => {
+  const { csv } = req.body as { csv?: string };
+  if (!csv || typeof csv !== "string") return res.status(400).json({ error: "CSV data is required." });
+
+  // Parse CSV with headers: StudentID, First Name, Middle Name, Last Name, Gender, Class, Email
+  const lines = csv.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length < 2) return res.status(400).json({ error: "CSV must have a header row and at least one data row." });
+
+  const roster: SsoRosterEntry[] = [];
+  const errors: string[] = [];
+  const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const seenEmails = new Set<string>();
+
+  // Parse header row to find column indices
+  const headers = lines[0].split(",").map((h) => h.trim().toLowerCase().replace(/"/g, ""));
+  const colIndex = {
+    email: headers.findIndex((h) => h === "email" || h === "mail" || h === "e-mail"),
+    studentId: headers.findIndex((h) => h === "studentid" || h === "student_id" || h === "student id" || h === "id"),
+    firstName: headers.findIndex((h) => h === "firstname" || h === "first_name" || h === "first name" || h === "first"),
+    middleName: headers.findIndex((h) => h === "middlename" || h === "middle_name" || h === "middle name" || h === "middle" || h.startsWith("middle name")),
+    lastName: headers.findIndex((h) => h === "lastname" || h === "last_name" || h === "last name" || h === "last" || h === "surname"),
+    gender: headers.findIndex((h) => h === "gender" || h === "sex"),
+    studentClass: headers.findIndex((h) => h === "class" || h === "studentclass" || h === "student_class" || h === "grade" || h === "level"),
+  };
+
+  if (colIndex.email === -1) {
+    return res.status(400).json({ error: "CSV must have an 'Email' column." });
+  }
+
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].split(",").map((c) => c.trim().replace(/"/g, ""));
+    const email = (cols[colIndex.email] ?? "").toLowerCase().trim();
+    if (!email) continue;
+
+    if (!emailRe.test(email)) {
+      errors.push(`Line ${i + 1}: Invalid email "${email}"`);
+      continue;
+    }
+    if (seenEmails.has(email)) {
+      errors.push(`Line ${i + 1}: Duplicate email "${email}"`);
+      continue;
+    }
+    seenEmails.add(email);
+
+    const entry: SsoRosterEntry = { email };
+    if (colIndex.studentId !== -1 && cols[colIndex.studentId]) entry.studentId = cols[colIndex.studentId];
+    if (colIndex.firstName !== -1 && cols[colIndex.firstName]) entry.firstName = cols[colIndex.firstName];
+    if (colIndex.middleName !== -1 && cols[colIndex.middleName]) entry.middleName = cols[colIndex.middleName];
+    if (colIndex.lastName !== -1 && cols[colIndex.lastName]) entry.lastName = cols[colIndex.lastName];
+    if (colIndex.gender !== -1 && cols[colIndex.gender]) entry.gender = cols[colIndex.gender];
+    if (colIndex.studentClass !== -1 && cols[colIndex.studentClass]) entry.studentClass = cols[colIndex.studentClass];
+    roster.push(entry);
+  }
+
+  if (roster.length === 0) {
+    return res.status(400).json({ error: "No valid entries found in CSV.", details: errors.slice(0, 10) });
+  }
+
+  const s = getOrgSettings(currentTenantId(req)!);
+  s.ssoRoster = roster;
+  await db.upsert("settings", s);
+  await recordAudit(req, "sso.roster_uploaded", `${roster.length} students`);
+  res.json({ count: roster.length, errors: errors.slice(0, 10) });
+});
+
+app.post("/api/admin/sso-roster/add", requirePermission("system.settings"), async (req, res) => {
+  const body = req.body as Partial<SsoRosterEntry>;
+  if (!body.email || typeof body.email !== "string") return res.status(400).json({ error: "Email is required." });
+  const email = body.email.toLowerCase().trim();
+  const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRe.test(email)) return res.status(400).json({ error: "Invalid email format." });
+
+  const s = getOrgSettings(currentTenantId(req)!);
+  const roster = s.ssoRoster ?? [];
+  if (roster.some((r) => r.email === email)) return res.status(400).json({ error: "Email already in roster." });
+
+  const entry: SsoRosterEntry = {
+    email,
+    studentId: body.studentId?.trim() || undefined,
+    firstName: body.firstName?.trim() || undefined,
+    middleName: body.middleName?.trim() || undefined,
+    lastName: body.lastName?.trim() || undefined,
+    gender: body.gender?.trim() || undefined,
+    studentClass: body.studentClass?.trim() || undefined,
+  };
+  roster.push(entry);
+  s.ssoRoster = roster;
+  await db.upsert("settings", s);
+  await recordAudit(req, "sso.roster_added", email);
+  res.json({ count: roster.length });
+});
+
+app.delete("/api/admin/sso-roster/:email", requirePermission("system.settings"), async (req, res) => {
+  const emailParam = Array.isArray(req.params.email) ? req.params.email[0] : req.params.email;
+  const email = decodeURIComponent(emailParam).toLowerCase().trim();
+  const s = getOrgSettings(currentTenantId(req)!);
+  const roster = s.ssoRoster ?? [];
+  const idx = roster.findIndex((r) => r.email === email);
+  if (idx === -1) return res.status(404).json({ error: "Email not in roster." });
+  roster.splice(idx, 1);
+  s.ssoRoster = roster;
+  await db.upsert("settings", s);
+  await recordAudit(req, "sso.roster_removed", email);
+  res.json({ count: roster.length });
+});
+
+app.delete("/api/admin/sso-roster", requirePermission("system.settings"), async (req, res) => {
+  const s = getOrgSettings(currentTenantId(req)!);
+  const count = s.ssoRoster?.length ?? 0;
+  s.ssoRoster = [];
+  await db.upsert("settings", s);
+  await recordAudit(req, "sso.roster_cleared", `${count} students`);
+  res.json({ cleared: count });
 });
 
 // Foundational Learning Structure config (Academic/Cohort/Hybrid) — read by
