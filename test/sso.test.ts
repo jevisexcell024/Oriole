@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterEach, vi } from "vitest";
 import jwt from "jsonwebtoken";
 import { generateKeyPairSync, type KeyObject } from "node:crypto";
-import { microsoftConfig, verifyMicrosoftIdToken, resetSigningKeyCache, clientAssertion, exchangeMicrosoftCode, type MicrosoftConfig } from "../server/sso.ts";
+import { microsoftConfig, verifyMicrosoftIdToken, resetSigningKeyCache, clientAssertion, exchangeMicrosoftCode, autoCreateDomains, emailInDomains, displayNameFor, type MicrosoftConfig } from "../server/sso.ts";
 
 const TENANT = "11111111-2222-3333-4444-555555555555";
 const cfg: MicrosoftConfig = { clientId: "client-abc", clientSecret: "s3cret", tenant: TENANT };
@@ -113,5 +113,29 @@ describe("certificate credential (no client secret)", () => {
       expect(body.get("client_assertion")).toBeTruthy();
       expect(body.has("client_secret")).toBe(false);
     } finally { vi.stubGlobal("fetch", previous); }
+  });
+});
+describe("auto-creating students on first sign-in", () => {
+  const withEnv = (env: Record<string, string | undefined>, fn: () => void) => {
+    const save = { ...process.env };
+    try { delete process.env.MS_AUTO_CREATE_STUDENTS; delete process.env.MS_ALLOWED_EMAIL_DOMAINS; Object.assign(process.env, env); fn(); } finally { process.env = save; }
+  };
+  it("is off unless explicitly enabled AND a domain allow-list is given", () => {
+    withEnv({}, () => expect(autoCreateDomains()).toBeNull());
+    withEnv({ MS_AUTO_CREATE_STUDENTS: "true" }, () => expect(autoCreateDomains()).toBeNull());
+    withEnv({ MS_AUTO_CREATE_STUDENTS: "false", MS_ALLOWED_EMAIL_DOMAINS: "school.edu" }, () => expect(autoCreateDomains()).toBeNull());
+    withEnv({ MS_AUTO_CREATE_STUDENTS: "TRUE", MS_ALLOWED_EMAIL_DOMAINS: " School.edu , @other.ac.gh " }, () => expect(autoCreateDomains()).toEqual(["school.edu", "other.ac.gh"]));
+  });
+  it("only lets allow-listed domains through, and never guest addresses", () => {
+    const d = ["school.edu"];
+    expect(emailInDomains("kofi@school.edu", d)).toBe(true);
+    expect(emailInDomains("KOFI@SCHOOL.EDU", d)).toBe(true);
+    expect(emailInDomains("kofi@gmail.com", d)).toBe(false);
+    expect(emailInDomains("kofi@evil-school.edu", d)).toBe(false);
+    expect(emailInDomains("kofi_gmail.com#EXT#@school.edu", d)).toBe(false);
+  });
+  it("names a new account from Microsoft's display name, else from the email", () => {
+    expect(displayNameFor({ subject: "s", email: "a.b@school.edu", name: "Ama Boateng" })).toBe("Ama Boateng");
+    expect(displayNameFor({ subject: "s", email: "ama.boateng@school.edu", name: null })).toBe("ama boateng");
   });
 });

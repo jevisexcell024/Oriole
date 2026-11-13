@@ -15,6 +15,7 @@ const SSO_ERRORS: Record<string, string> = {
   no_account: "We couldn't find a student account for that Microsoft account. Ask your administrator to add your school email.",
   staff: "That account belongs to staff. Staff sign in from the staff sign-in page.",
   blocked: "Your school's access is currently unavailable. Contact your administrator.",
+  limit: "Your school has reached its student limit, so a new account couldn't be created. Contact your administrator.",
   cancelled: "Microsoft sign-in was cancelled.",
   expired: "That sign-in took too long or was interrupted. Please try again.",
   unavailable: "Microsoft sign-in isn't available right now.",

@@ -30,17 +30,17 @@
     "clsx": "^2.1.1",
     "cookie-parser": "^1.4.7",
     "dompurify": "^3.4.12",
-    "express": "^4.21.2",
+    "express": "^4.22.3",
     "express-rate-limit": "^8.5.2",
     "helmet": "^8.2.0",
     "idb": "^8.0.4",
     "jsonwebtoken": "^9.0.2",
-    "katex": "^0.17.0",
+    "katex": "^0.19.1",
     "leaflet": "^1.9.4",
     "lucide-react": "^0.468.0",
     "mammoth": "^1.12.0",
     "nanoid": "^5.0.9",
-    "nodemailer": "^9.0.1",
+    "nodemailer": "^10.5.0",
     "pdf-lib": "^1.17.1",
     "pg": "^8.21.0",
     "pino": "^10.3.1",
@@ -81,6 +81,7 @@
     "vitest": "^4.1.8"
   },
   "overrides": {
-    "dompurify": "^3.4.12"
+    "dompurify": "^3.4.12",
+    "image-size": "^2.1.0"
   }
 }
