@@ -80,6 +80,7 @@
     "vitest": "^4.1.8"
   },
   "overrides": {
-    "dompurify": "^3.4.12"
+    "dompurify": "^3.4.12",
+    "image-size": "^2.1.0"
   }
 }
