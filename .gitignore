@@ -33,3 +33,5 @@ backups/
 
 # Database backups (contain student data)
 data/
+
+.claude
