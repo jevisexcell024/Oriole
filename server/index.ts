@@ -422,17 +422,63 @@ app.get("/api/auth/sso/microsoft/callback", async (req, res) => {
   try {
     const who = await verifyMicrosoftIdToken(cfg, await exchangeMicrosoftCode(cfg, code, txn.verifier), txn.nonce);
     const users = db.data!.users;
-    const user = users.find((u) => u.ssoSubject === who.subject) ?? users.find((u) => !u.ssoSubject && u.email.toLowerCase() === who.email);
-    if (!user) { await recordAuthAudit(req, "auth.sso_no_account", who.email); return fail("no_account"); }
-    if (user.role !== "candidate") { await recordAuthAudit(req, "auth.login_wrong_portal", user.email); return fail("staff"); }
-    const tenant = user.tenantId ? db.data!.tenants.find((t) => t.id === user.tenantId) : null;
-    const trialOver = tenant?.licenseStatus === "trial" && !!tenant.licenseExpiresAt && new Date(tenant.licenseExpiresAt).getTime() < Date.now();
-    if (tenant?.status === "suspended" || trialOver) { await recordAuthAudit(req, "auth.sso_blocked_tenant", user.email); return fail("blocked"); }
-    if (!user.ssoSubject || user.mustChangePassword) {
-      user.ssoSubject = who.subject;
-      user.mustChangePassword = false; // they sign in with Microsoft; there is no password for them to choose
+    let user = users.find((u) => u.ssoSubject === who.subject) ?? users.find((u) => !u.ssoSubject && u.email.toLowerCase() === who.email);
+
+    // Auto-provision a new user if none exists and the feature is enabled
+    if (!user) {
+      // Determine the target tenant for auto-provisioning
+      const activeTenants = db.data!.tenants.filter((t) => t.status === "active");
+      let targetTenantId: string | null = env.ssoDefaultTenantId;
+      if (!targetTenantId && activeTenants.length === 1) targetTenantId = activeTenants[0].id;
+      if (!targetTenantId) { await recordAuthAudit(req, "auth.sso_no_account", who.email); return fail("no_account"); }
+
+      // Check if the tenant allows auto-provisioning
+      let orgSettings: OrgSettings | null = null;
+      try { orgSettings = getOrgSettings(targetTenantId); } catch { /* no settings row */ }
+      if (!orgSettings?.ssoAutoProvision) { await recordAuthAudit(req, "auth.sso_no_account", who.email); return fail("no_account"); }
+
+      // Check domain restrictions if configured
+      const emailDomain = who.email.split("@")[1]?.toLowerCase();
+      if (orgSettings.ssoAllowedDomains?.length) {
+        const allowed = orgSettings.ssoAllowedDomains.map((d) => d.toLowerCase().trim());
+        if (!emailDomain || !allowed.includes(emailDomain)) {
+          await recordAuthAudit(req, "auth.sso_domain_blocked", who.email);
+          return fail("domain_blocked");
+        }
+      }
+
+      // Check tenant status
+      const tenant = db.data!.tenants.find((t) => t.id === targetTenantId);
+      const trialOver = tenant?.licenseStatus === "trial" && !!tenant.licenseExpiresAt && new Date(tenant.licenseExpiresAt).getTime() < Date.now();
+      if (tenant?.status === "suspended" || trialOver) { await recordAuthAudit(req, "auth.sso_blocked_tenant", who.email); return fail("blocked"); }
+
+      // Create the new user
+      user = {
+        id: nanoid(),
+        tenantId: targetTenantId,
+        email: who.email,
+        name: who.name || who.email.split("@")[0],
+        role: "candidate",
+        passwordHash: "", // SSO users don't have a password
+        ssoSubject: who.subject,
+      };
       await db.upsert("users", user);
+      await recordAuthAudit(req, "auth.sso_provisioned", who.email);
+      logger.info({ email: who.email, tenantId: targetTenantId }, "Auto-provisioned new user via Microsoft SSO");
+    } else {
+      // Existing user flow
+      const existingUser = user; // Capture for type narrowing in callbacks
+      if (existingUser.role !== "candidate") { await recordAuthAudit(req, "auth.login_wrong_portal", existingUser.email); return fail("staff"); }
+      const tenant = existingUser.tenantId ? db.data!.tenants.find((t) => t.id === existingUser.tenantId) : null;
+      const trialOver = tenant?.licenseStatus === "trial" && !!tenant.licenseExpiresAt && new Date(tenant.licenseExpiresAt).getTime() < Date.now();
+      if (tenant?.status === "suspended" || trialOver) { await recordAuthAudit(req, "auth.sso_blocked_tenant", existingUser.email); return fail("blocked"); }
+      if (!existingUser.ssoSubject || existingUser.mustChangePassword) {
+        existingUser.ssoSubject = who.subject;
+        existingUser.mustChangePassword = false; // they sign in with Microsoft; there is no password for them to choose
+        await db.upsert("users", existingUser);
+      }
     }
+
     clearSignInTxn(res);
     await issueSession(req, res, user);
     checkNewDeviceAndAlert(req, user).catch(() => { /* best-effort */ });
@@ -2946,6 +2992,242 @@ app.post("/api/attempts/:id/snapshot", requireAuth, async (req, res) => {
   snapshotUploads.set(attempt.id, uploads);
   if (uploads % 5 === 0) await snapshotStore.trim(attempt.id, SNAPSHOT_CAP);
   res.json({ ok: true });
+});
+
+/**
+ * Batched proctoring data upload endpoint.
+ *
+ * Combines multiple data types (snapshots, events, answers, geofence) in a single
+ * request to reduce HTTP overhead on slow connections. Returns piggybacked control
+ * channel data so clients don't need a separate poll.
+ *
+ * Payload format (all fields optional):
+ *   t: number          - Client timestamp
+ *   s: Snapshot[]      - Webcam snapshots [{image, capturedAt}]
+ *   e: Event[]         - Proctor events [{type, severity, message, at}]
+ *   a: Answer[]        - Answers [{questionId, value, at}]
+ *   g: Geofence        - Geofence ping {lat, lng, accuracy, deviceId, clientError?}
+ */
+app.post("/api/attempts/:id/batch", requireAuth, async (req, res) => {
+  const user = currentUser(req)!;
+  const attempt = db.data!.attempts.find((a) => a.id === req.params.id && a.candidateId === user.id);
+  if (!attempt) return res.status(404).json({ error: "Attempt not found." });
+
+  const exam = db.data!.exams.find((e) => e.id === attempt.examId);
+  const isSubmitted = attempt.status === "submitted";
+  const deadline = attemptDeadlineMs(attempt);
+  const ld = exam?.lockdown;
+
+  // Result tracking
+  const answerResults: { questionId: string; ok: boolean; error?: string; lateSync?: boolean }[] = [];
+  let autoSubmitted = false;
+
+  // Process snapshots
+  const snapshots = req.body?.s;
+  if (Array.isArray(snapshots) && !isSubmitted) {
+    const SNAPSHOT_CAP = 24;
+    for (const snap of snapshots) {
+      const image = snap?.image;
+      if (typeof image !== "string" || !image.startsWith("data:image/") || image.length > 300_000) {
+        continue; // Skip invalid snapshots
+      }
+      const frame = { id: nanoid(12), attemptId: attempt.id, dataUrl: encryptString(image), at: now() };
+      await snapshotStore.add(frame);
+      const uploads = (snapshotUploads.get(attempt.id) ?? 0) + 1;
+      snapshotUploads.set(attempt.id, uploads);
+      if (uploads % 5 === 0) await snapshotStore.trim(attempt.id, SNAPSHOT_CAP);
+    }
+  }
+
+  // Process proctor events
+  const events = req.body?.e;
+  if (Array.isArray(events) && !isSubmitted) {
+    const onBreak = inEventGrace(attempt);
+    for (const evt of events) {
+      const { type, severity, message } = evt ?? {};
+      if (!(PROCTOR_EVENT_TYPES as readonly string[]).includes(type)) continue;
+      const safeSeverity: ProctorEvent["severity"] =
+        onBreak ? "info" : severity === "warning" || severity === "high" ? severity : "info";
+      const event: ProctorEvent = {
+        id: nanoid(10),
+        attemptId: attempt.id,
+        type,
+        severity: safeSeverity,
+        message: (onBreak ? "[during a rest break / just after] " : "") + String(message ?? "").slice(0, 500),
+        at: now(),
+      };
+      await proctorStore.add(event);
+
+      // Check violation limit for auto-submit
+      if (exam?.proctored && event.severity !== "info" && !autoSubmitted) {
+        const limit = ld?.violationLimit ?? 0;
+        const flags = flaggedCount(cleanEvents(await proctorStore.forAttempt(attempt.id), attempt.submittedAt));
+        const threshold = limit <= 0 ? 1 : limit;
+        if (flags >= threshold) {
+          const reason = limit <= 0
+            ? "Auto-submitted: zero-tolerance integrity policy — a violation was detected."
+            : `Auto-submitted: reached the integrity-violation limit (${flags}/${limit}).`;
+          await forceSubmitAttempt(attempt, reason);
+          autoSubmitted = true;
+        }
+      }
+    }
+  }
+
+  // Process answers
+  const answers = req.body?.a;
+  if (Array.isArray(answers)) {
+    for (const ans of answers) {
+      const { questionId, value, at: clientSavedAt } = ans ?? {};
+      if (!questionId) continue;
+
+      const lateSync = attempt.status !== "in_progress" && lateSyncEligible(attempt, deadline, clientSavedAt);
+      if (attempt.status !== "in_progress" && !lateSync) {
+        answerResults.push({ questionId, ok: false, error: "Attempt already submitted." });
+        continue;
+      }
+
+      // Hard close check
+      if (Date.now() > deadline && !lateSync) {
+        answerResults.push({ questionId, ok: false, error: "Time is up." });
+        continue;
+      }
+
+      const question = servedQuestions(attempt).find((q) => q.id === questionId);
+      if (!question) {
+        answerResults.push({ questionId, ok: false, error: "Invalid question." });
+        continue;
+      }
+
+      // File upload validation
+      if (question.type === "file_upload" && value) {
+        const v = await validateUploadAnswer(String(value));
+        if (!v.ok) {
+          answerResults.push({ questionId, ok: false, error: v.reason });
+          continue;
+        }
+      }
+
+      let answer = await answerStore.forAttemptQuestion(attempt.id, questionId);
+      if (answer) {
+        answer.value = String(value ?? "");
+      } else {
+        answer = { id: nanoid(10), attemptId: attempt.id, questionId, value: String(value ?? ""), correct: null };
+      }
+
+      if (lateSync) {
+        const r = gradeOne(paramComputed(question, attempt), answer.value, {
+          negativeMarking: exam?.negativeMarking ?? 0,
+          partialCredit: exam?.partialCredit ?? false,
+        });
+        answer.awardedPoints = r.awarded;
+        answer.correct = r.correct;
+        answer.needsReview = r.needsReview;
+        answer.gradedBy = r.needsReview ? null : "auto";
+        await answerStore.upsert(answer);
+        if (r.needsReview) attempt.gradingStatus = "pending_review";
+        const allAnswers = await answerStore.forAttempt(attempt.id);
+        const { passed } = recomputeAttempt(attempt, allAnswers);
+        if (attempt.gradingStatus === "auto_graded" && passed) {
+          const cert = issueCertificate(attempt);
+          if (cert) await db.upsert("certificates", cert);
+        }
+        await db.upsert("attempts", attempt);
+        answerResults.push({ questionId, ok: true, lateSync: true });
+      } else {
+        await answerStore.upsert(answer);
+        answerResults.push({ questionId, ok: true });
+      }
+    }
+  }
+
+  // Process geofence ping (mirrors /api/attempts/:id/geofence-ping logic)
+  const geo = req.body?.g;
+  if (geo && !isSubmitted && ld?.requireGeofence && ld.geofenceContinuousMonitoring) {
+    const { browser, os } = classifyUserAgent(req.get("user-agent"));
+    const deviceId = typeof geo.deviceId === "string" ? geo.deviceId.slice(0, 100) : null;
+    const base = {
+      id: nanoid(), registrationId: attempt.registrationId, attemptId: attempt.id, examId: exam!.id, candidateId: user.id,
+      ipAddress: req.ip ?? null, deviceId, browser, operatingSystem: os, at: now(),
+    } as const;
+    const grace = ld.geofenceGraceSeconds ?? 120;
+
+    let allowed: boolean;
+    let distanceMeters: number | null = null;
+    let nearestCenterLabel: string | null = null;
+    let eventType: GeofenceLog["eventType"];
+    let lat: number | null = null, lng: number | null = null, accuracy: number | null = null;
+
+    const clientError = geo.clientError;
+    if (clientError === "GPS_DISABLED" || clientError === "GPS_PERMISSION_DENIED") {
+      allowed = false;
+      eventType = clientError;
+    } else {
+      lat = Number(geo.lat);
+      lng = Number(geo.lng);
+      accuracy = geo.accuracy == null ? null : Number(geo.accuracy);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+        // Invalid coords - skip geofence processing for this batch
+        allowed = true; // Don't penalize for bad data in batch
+        eventType = "DENIED";
+      } else {
+        const centers = ld.geofenceCenters ?? [];
+        const minAccuracy = ld.geofenceMinAccuracyM ?? 20;
+        const result = nearestGeofence(lat, lng, centers);
+        distanceMeters = result.distanceMeters;
+        nearestCenterLabel = result.center?.label ?? null;
+        if (centers.length === 0) { allowed = false; eventType = "DENIED"; }
+        else if (accuracy != null && accuracy > minAccuracy) { allowed = false; eventType = "LOW_ACCURACY"; }
+        else { allowed = result.inside; eventType = result.inside ? "ENTRY" : "EXIT"; }
+      }
+    }
+
+    const log: GeofenceLog = { ...base, lat, lng, accuracy, distanceMeters, nearestCenterLabel, insideGeofence: allowed, eventType };
+    await geofenceStore.add(log);
+
+    // Update attempt geofence state
+    if (allowed) {
+      if (attempt.geofenceOutsideSince) {
+        attempt.geofenceOutsideSince = null;
+        attempt.geofenceLocked = false;
+        if (attempt.geofencePauseAuto && attempt.paused) {
+          attempt.pausedMs = (attempt.pausedMs ?? 0) + Math.max(0, Date.now() - new Date(attempt.pausedAt ?? now()).getTime());
+          attempt.paused = false;
+          attempt.pausedAt = null;
+          attempt.geofencePauseAuto = false;
+        }
+        await db.upsert("attempts", attempt);
+      }
+    } else {
+      if (!attempt.geofenceOutsideSince) {
+        attempt.geofenceOutsideSince = now();
+        await proctorStore.add({ id: nanoid(10), attemptId: attempt.id, type: "geofence_exit", severity: "warning", message: "Left every approved examination area.", at: now() });
+      }
+      await db.upsert("attempts", attempt);
+      await applyGeofencePolicy(attempt, exam!);
+    }
+  }
+
+  // Build piggybacked control response
+  const control = {
+    paused: !!attempt.paused,
+    pauseReason: attempt.pauseReason ?? null,
+    terminated: !!attempt.terminated || attempt.status === "submitted",
+    terminationReason: attempt.terminationReason ?? null,
+    messages: attempt.proctorMessages ?? [],
+    deadlineAt: new Date(attemptDeadlineMs(attempt)).toISOString(),
+    serverNow: now(),
+    geofenceLocked: !!attempt.geofenceLocked,
+    geofenceOutsideSince: attempt.geofenceOutsideSince ?? null,
+    geofencePauseAuto: !!attempt.geofencePauseAuto,
+  };
+
+  res.json({
+    ok: true,
+    control,
+    answerResults: answerResults.length > 0 ? answerResults : undefined,
+    autoSubmitted: autoSubmitted || undefined,
+  });
 });
 
 /** Recompute an attempt's score/passed from the points currently awarded on its answers. */
@@ -6699,6 +6981,13 @@ app.patch("/api/admin/settings", requirePermission("system.settings"), async (re
   } else if (typeof b.brandColor === "string") {
     const v = b.brandColor.trim();
     if (/^#[0-9a-fA-F]{6}$/.test(v)) s.brandColor = v;
+  }
+  // SSO auto-provisioning settings
+  if (typeof b.ssoAutoProvision === "boolean") s.ssoAutoProvision = b.ssoAutoProvision;
+  if (Array.isArray(b.ssoAllowedDomains)) {
+    s.ssoAllowedDomains = (b.ssoAllowedDomains as unknown[])
+      .filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+      .map((v) => v.trim().toLowerCase());
   }
   await db.upsert("settings", s);
   await recordAudit(req, "settings.updated", "Updated organization settings");

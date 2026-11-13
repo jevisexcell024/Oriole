@@ -42,6 +42,9 @@ export const env = {
   /** Public URL of the app — used in outbound emails so links work in production.
    *  Set APP_URL on the host (e.g. https://oriole.jevislab.com). */
   appUrl: (process.env.APP_URL ?? "").replace(/\/$/, "") || "https://oriole.jevislab.com",
+  /** Optional: which Oriole tenant SSO users are provisioned into. If unset, uses the only active
+   *  tenant (single-tenant deployments) or requires a pre-existing account (multi-tenant). */
+  ssoDefaultTenantId: process.env.SSO_DEFAULT_TENANT_ID?.trim() || null,
 };
 
 // bcryptjs (pure JS, no native bindings — chosen so `npm install` works on shared

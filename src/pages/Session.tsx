@@ -13,9 +13,15 @@ import { useWakeLock } from "@/lib/wakeLock";
 import { useAnswerSync } from "@/lib/useAnswerSync";
 import { useReadAloud, speechTextFor } from "@/lib/readAloud";
 import { useBreakMusic } from "@/lib/breakMusic";
+import { useBandwidthManager } from "@/lib/bandwidthManager";
+import { getSnapshotConfig, captureAdaptiveSnapshot, getBandwidthModeLabel } from "@/lib/adaptiveSnapshot";
+import { useBatchedUploader, type ControlState } from "@/lib/batchedUploader";
+import { useOfflineSync } from "@/lib/useOfflineSync";
 import { CodeAnswer } from "@/components/CodeAnswer";
 import { Calculator } from "@/components/Calculator";
 import { MediaStimulus } from "@/components/MediaStimulus";
+import { ConnectionIndicator } from "@/components/ConnectionIndicator";
+import { OfflineIndicator, OfflineBanner } from "@/components/OfflineIndicator";
 import { INITIAL_CALC_STATE, type CalcState } from "@shared/calculator";
 import { detectIncognito } from "@/lib/incognito";
 import { MathText } from "@/lib/richtext";
@@ -83,6 +89,65 @@ export function Session() {
 
   const sync = useAnswerSync(attemptId);
   const reader = useReadAloud();
+  const bandwidth = useBandwidthManager();
+
+  // Use batched uploads when not on a high-quality connection to reduce HTTP overhead.
+  // The batch endpoint piggybacks control state, so we get pause/terminate/messages
+  // updates without a separate polling request.
+  const useBatching = bandwidth.tier !== "high" && proctored;
+
+  // Ref for submit function to avoid forward reference issues with callbacks
+  const submitRef = useRef<(auto?: boolean) => Promise<void>>(undefined);
+
+  // Handler for control state updates from batched responses
+  const handleControlUpdate = useCallback((c: ControlState) => {
+    if (c.terminated && !submittedRef.current) {
+      submittedRef.current = true;
+      document.exitFullscreen?.().catch(() => {});
+      navigate(`/attempts/${attemptId}/result`, { replace: true, state: { terminated: true, reason: c.terminationReason } });
+      return;
+    }
+    if (pausedRef.current && !c.paused) graceUntilRef.current = Date.now() + 60_000;
+    pausedRef.current = c.paused;
+    setPaused(c.paused);
+    setPauseReason(c.pauseReason ?? null);
+    setGeofencePauseAuto(c.geofencePauseAuto);
+    setGeofenceLocked(c.geofenceLocked);
+    setProctorMsgs(c.messages);
+    setData((d) => (d && d.deadlineAt !== c.deadlineAt ? { ...d, deadlineAt: c.deadlineAt, serverNow: c.serverNow } : d));
+  }, [attemptId, navigate]);
+
+  // Handler for auto-submit from batch response (violation limit reached)
+  const handleBatchAutoSubmit = useCallback(() => {
+    if (!submittedRef.current) {
+      setBanner({ msg: "Violation limit reached — your exam is being submitted automatically.", level: "crit" });
+      submitRef.current?.(true);
+    }
+  }, []);
+
+  const batch = useBatchedUploader({
+    attemptId: attemptId ?? "",
+    tier: bandwidth.tier,
+    enabled: useBatching && !!attemptId && !!data,
+    onControlUpdate: handleControlUpdate,
+    onAutoSubmit: handleBatchAutoSubmit,
+    onFlushComplete: (success, latencyMs) => {
+      if (success) bandwidth.reportSuccess(latencyMs);
+      else bandwidth.reportFailure();
+    },
+  });
+
+  // Offline sync: durable storage with IndexedDB for crash/offline recovery
+  const offlineSync = useOfflineSync({
+    attemptId: attemptId ?? "",
+    examTitle: data?.exam.title,
+    enabled: !!attemptId && !!data,
+    onRecovery: (recovered) => {
+      // Merge recovered answers into current state
+      setAnswers((prev) => ({ ...prev, ...recovered }));
+    },
+  });
+
   // Soft background music during a proctor-granted REST BREAK only (never a plain pause or a
   // geofence pause). The student can switch it off on the break screen; the choice is remembered.
   const [musicOn, setMusicOn] = useState<boolean>(() => { try { return localStorage.getItem("orcalis-break-music") !== "off"; } catch { return true; } });
@@ -121,13 +186,20 @@ export function Session() {
     if (submittedRef.current) return;
     // Paused (rest break) or just resumed: nothing counts. The server ignores these too.
     if (pausedRef.current || Date.now() < graceUntilRef.current) return;
-    // Beacon/keepalive delivery so a flag that triggers an immediate auto-submit
-    // (and unmounts this page) is still recorded server-side rather than aborted.
-    sendBeaconJson(`/attempts/${attemptId}/proctor-event`, e);
+
+    // Use batched upload when in low bandwidth mode, otherwise beacon for reliability
+    if (useBatching) {
+      batch.queueEvent({ type: e.type, severity: e.severity, message: e.message });
+    } else {
+      // Beacon/keepalive delivery so a flag that triggers an immediate auto-submit
+      // (and unmounts this page) is still recorded server-side rather than aborted.
+      sendBeaconJson(`/attempts/${attemptId}/proctor-event`, e);
+    }
+
     if (e.severity === "info") return;
     setIntegrity((s) => Math.max(0, s - (e.severity === "high" ? 12 : 5)));
     setViolationCount((c) => c + 1);
-  }, [attemptId]);
+  }, [attemptId, useBatching, batch]);
 
   const { videoRef, cameraReady, faceStatus } = useProctoring({ active: !!data && proctored && (ld?.webcam ?? true), onEvent, audioMonitoring: ld?.audioMonitoring && !reader.speaking });
   const lockdown = useExamLockdown({ active: !!data && proctored, onEvent, rules: ld });
@@ -173,8 +245,20 @@ export function Session() {
     setSubmitting(true);
     try {
       // Make sure every buffered answer is persisted before we grade.
+      // Try multiple sync mechanisms to ensure nothing is lost.
       await sync.flushNow();
+
+      // Sync any offline-stored data (IndexedDB)
+      await offlineSync.syncNow();
+
+      // Also flush any batched data
+      if (useBatching) await batch.flushNow();
+
       await api.post(`/attempts/${attemptId}/submit`);
+
+      // Cleanup offline storage after successful submit
+      await offlineSync.cleanup();
+
       if (document.fullscreenElement) await document.exitFullscreen().catch(() => {});
       navigate(`/attempts/${attemptId}/result`, { replace: true, state: { auto, justSubmitted: true } });
     } catch (e) {
@@ -182,7 +266,10 @@ export function Session() {
       setError(e instanceof Error ? e.message : "Could not submit.");
       setSubmitting(false);
     }
-  }, [attemptId, navigate]);
+  }, [attemptId, navigate, useBatching, batch, offlineSync]);
+
+  // Keep submitRef updated for callbacks that need it
+  useEffect(() => { submitRef.current = submit; }, [submit]);
 
   // If the server reports the exam closed mid-save, finalize immediately.
   useEffect(() => { sync.onClosed(() => submit(true)); }, [submit]);
@@ -217,6 +304,8 @@ export function Session() {
   }, [data, submit]);
 
   // Poll the live proctor control channel: pause/resume, messages, and termination.
+  // When batching is enabled, control state is piggybacked on batch responses,
+  // so we can poll less frequently (just as a fallback).
   useEffect(() => {
     if (!data || !attemptId) return;
     let alive = true;
@@ -244,15 +333,10 @@ export function Session() {
         setData((d) => (d && d.deadlineAt !== c.deadlineAt ? { ...d, deadlineAt: c.deadlineAt, serverNow: c.serverNow } : d));
       } catch { failures += 1; /* transient — try again, a little later each time */ }
     };
-    // 7s rather than a tighter interval: this only affects how fast the UI
-    // reflects a pause/message/termination the server has already enforced
-    // (every write endpoint independently checks attempt.status, so a
-    // terminated candidate can't submit further answers regardless of this
-    // interval) — it's pure display latency, not a security boundary. Kept
-    // deliberately calm because many concurrent candidates behind the same
-    // exam-hall NAT'd IP add up in simultaneous-connection count fast enough
-    // to trip a host firewall's per-IP connection-rate limit (seen in
-    // production: 173 connections from one shared IP briefly auto-blocked).
+    // When batching is enabled, control state comes piggybacked on batch responses,
+    // so we can poll much less frequently (30s instead of 8s) as a fallback.
+    // This saves ~75% of control polling requests on slow connections.
+    const baseInterval = useBatching ? 30_000 : 8_000;
     //
     // Scheduling: one request at a time (never overlapping), each wait randomised ±20% so
     // a whole class that started together does not hit the server in the same instant,
@@ -262,12 +346,12 @@ export function Session() {
       if (!alive) return;
       await poll();
       if (!alive) return;
-      const base = failures > 0 ? Math.min(60_000, 8_000 * 2 ** failures) : 8_000;
+      const base = failures > 0 ? Math.min(60_000, baseInterval * 2 ** failures) : baseInterval;
       timer = window.setTimeout(loop, base * (0.8 + Math.random() * 0.4));
     };
-    timer = window.setTimeout(loop, 8_000 * (0.8 + Math.random() * 0.4));
+    timer = window.setTimeout(loop, baseInterval * (0.8 + Math.random() * 0.4));
     return () => { alive = false; if (timer) clearTimeout(timer); };
-  }, [data, attemptId, navigate]);
+  }, [data, attemptId, navigate, useBatching]);
 
   // Violation escalation → auto-submit. A limit of 0 means zero tolerance:
   // the first violation submits immediately with no prior warning.
@@ -287,32 +371,82 @@ export function Session() {
   }, [violationCount, violationLimit, submit]);
 
   // Periodic webcam snapshot upload for the live proctoring wall.
+  // Uses adaptive settings based on connection quality to minimize bandwidth.
+  // When batching is enabled, snapshots are queued and sent with other data.
   useEffect(() => {
     if (!proctored || !cameraReady || !(ld?.webcam ?? true) || !attemptId) return;
-    // One frame roughly every 30s (randomised, so candidates who started together don't
-    // all upload at once), never two in flight, and slower while uploads are failing.
+
+    // Get snapshot config based on current bandwidth tier
+    const getConfig = () => getSnapshotConfig(bandwidth.tier);
+
     let stopped = false;
-    let delay = 30_000;
+    let failureBackoff = 1; // Multiplier for delay after failures
     let timer: number | undefined;
-    const schedule = (ms: number) => { timer = window.setTimeout(capture, ms * (0.8 + Math.random() * 0.4)); };
+
+    const schedule = (baseMs: number) => {
+      // Randomize ±20% to prevent synchronized uploads from many candidates
+      timer = window.setTimeout(capture, baseMs * (0.8 + Math.random() * 0.4));
+    };
+
     const capture = async () => {
       if (stopped) return;
+
       const v = videoRef.current;
-      const c = document.createElement("canvas");
-      c.width = 240; c.height = 180;
-      const ctx = c.getContext("2d");
-      if (!v || v.readyState < 2 || !ctx || !navigator.onLine) { schedule(5_000); return; }
-      ctx.drawImage(v, 0, 0, c.width, c.height);
-      try {
-        await api.post(`/attempts/${attemptId}/snapshot`, { image: c.toDataURL("image/jpeg", 0.5) });
-        delay = 30_000;
-      } catch {
-        delay = Math.min(120_000, delay * 2);
+      if (!v || !navigator.onLine) {
+        schedule(5_000);
+        return;
       }
-      schedule(delay);
+
+      // Capture with adaptive settings (resolution, quality, grayscale)
+      const config = getConfig();
+      const result = captureAdaptiveSnapshot(v, config);
+
+      if (!result) {
+        schedule(5_000);
+        return;
+      }
+
+      // When batching is enabled, queue the snapshot instead of sending immediately
+      if (useBatching) {
+        batch.queueSnapshot({ image: result.dataUrl, capturedAt: Date.now() });
+        // Schedule next capture - no backoff needed since batching handles retries
+        schedule(config.intervalMs);
+        return;
+      }
+
+      // Direct upload mode (high bandwidth)
+      const startTime = performance.now();
+
+      try {
+        await api.post(`/attempts/${attemptId}/snapshot`, { image: result.dataUrl });
+
+        // Report success to bandwidth manager (may trigger tier upgrade)
+        const latency = performance.now() - startTime;
+        bandwidth.reportSuccess(latency);
+
+        // Reset failure backoff on success
+        failureBackoff = 1;
+
+        // Schedule next capture at tier-appropriate interval
+        schedule(config.intervalMs);
+      } catch {
+        // Report failure to bandwidth manager (may trigger tier degradation)
+        bandwidth.reportFailure();
+
+        // Exponential backoff on failures, capped at 2 minutes
+        failureBackoff = Math.min(4, failureBackoff * 2);
+        schedule(config.intervalMs * failureBackoff);
+      }
     };
-    timer = window.setTimeout(capture, 2_000 + Math.random() * 13_000); // first frame at a random moment in the first ~15s
-    return () => { stopped = true; if (timer) clearTimeout(timer); };  }, [proctored, cameraReady, attemptId, ld, videoRef]);
+
+    // First frame at a random moment in the first ~15s
+    timer = window.setTimeout(capture, 2_000 + Math.random() * 13_000);
+
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [proctored, cameraReady, attemptId, ld, videoRef, bandwidth, useBatching, batch]);
 
   // Record (but don't auto-submit on) private-browsing — heuristic, so it's
   // logged for the proctor rather than trusted to end the exam. The hard block
@@ -322,10 +456,15 @@ export function Session() {
     let done = false;
     detectIncognito().then((isPrivate) => {
       if (isPrivate && !done) {
-        sendBeaconJson(`/attempts/${attemptId}/proctor-event`, {
-          type: "incognito", severity: "high",
+        const event = {
+          type: "incognito" as const, severity: "high" as const,
           message: "Private / incognito browsing detected during the exam.",
-        });
+        };
+        if (useBatching) {
+          batch.queueEvent(event);
+        } else {
+          sendBeaconJson(`/attempts/${attemptId}/proctor-event`, event);
+        }
       }
     });
     return () => { done = true; };
@@ -334,6 +473,8 @@ export function Session() {
   const saveAnswer = (questionId: string, value: string) => {
     setAnswers((prev) => ({ ...prev, [questionId]: value }));
     sync.setAnswer(questionId, value); // resilient: buffered, retried, persisted
+    // Also save to IndexedDB for extra durability (crash recovery)
+    offlineSync.queueAnswer(questionId, value);
   };
 
   const toggleFlag = (qid: string) =>
@@ -463,7 +604,20 @@ export function Session() {
               <button type="button" onClick={() => stepScale(1)} disabled={scaleIdx === TEXT_SCALES.length - 1} aria-label="Make text larger" title="Larger text"
                 className="rounded-r-xl px-2.5 py-2 text-base font-bold leading-none hover:bg-[var(--card-2)] disabled:opacity-40">A+</button>
             </div>
-            <SaveChip state={sync.state} />
+            {/* Show enhanced offline indicator when offline or has unsynced data, otherwise simple SaveChip */}
+            {(offlineSync.status !== "online" || offlineSync.unsyncedCount > 0) ? (
+              <OfflineIndicator
+                status={offlineSync.status}
+                unsyncedCount={offlineSync.unsyncedCount}
+                offlineDuration={offlineSync.offlineDuration}
+                onRetry={() => offlineSync.syncNow()}
+              />
+            ) : (
+              <SaveChip state={sync.state} />
+            )}
+            {proctored && bandwidth.tier !== "high" && (
+              <ConnectionIndicator tier={bandwidth.tier} degraded={bandwidth.degraded} />
+            )}
             {proctored && (
               <span className="hidden items-center gap-1.5 rounded-full bg-brand-500/15 px-2.5 py-1 text-[11px] font-semibold text-[var(--lime-text)] sm:inline-flex" title="Copy, paste, screenshots and tab-switching are disabled and logged.">
                 <Lock className="h-3 w-3" /> {t("run.locked")}
@@ -500,11 +654,15 @@ export function Session() {
         </div>
       )}
 
-      {/* Offline banner — shown when the browser has no internet connection */}
-      {!online && (
-        <div className="mx-auto mt-3 flex max-w-6xl items-center gap-2 rounded-xl bg-amber-500/15 px-4 py-3 text-sm font-medium text-amber-300 ring-1 ring-amber-500/30">
-          <WifiOff className="h-4 w-4 shrink-0" />
-          <span>You're offline — your answers are saved locally and will sync automatically when you reconnect. Do not close this window.</span>
+      {/* Offline banner — shown when offline or having sync issues */}
+      {(offlineSync.status === "offline" || offlineSync.status === "error" || (offlineSync.status === "pending" && offlineSync.unsyncedCount > 3)) && (
+        <div className="mx-auto mt-3 max-w-6xl">
+          <OfflineBanner
+            status={offlineSync.status}
+            unsyncedCount={offlineSync.unsyncedCount}
+            offlineDuration={offlineSync.offlineDuration}
+            onRetry={() => offlineSync.syncNow()}
+          />
         </div>
       )}
 

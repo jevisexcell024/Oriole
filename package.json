@@ -33,6 +33,7 @@
     "express": "^4.21.2",
     "express-rate-limit": "^8.5.2",
     "helmet": "^8.2.0",
+    "idb": "^8.0.4",
     "jsonwebtoken": "^9.0.2",
     "katex": "^0.17.0",
     "leaflet": "^1.9.4",

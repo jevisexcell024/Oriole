@@ -1004,6 +1004,13 @@ export interface OrgSettings {
   /** Org-wide module toggle — when off, `media_comprehension` is hidden from the Exam Builder's
    *  type picker (already-authored questions of this type keep working). Opt-in, off by default. */
   mediaAssessmentEnabled?: boolean;
+  // ── SSO auto-provisioning ──
+  /** When enabled, Microsoft SSO creates a new candidate account if no matching email exists.
+   *  Off by default — existing behaviour requires a pre-created account. */
+  ssoAutoProvision?: boolean;
+  /** When set, only emails from these domains are auto-provisioned (e.g. ["university.edu"]).
+   *  Empty/unset = any domain Microsoft verifies is allowed. */
+  ssoAllowedDomains?: string[];
 }
 
 // ---- Learning structure (foundational config layer — see the "Learning
