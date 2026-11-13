@@ -12,7 +12,7 @@ import { createHmac, createHash, randomBytes } from "node:crypto";
 import { db, initDb, claimInstanceLock, releaseInstanceLock, hasInstanceConflict, snapshotStore, proctorStore, answerStore, auditStore, superAdminAuditStore, emailStore, geofenceStore, reliabilityStore, reliabilityRollupStore, mediaAssetStore, exportTenantData, deleteTenantData } from "./db.ts";
 import { currentTenantId, tenantExams, getOrgSettings, effectiveBrandColor } from "./tenant.ts";
 import { sendMail, mailerStatus, verifySmtp, buildHtml, ctaButton, esc } from "./mailer.ts";
-import { microsoftConfig, beginMicrosoftSignIn, readSignInTxn, clearSignInTxn, exchangeMicrosoftCode, verifyMicrosoftIdToken } from "./sso.ts";
+import { microsoftConfig, beginMicrosoftSignIn, readSignInTxn, clearSignInTxn, exchangeMicrosoftCode, verifyMicrosoftIdToken, autoCreateDomains, emailInDomains, displayNameFor } from "./sso.ts";
 import { renderEmailTemplate, EMAIL_TEMPLATE_DEFS } from "./emailTemplates.ts";
 import { sendSms, smsEnabled, smsStatus, recentSms } from "./sms.ts";
 import {
@@ -399,9 +399,10 @@ app.post("/api/auth/login", validate(loginSchema), async (req, res) => {
 });
 
 // ── Microsoft SSO (student portal only) ───────────────────────────────────────
-// Signs in EXISTING student accounts only — nobody is created here. First sign-in matches the
-// Microsoft account's email to the student's email and links it (ssoSubject); from then on only
-// that Microsoft identity works for the account. Staff accounts are refused, same as the
+// Signs in student accounts. First sign-in matches the Microsoft account's email to the student's
+// email and links it (ssoSubject); from then on only that Microsoft identity works for the account.
+// If there is no such student, one is created ONLY when the school opted in (MS_AUTO_CREATE_STUDENTS)
+// and the email's domain is on MS_ALLOWED_EMAIL_DOMAINS. Staff accounts are refused, same as the
 // password door. Microsoft handles any MFA, so the app's own 2FA step is not repeated.
 app.get("/api/auth/sso/config", (_req, res) => res.json({ microsoft: !!microsoftConfig() }));
 
@@ -422,8 +423,26 @@ app.get("/api/auth/sso/microsoft/callback", async (req, res) => {
   try {
     const who = await verifyMicrosoftIdToken(cfg, await exchangeMicrosoftCode(cfg, code, txn.verifier), txn.nonce);
     const users = db.data!.users;
-    const user = users.find((u) => u.ssoSubject === who.subject) ?? users.find((u) => !u.ssoSubject && u.email.toLowerCase() === who.email);
-    if (!user) { await recordAuthAudit(req, "auth.sso_no_account", who.email); return fail("no_account"); }
+    const findUser = () => users.find((u) => u.ssoSubject === who.subject) ?? users.find((u) => !u.ssoSubject && u.email.toLowerCase() === who.email);
+    let user = findUser();
+    if (!user) {
+      // No account yet. If the school turned on auto-creation (and this email is on its allow-list),
+      // create the student now — their Microsoft sign-in already proved they're in the school's directory.
+      const domains = autoCreateDomains();
+      if (!domains || !emailInDomains(who.email, domains)) { await recordAuthAudit(req, "auth.sso_no_account", who.email); return fail("no_account"); }
+      // Which school (Oriole tenant) does a brand-new student belong to? MS_SCHOOL_ID, or the only one there is.
+      const schoolId = process.env.MS_SCHOOL_ID?.trim() || (db.data!.tenants.length === 1 ? db.data!.tenants[0].id : "");
+      if (!schoolId || !db.data!.tenants.some((t) => t.id === schoolId)) { await recordAuthAudit(req, "auth.sso_no_account", who.email); return fail("no_account"); }
+      if (checkUsageLimit(schoolId, "students")) { await recordAuthAudit(req, "auth.sso_student_limit", who.email); return fail("limit"); }
+      const passwordHash = await bcrypt.hash(nanoid(32), BCRYPT_COST); // never used: they sign in with Microsoft
+      user = findUser(); // another request may have created it while we were hashing
+      if (!user) {
+        user = { id: nanoid(10), tenantId: schoolId, email: who.email, passwordHash, name: displayNameFor(who), role: "candidate" as const, mustChangePassword: false, ssoSubject: who.subject };
+        users.push(user);
+        await db.upsert("users", user);
+        await recordAuthAudit(req, "auth.sso_account_created", who.email);
+      }
+    }
     if (user.role !== "candidate") { await recordAuthAudit(req, "auth.login_wrong_portal", user.email); return fail("staff"); }
     const tenant = user.tenantId ? db.data!.tenants.find((t) => t.id === user.tenantId) : null;
     const trialOver = tenant?.licenseStatus === "trial" && !!tenant.licenseExpiresAt && new Date(tenant.licenseExpiresAt).getTime() < Date.now();

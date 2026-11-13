@@ -138,6 +138,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 `MS_TENANT`, `MS_CLIENT_ID`, `MS_CLIENT_SECRET`, `MS_REDIRECT_URI`.
 **SSO only signs in users that already exist (matched by email); it must NOT auto-create accounts.**
 Instead of `MS_CLIENT_SECRET`, a school that bans secrets can use a certificate: `MS_CLIENT_CERT_KEY_PATH` (private key PEM on the server) + `MS_CLIENT_CERT_THUMBPRINT`.
+Optional auto-creation of students on first sign-in: `MS_AUTO_CREATE_STUDENTS=true` + `MS_ALLOWED_EMAIL_DOMAINS=school.edu` (+ `MS_SCHOOL_ID` if more than one school).
 `MS_TENANT` must be the directory's GUID (not `organizations`/`common`). SSO is for students on `/portal` only; staff use `/login`.
 
 ### Code execution (optional)
