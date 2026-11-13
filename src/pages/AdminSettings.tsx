@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Loader2, CheckCircle2, Mail, Send, MessageSquare, Gauge, Headphones, Palette, KeyRound } from "lucide-react";
+import { Loader2, CheckCircle2, Mail, Send, MessageSquare, Gauge, Headphones, Palette, KeyRound, Upload, X, Users } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
 import { ErrorBanner } from "@/components/ui";
 import { api } from "@/lib/api";
@@ -23,10 +23,22 @@ interface Settings {
   brandColor?: string | null;
   ssoAutoProvision?: boolean;
   ssoAllowedDomains?: string[];
+  ssoRosterEnabled?: boolean;
+  ssoRoster?: string[];
 }
 
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 const BRAND_PRESETS = ["#c6ff34", "#22d3ee", "#c084fc", "#fb923c", "#4ade80", "#f43f5e", "#60a5fa", "#f59e0b"];
+
+interface RosterEntry {
+  email: string;
+  studentId?: string;
+  firstName?: string;
+  middleName?: string;
+  lastName?: string;
+  gender?: string;
+  studentClass?: string;
+}
 interface SmsStatus { mode: string; channel: string; live: boolean; from: string | null; }
 type SaveStatus = "idle" | "saving" | "saved";
 
@@ -49,6 +61,12 @@ export function AdminSettings() {
   const [brandColorText, setBrandColorText] = useState("");
   const [ssoDomainsText, setSsoDomainsText] = useState("");
   const [ssoAvailable, setSsoAvailable] = useState(false);
+  const [roster, setRoster] = useState<RosterEntry[]>([]);
+  const [rosterUploading, setRosterUploading] = useState(false);
+  const [rosterMsg, setRosterMsg] = useState<string | null>(null);
+  const [newRosterEmail, setNewRosterEmail] = useState("");
+  const [rosterSearch, setRosterSearch] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const sendSmsTest = async () => {
@@ -77,6 +95,43 @@ export function AdminSettings() {
   }, []);
   useEffect(() => { api.get<SmsStatus>("/admin/sms/status").then(setSms).catch(() => {}); }, []);
   useEffect(() => { api.get<{ microsoft: boolean }>("/auth/sso/config").then((d) => setSsoAvailable(d.microsoft)).catch(() => {}); }, []);
+  useEffect(() => { api.get<{ roster: RosterEntry[] }>("/admin/sso-roster").then((d) => setRoster(d.roster)).catch(() => {}); }, []);
+
+  const uploadRosterCsv = async (file: File) => {
+    setRosterUploading(true); setRosterMsg(null);
+    try {
+      const csv = await file.text();
+      const r = await api.post<{ count: number; errors?: string[] }>("/admin/sso-roster/upload", { csv });
+      setRosterMsg(`Uploaded ${r.count} students${r.errors?.length ? ` (${r.errors.length} errors)` : ""}`);
+      setRoster((await api.get<{ roster: RosterEntry[] }>("/admin/sso-roster")).roster);
+    } catch (e) { setRosterMsg((e as Error).message); }
+    finally { setRosterUploading(false); if (fileInputRef.current) fileInputRef.current.value = ""; }
+  };
+
+  const addRosterEntry = async () => {
+    if (!newRosterEmail.trim()) return;
+    try {
+      await api.post("/admin/sso-roster/add", { email: newRosterEmail.trim() });
+      setRoster((await api.get<{ roster: RosterEntry[] }>("/admin/sso-roster")).roster);
+      setNewRosterEmail("");
+    } catch (e) { setRosterMsg((e as Error).message); }
+  };
+
+  const removeRosterEntry = async (email: string) => {
+    try {
+      await api.del(`/admin/sso-roster/${encodeURIComponent(email)}`);
+      setRoster((prev) => prev.filter((e) => e.email !== email));
+    } catch (e) { setRosterMsg((e as Error).message); }
+  };
+
+  const clearRoster = async () => {
+    if (!confirm("Remove all students from the roster?")) return;
+    try {
+      await api.del("/admin/sso-roster");
+      setRoster([]);
+      setRosterMsg("Roster cleared");
+    } catch (e) { setRosterMsg((e as Error).message); }
+  };
 
   // Optimistic autosave — persist each change (debounced) with a subtle indicator.
   const update = (partial: Partial<Settings>) => {
@@ -305,6 +360,127 @@ export function AdminSettings() {
                   onBlur={() => update({ ssoAllowedDomains: ssoDomainsText.split(",").map((v) => v.trim().toLowerCase()).filter(Boolean) })}
                 />
               </label>
+              <Toggle
+                label="Require student roster"
+                hint="Only allow SSO sign-in for emails in the uploaded roster. Upload a CSV of allowed student emails below."
+                on={s.ssoRosterEnabled ?? false}
+                onChange={(v) => update({ ssoRosterEnabled: v })}
+              />
+            </div>
+
+            {/* Student Roster Management */}
+            <div className="mt-4 rounded-xl border border-[var(--border)] p-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Users className="h-4 w-4 text-brand-400" />
+                  <span className="text-sm font-semibold">Student Roster</span>
+                  <span className="rounded-full bg-[var(--bg)] px-2 py-0.5 text-xs text-[var(--muted)]">{roster.length} students</span>
+                </div>
+                {roster.length > 0 && (
+                  <button onClick={clearRoster} className="text-xs text-rose-400 hover:underline">Clear all</button>
+                )}
+              </div>
+              <p className="mt-1 text-xs text-[var(--muted)]">
+                Upload a CSV with columns: <code className="text-[10px]">StudentID, First Name, Middle Name, Last Name, Gender, Class, Email</code>
+              </p>
+
+              {/* CSV Upload */}
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".csv,text/csv"
+                  className="hidden"
+                  onChange={(e) => e.target.files?.[0] && uploadRosterCsv(e.target.files[0])}
+                />
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={rosterUploading}
+                  className="btn btn-outline h-9 disabled:opacity-50"
+                >
+                  {rosterUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                  Upload CSV
+                </button>
+                <a
+                  href="data:text/csv;charset=utf-8,StudentID,First Name,Middle Name,Last Name,Gender,Class,Email%0A12345,John,Michael,Doe,Male,Class A,john.doe@school.edu"
+                  download="roster_template.csv"
+                  className="text-xs text-brand-400 hover:underline"
+                >
+                  Download template
+                </a>
+              </div>
+
+              {/* Add single email */}
+              <div className="mt-3 flex gap-2">
+                <input
+                  className="input h-9 flex-1"
+                  value={newRosterEmail}
+                  onChange={(e) => setNewRosterEmail(e.target.value)}
+                  placeholder="Add email manually..."
+                  onKeyDown={(e) => e.key === "Enter" && addRosterEntry()}
+                />
+                <button onClick={addRosterEntry} className="btn btn-primary h-9 px-4">Add</button>
+              </div>
+
+              {rosterMsg && <p className="mt-2 text-xs text-amber-400">{rosterMsg}</p>}
+
+              {/* Student list */}
+              {roster.length > 0 && (
+                <div className="mt-3">
+                  <input
+                    className="input mb-2 h-8 w-full text-sm"
+                    value={rosterSearch}
+                    onChange={(e) => setRosterSearch(e.target.value)}
+                    placeholder="Search by name or email..."
+                  />
+                  <div className="max-h-64 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--bg)]">
+                    <table className="w-full text-sm">
+                      <thead className="sticky top-0 bg-[var(--card)] text-left text-xs text-[var(--muted)]">
+                        <tr>
+                          <th className="px-3 py-2">Name</th>
+                          <th className="px-3 py-2">Email</th>
+                          <th className="px-3 py-2">ID</th>
+                          <th className="px-3 py-2">Class</th>
+                          <th className="w-8"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {roster
+                          .filter((r) => {
+                            if (!rosterSearch) return true;
+                            const q = rosterSearch.toLowerCase();
+                            return r.email.includes(q) || r.firstName?.toLowerCase().includes(q) || r.lastName?.toLowerCase().includes(q) || r.studentId?.toLowerCase().includes(q);
+                          })
+                          .slice(0, 100)
+                          .map((entry) => (
+                            <tr key={entry.email} className="border-t border-[var(--border)]">
+                              <td className="px-3 py-1.5">
+                                {[entry.firstName, entry.middleName, entry.lastName].filter(Boolean).join(" ") || <span className="text-[var(--muted)]">—</span>}
+                              </td>
+                              <td className="px-3 py-1.5 text-[var(--muted)]">{entry.email}</td>
+                              <td className="px-3 py-1.5">{entry.studentId || <span className="text-[var(--muted)]">—</span>}</td>
+                              <td className="px-3 py-1.5">{entry.studentClass || <span className="text-[var(--muted)]">—</span>}</td>
+                              <td className="px-2">
+                                <button onClick={() => removeRosterEntry(entry.email)} className="text-[var(--muted)] hover:text-rose-400">
+                                  <X className="h-3.5 w-3.5" />
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                    {roster.filter((r) => {
+                      if (!rosterSearch) return true;
+                      const q = rosterSearch.toLowerCase();
+                      return r.email.includes(q) || r.firstName?.toLowerCase().includes(q) || r.lastName?.toLowerCase().includes(q);
+                    }).length > 100 && (
+                      <div className="border-t border-[var(--border)] px-3 py-2 text-center text-xs text-[var(--muted)]">
+                        Showing first 100 of {roster.length} students
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}

@@ -1011,6 +1011,22 @@ export interface OrgSettings {
   /** When set, only emails from these domains are auto-provisioned (e.g. ["university.edu"]).
    *  Empty/unset = any domain Microsoft verifies is allowed. */
   ssoAllowedDomains?: string[];
+  /** When enabled, SSO auto-provisioning only works for emails in ssoRoster.
+   *  Upload a CSV of allowed student emails to restrict who can create accounts. */
+  ssoRosterEnabled?: boolean;
+  /** List of allowed students for SSO auto-provisioning with profile data. */
+  ssoRoster?: SsoRosterEntry[];
+}
+
+/** A pre-registered student in the SSO roster. Profile fields are auto-filled on first SSO sign-in. */
+export interface SsoRosterEntry {
+  email: string;
+  studentId?: string;
+  firstName?: string;
+  middleName?: string;
+  lastName?: string;
+  gender?: string;
+  studentClass?: string;
 }
 
 // ---- Learning structure (foundational config layer — see the "Learning
