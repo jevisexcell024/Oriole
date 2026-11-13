@@ -12,7 +12,7 @@ import { createHmac, createHash, randomBytes } from "node:crypto";
 import { db, initDb, claimInstanceLock, releaseInstanceLock, hasInstanceConflict, snapshotStore, proctorStore, answerStore, auditStore, superAdminAuditStore, emailStore, geofenceStore, reliabilityStore, reliabilityRollupStore, mediaAssetStore, exportTenantData, deleteTenantData } from "./db.ts";
 import { currentTenantId, tenantExams, getOrgSettings, effectiveBrandColor } from "./tenant.ts";
 import { sendMail, mailerStatus, verifySmtp, buildHtml, ctaButton, esc } from "./mailer.ts";
-import { microsoftConfig, beginMicrosoftSignIn, readSignInTxn, clearSignInTxn, exchangeMicrosoftCode, verifyMicrosoftIdToken } from "./sso.ts";
+import { microsoftConfig, beginMicrosoftSignIn, readSignInTxn, clearSignInTxn, exchangeMicrosoftCode, verifyMicrosoftIdToken, autoCreateDomains, emailInDomains, displayNameFor } from "./sso.ts";
 import { renderEmailTemplate, EMAIL_TEMPLATE_DEFS } from "./emailTemplates.ts";
 import { sendSms, smsEnabled, smsStatus, recentSms } from "./sms.ts";
 import {
@@ -30,7 +30,7 @@ import { notifyAllTenantAdmins, notifyAllSuperAdmins, listNotificationsFor, mark
 import { generateSecret, verifyTotp, verifyTotpStep, otpauthUrl, generateBackupCodes } from "./totp.ts";
 import { tryEvalExpr } from "../shared/expr.ts";
 import { env, assertProductionEnv, BCRYPT_COST } from "./env.ts";
-import { securityHeaders, permissionsPolicy, authLimiter, apiLimiter, twoFaLimiter, superAdminAuthLimiter, tenantRequestLimiter, assertSafeWebhookUrl, isMaintenanceExempt } from "./security.ts";
+import { securityHeaders, permissionsPolicy, sameOriginGuard, authLimiter, apiLimiter, twoFaLimiter, superAdminAuthLimiter, tenantRequestLimiter, assertSafeWebhookUrl, isMaintenanceExempt } from "./security.ts";
 import { logger, httpLogger } from "./logger.ts";
 import { encryptString, decryptString, encryptionEnabled } from "./crypto.ts";
 import { scheduleRetention, stopRetention } from "./retention.ts";
@@ -266,6 +266,7 @@ app.use(permissionsPolicy); // explicitly allow geolocation/camera/microphone fo
 app.use("/api/admin/books", express.json({ limit: "25mb" }));
 app.use(express.json({ limit: "2mb" })); // webcam snapshots / verification photos
 app.use(cookieParser());
+app.use("/api", sameOriginGuard); // CSRF: refuse cross-site state-changing requests (see security.ts)
 app.use("/api/auth/login", authLimiter); // brute-force protection on credentials
 app.use("/api/auth/signup", authLimiter);
 app.use("/api/auth/setup-password", authLimiter); // same class of endpoint — public, unauthenticated, worth capping
@@ -399,9 +400,10 @@ app.post("/api/auth/login", validate(loginSchema), async (req, res) => {
 });
 
 // ── Microsoft SSO (student portal only) ───────────────────────────────────────
-// Signs in EXISTING student accounts only — nobody is created here. First sign-in matches the
-// Microsoft account's email to the student's email and links it (ssoSubject); from then on only
-// that Microsoft identity works for the account. Staff accounts are refused, same as the
+// Signs in student accounts. First sign-in matches the Microsoft account's email to the student's
+// email and links it (ssoSubject); from then on only that Microsoft identity works for the account.
+// If there is no such student, one is created ONLY when the school opted in (MS_AUTO_CREATE_STUDENTS)
+// and the email's domain is on MS_ALLOWED_EMAIL_DOMAINS. Staff accounts are refused, same as the
 // password door. Microsoft handles any MFA, so the app's own 2FA step is not repeated.
 app.get("/api/auth/sso/config", (_req, res) => res.json({ microsoft: !!microsoftConfig() }));
 
@@ -664,8 +666,10 @@ app.post("/api/auth/2fa/disable", requireAuth, validate(twoFaDisableSchema), asy
   // Require the current password OR a valid code to turn it off.
   const password = String(req.body?.password ?? "");
   const code = String(req.body?.code ?? "").trim();
-  const okPw = password && (await bcrypt.compare(password, user.passwordHash));
-  const okCode = code && user.twoFactorSecret && verifyTotp(decryptString(user.twoFactorSecret) ?? "", code);
+  // Both are verified results (bcrypt / TOTP), not "was something typed in" — an empty value simply fails the check.
+  const okPw = await bcrypt.compare(password, user.passwordHash);
+  const totpSecret = decryptString(user.twoFactorSecret ?? "") ?? "";
+  const okCode = totpSecret !== "" && verifyTotp(totpSecret, code); // no stored secret → no code can ever be valid
   if (!okPw && !okCode) return res.status(401).json({ error: "Enter your password or a current authenticator code to disable 2FA." });
   user.twoFactorEnabled = false;
   user.twoFactorSecret = null;
@@ -784,8 +788,9 @@ app.post("/api/super-admin/auth/2fa/disable", requireSuperAdmin, validate(twoFaD
   if (!superAdmin.twoFactorEnabled) return res.json({ ok: true });
   const password = String(req.body?.password ?? "");
   const code = String(req.body?.code ?? "").trim();
-  const okPw = password && (await bcrypt.compare(password, superAdmin.passwordHash));
-  const okCode = code && superAdmin.twoFactorSecret && verifyTotp(decryptString(superAdmin.twoFactorSecret) ?? "", code);
+  const okPw = await bcrypt.compare(password, superAdmin.passwordHash);
+  const totpSecret = decryptString(superAdmin.twoFactorSecret ?? "") ?? "";
+  const okCode = totpSecret !== "" && verifyTotp(totpSecret, code); // no stored secret → no code can ever be valid
   if (!okPw && !okCode) return res.status(401).json({ error: "Enter your password or a current authenticator code to disable 2FA." });
   superAdmin.twoFactorEnabled = false;
   superAdmin.twoFactorSecret = null;
@@ -1637,7 +1642,12 @@ app.delete("/api/super-admin/tenants/:id", requireSuperAdminOwner, async (req, r
 // ============================================================================
 
 function slugifyPlanCode(name: string): string {
-  const base = name.trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "PLAN";
+  // Trim the edge underscores by index rather than with /^_+|_+$/ (quadratic on long inputs).
+  const slug = name.trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_");
+  let from = 0, to = slug.length;
+  while (from < to && slug[from] === "_") from++;
+  while (to > from && slug[to - 1] === "_") to--;
+  const base = slug.slice(from, to) || "PLAN";
   let code = base, n = 2;
   while (db.data!.plans.some((p) => p.code === code)) code = `${base}_${n++}`;
   return code;
@@ -6836,9 +6846,11 @@ app.delete("/api/admin/apikeys/:id", requirePermission("system.settings"), async
 // settings row for a matching key hash, then stamped onto the request so each
 // route below can scope its query to that one tenant only.
 function requireApiKey(req: Request, res: Response, next: () => void) {
-  const m = String(req.headers.authorization ?? "").match(/^Bearer\s+(.+)$/i);
-  if (!m) return res.status(401).json({ error: "Missing API key. Use 'Authorization: Bearer <key>'." });
-  const hash = createHash("sha256").update(m[1].trim()).digest("hex");
+  // Plain string handling, not a regex: a backtracking pattern over a client-supplied header is a ReDoS risk.
+  const header = String(req.headers.authorization ?? "");
+  const apiKey = header.slice(0, 7).toLowerCase() === "bearer " ? header.slice(7).trim() : "";
+  if (!apiKey) return res.status(401).json({ error: "Missing API key. Use 'Authorization: Bearer <key>'." });
+  const hash = createHash("sha256").update(apiKey).digest("hex");
   let ownerTenantId: string | null = null;
   for (const s of db.data!.settings) {
     const key = (s.apiKeys ?? []).find((k) => k.keyHash === hash);

@@ -126,6 +126,28 @@ export const resetSigningKeyCache = () => { jwksCache = null; };
 
 export interface MicrosoftIdentity { subject: string; email: string; name: string | null }
 
+/** Auto-creating a student account on their first Microsoft sign-in is opt-in
+ *  (MS_AUTO_CREATE_STUDENTS=true) and needs a domain allow-list (MS_ALLOWED_EMAIL_DOMAINS, comma
+ *  separated, e.g. "school.edu.gh"). Sign-in is already limited to the school's own directory, but a
+ *  directory can also hold invited outside guests (personal Gmail etc.) — the allow-list keeps
+ *  them out. Returns the allowed domains, or null when auto-creation is off. */
+export function autoCreateDomains(): string[] | null {
+  if (process.env.MS_AUTO_CREATE_STUDENTS?.trim().toLowerCase() !== "true") return null;
+  const domains = (process.env.MS_ALLOWED_EMAIL_DOMAINS ?? "").split(",").map((s) => s.trim().toLowerCase().replace(/^@/, "")).filter(Boolean);
+  return domains.length ? domains : null;
+}
+
+/** True when the email's domain is on the allow-list and it isn't a guest-account address. */
+export function emailInDomains(email: string, domains: string[]): boolean {
+  const e = email.trim().toLowerCase();
+  return !e.includes("#ext#") && domains.includes(e.split("@").pop() ?? "");
+}
+
+/** A readable name for a brand-new account: Microsoft's display name, else the part before the @. */
+export function displayNameFor(who: MicrosoftIdentity): string {
+  return (who.name?.trim() || who.email.split("@")[0].replace(/[._-]+/g, " ")).slice(0, 120);
+}
+
 /** Checks the ID token's signature, issuer, audience, expiry, nonce and directory, and returns who it
  *  says signed in. `subject` is tenant + object id — stable for the person, unlike their email. */
 export async function verifyMicrosoftIdToken(cfg: MicrosoftConfig, idToken: string, nonce: string): Promise<MicrosoftIdentity> {

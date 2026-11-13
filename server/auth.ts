@@ -1,5 +1,5 @@
 import jwt from "jsonwebtoken";
-import { createHash } from "node:crypto";
+import { createHmac } from "node:crypto";
 import type { Request, Response, NextFunction } from "express";
 import type { SafeUser, User } from "../shared/types.ts";
 import { db } from "./db.ts";
@@ -61,7 +61,9 @@ export function verifyPasswordSetupToken(token: string): string | null {
  *  fingerprint of the CURRENT password hash — so the moment the password is
  *  changed (by this link or any other route) the link stops working, making it
  *  genuinely single-use without needing any extra stored state. */
-const passwordFingerprint = (u: User) => createHash("sha256").update(u.passwordHash).digest("hex").slice(0, 16);
+// Keyed with the server secret (HMAC), so the fingerprint can't be worked out from a leaked
+// password hash alone. `passwordHash` is already a slow bcrypt hash — this is only a "has it changed" tag.
+const passwordFingerprint = (u: User) => createHmac("sha256", JWT_SECRET).update(u.passwordHash).digest("hex").slice(0, 16);
 export function passwordResetToken(user: User): string {
   return jwt.sign({ sub: user.id, pwReset: true, pf: passwordFingerprint(user) }, JWT_SECRET, { expiresIn: "1h" });
 }
