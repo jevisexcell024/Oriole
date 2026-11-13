@@ -3,6 +3,25 @@ import rateLimit from "express-rate-limit";
 import type { Request, Response, NextFunction } from "express";
 import dns from "node:dns/promises";
 import net from "node:net";
+import { env } from "./env.ts";
+
+/** CSRF defence for the cookie-authenticated API, on top of SameSite=Lax cookies: a state-changing
+ *  request (POST/PUT/PATCH/DELETE) that a browser sends from ANOTHER site is refused. Browsers always
+ *  attach an Origin header to those, so a mismatch is a cross-site request. Requests with no Origin
+ *  (curl, server-to-server, same-site navigations) can't be forged by another website, so they pass.
+ *  Allowed origins: this server's own host, the configured APP_URL, and — outside production only —
+ *  localhost (the Vite dev proxy rewrites Host). */
+export function sameOriginGuard(req: Request, res: Response, next: NextFunction) {
+  if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return next();
+  const origin = req.headers.origin;
+  if (!origin) return next();
+  let host = "", hostname = "";
+  try { const u = new URL(origin); host = u.host; hostname = u.hostname; } catch { /* "null" or malformed → refused below */ }
+  const allowed = new Set([req.headers.host, req.headers["x-forwarded-host"] as string | undefined, new URL(env.appUrl).host]);
+  const localDev = !env.isProd && (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]");
+  if (host && (allowed.has(host) || localDev)) return next();
+  res.status(403).json({ error: "Cross-site request blocked." });
+}
 
 // Security headers (HSTS, no-sniff, frameguard, referrer policy, …) plus an
 // explicit Content-Security-Policy tuned for this SPA:
