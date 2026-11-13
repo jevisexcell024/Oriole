@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Loader2, CheckCircle2, Mail, Send, MessageSquare, Gauge, Headphones, Palette } from "lucide-react";
+import { Loader2, CheckCircle2, Mail, Send, MessageSquare, Gauge, Headphones, Palette, KeyRound } from "lucide-react";
 import { AdminShell } from "@/components/AdminShell";
 import { ErrorBanner } from "@/components/ui";
 import { api } from "@/lib/api";
@@ -21,6 +21,8 @@ interface Settings {
   reliabilityNotifyOnDegraded?: boolean;
   mediaAssessmentEnabled?: boolean;
   brandColor?: string | null;
+  ssoAutoProvision?: boolean;
+  ssoAllowedDomains?: string[];
 }
 
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
@@ -45,6 +47,8 @@ export function AdminSettings() {
   const [scoreBandsText, setScoreBandsText] = useState("");
   const [scoreBandsErr, setScoreBandsErr] = useState(false);
   const [brandColorText, setBrandColorText] = useState("");
+  const [ssoDomainsText, setSsoDomainsText] = useState("");
+  const [ssoAvailable, setSsoAvailable] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const sendSmsTest = async () => {
@@ -68,9 +72,11 @@ export function AdminSettings() {
       setAlertSmsText((d.settings.reliabilityAlertSmsNumbers ?? []).join(", "));
       setScoreBandsText((d.settings.scoreBandEdges ?? [20, 40, 60, 80]).join(", "));
       setBrandColorText(d.settings.brandColor ?? "");
+      setSsoDomainsText((d.settings.ssoAllowedDomains ?? []).join(", "));
     }).catch((e) => setError(e.message));
   }, []);
   useEffect(() => { api.get<SmsStatus>("/admin/sms/status").then(setSms).catch(() => {}); }, []);
+  useEffect(() => { api.get<{ microsoft: boolean }>("/auth/sso/config").then((d) => setSsoAvailable(d.microsoft)).catch(() => {}); }, []);
 
   // Optimistic autosave — persist each change (debounced) with a subtle indicator.
   const update = (partial: Partial<Settings>) => {
@@ -273,6 +279,32 @@ export function AdminSettings() {
                   {s.brandColor ? "Using your own color — it overrides the platform default." : "Currently using the platform default."}
                 </p>
               </div>
+            </div>
+
+            <h2 className="mt-6 flex items-center gap-2 text-sm font-semibold"><KeyRound className="h-4 w-4 text-brand-400" /> Microsoft SSO</h2>
+            <p className="text-xs text-[var(--muted)]">
+              {ssoAvailable
+                ? <span className="inline-flex items-center gap-1"><CheckCircle2 className="inline h-3 w-3 text-emerald-400" /> Microsoft SSO is configured for the student portal.</span>
+                : <span className="text-amber-400">Microsoft SSO is not configured. Set <code>MS_CLIENT_ID</code>, <code>MS_TENANT</code>, and credentials in env.</span>}
+            </p>
+            <div className="mt-3 space-y-3">
+              <Toggle
+                label="Auto-provision new users"
+                hint="Automatically create a student account when someone signs in with Microsoft for the first time."
+                on={s.ssoAutoProvision ?? false}
+                onChange={(v) => update({ ssoAutoProvision: v })}
+              />
+              <label className="block rounded-xl border border-[var(--border)] p-3">
+                <span className="block text-sm font-medium">Allowed email domains</span>
+                <span className="mb-2 block text-xs text-[var(--muted)]">Only auto-provision users from these domains (comma-separated). Leave empty to allow any domain.</span>
+                <input
+                  className="input h-9 w-full"
+                  value={ssoDomainsText}
+                  placeholder="university.edu, school.org"
+                  onChange={(e) => setSsoDomainsText(e.target.value)}
+                  onBlur={() => update({ ssoAllowedDomains: ssoDomainsText.split(",").map((v) => v.trim().toLowerCase()).filter(Boolean) })}
+                />
+              </label>
             </div>
           </div>
         )}
