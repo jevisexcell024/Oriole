@@ -13,6 +13,8 @@ const ART = "/book.png";
 // Why a Microsoft sign-in bounced back to /portal (?sso_error=<code> from the server).
 const SSO_ERRORS: Record<string, string> = {
   no_account: "We couldn't find a student account for that Microsoft account. Ask your administrator to add your school email.",
+  not_in_roster: "Your email is not on the approved student list. Please contact your administrator to be added.",
+  domain_blocked: "Your email domain is not allowed. Please use your school email address.",
   staff: "That account belongs to staff. Staff sign in from the staff sign-in page.",
   blocked: "Your school's access is currently unavailable. Contact your administrator.",
   limit: "Your school has reached its student limit, so a new account couldn't be created. Contact your administrator.",
